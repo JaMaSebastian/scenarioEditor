@@ -1,0 +1,560 @@
+// Microsoft Visual C++ generated resource script.
+//
+#include "winres.h"
+#include "resource.h"
+/////////////////////////////////////////////////////////////////////////////
+// English (United States) resources
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_ENU)
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+#pragma code_page(1252)
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Menu
+//
+
+IDR_MAIN_MENU MENU
+BEGIN
+    POPUP "&File"
+    BEGIN
+        MENUITEM "&New Scenario\tCtrl+N",       ID_FILE_NEW_SCENARIO
+        MENUITEM "&Open Scenario...\tCtrl+O",   ID_FILE_OPEN_SCENARIO
+        MENUITEM "&Save Scenario\tCtrl+S",      ID_FILE_SAVE_SCENARIO
+        MENUITEM "Save Scenario &As...",        ID_FILE_SAVE_SCENARIO_AS
+        MENUITEM SEPARATOR
+        MENUITEM "Open &Recording...",          ID_FILE_OPEN_RECORDING
+        MENUITEM SEPARATOR
+        MENUITEM "E&xit",                       ID_APP_EXIT
+    END
+    POPUP "&Scenario"
+    BEGIN
+        MENUITEM "&Validate",                   ID_SCENARIO_VALIDATE
+        MENUITEM "&Generate Recording",         ID_SCENARIO_GENERATE_RECORDING
+        MENUITEM "&Preview",                    ID_SCENARIO_PREVIEW
+        MENUITEM SEPARATOR
+        MENUITEM "&Reset Scenario Clock",       ID_SCENARIO_RESET_CLOCK
+    END
+    POPUP "&Playback"
+    BEGIN
+        MENUITEM "&Start",                      ID_PLAYBACK_START
+        MENUITEM "&Pause",                      ID_PLAYBACK_PAUSE
+        MENUITEM "&Resume",                     ID_PLAYBACK_RESUME
+        MENUITEM "S&top",                       ID_PLAYBACK_STOP
+        MENUITEM SEPARATOR
+        MENUITEM "&Loop",                       ID_PLAYBACK_LOOP
+        POPUP "Playback &Speed"
+        BEGIN
+            MENUITEM "0.25x",                       ID_PLAYBACK_SPEED_025
+            MENUITEM "0.5x",                        ID_PLAYBACK_SPEED_050
+            MENUITEM "1x",                          ID_PLAYBACK_SPEED_1
+            MENUITEM "2x",                          ID_PLAYBACK_SPEED_2
+            MENUITEM "10x",                         ID_PLAYBACK_SPEED_10
+        END
+    END
+    POPUP "&Network"
+    BEGIN
+        MENUITEM "&Open Network Output",        ID_NETWORK_OPEN_OUTPUT
+        MENUITEM "&Close Network Output",       ID_NETWORK_CLOSE_OUTPUT
+        MENUITEM SEPARATOR
+        MENUITEM "Test &UDP Send",              ID_NETWORK_TEST_UDP
+        MENUITEM "Test &Multicast Send",        ID_NETWORK_TEST_MULTICAST
+        MENUITEM "Test &TCP Connection",        ID_NETWORK_TEST_TCP
+    END
+    POPUP "&View"
+    BEGIN
+        MENUITEM "&Validation Panel",           ID_VIEW_VALIDATION_PANEL
+    END
+    POPUP "&Help"
+    BEGIN
+        MENUITEM "&About ScenarioEditor",       ID_HELP_ABOUT
+        MENUITEM SEPARATOR
+        MENUITEM "&Field Help Tooltips",        ID_TB_HELP_TOGGLE
+        MENUITEM SEPARATOR
+        MENUITEM "&Protocol Notes",             ID_HELP_PROTOCOL_NOTES
+        MENUITEM "&File Format Notes",          ID_HELP_FILE_FORMAT_NOTES
+    END
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Accelerator
+//
+
+IDR_MAIN_ACCEL ACCELERATORS
+BEGIN
+    "N",            ID_FILE_NEW_SCENARIO,   VIRTKEY, CONTROL
+    "O",            ID_FILE_OPEN_SCENARIO,  VIRTKEY, CONTROL
+    "S",            ID_FILE_SAVE_SCENARIO,  VIRTKEY, CONTROL
+    "A",            ID_KB_ADD_ASSET,        VIRTKEY, CONTROL, ALT
+    "D",            ID_KB_DELETE_ASSET,     VIRTKEY, CONTROL, ALT
+    "U",            ID_KB_DUPLICATE_ASSET,  VIRTKEY, CONTROL, ALT
+    "M",            ID_KB_MOVE_ASSET,       VIRTKEY, CONTROL, ALT
+    "S",            ID_KB_ADD_SEGMENT,      VIRTKEY, CONTROL, ALT
+    "X",            ID_KB_DELETE_SEGMENT,   VIRTKEY, CONTROL, ALT
+    "P",            ID_KB_DUPLICATE_SEGMENT, VIRTKEY, CONTROL, ALT
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Bitmap
+//
+
+IDR_MAIN_TOOLBAR        BITMAP                  "toolbar.bmp"
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Toolbar
+//
+
+IDR_MAIN_TOOLBAR TOOLBAR 54, 54
+BEGIN
+    BUTTON      ID_FILE_NEW_SCENARIO
+    BUTTON      ID_FILE_OPEN_SCENARIO
+    BUTTON      ID_FILE_SAVE_SCENARIO
+    SEPARATOR
+    BUTTON      ID_SCENARIO_VALIDATE
+    BUTTON      ID_SCENARIO_PREVIEW
+    BUTTON      ID_SCENARIO_GENERATE_RECORDING
+    SEPARATOR
+    BUTTON      ID_TOOLS_RECORD
+    BUTTON      ID_TOOLS_REPLAY_FILE
+    BUTTON      ID_TOOLS_SEND_LIVE
+    SEPARATOR
+    BUTTON      ID_PLAYBACK_START
+    BUTTON      ID_PLAYBACK_PAUSE
+    BUTTON      ID_PLAYBACK_RESUME
+    BUTTON      ID_PLAYBACK_STOP
+    SEPARATOR
+    BUTTON      ID_TB_LOOP_HOST
+    BUTTON      ID_TB_SPEED_HOST
+    SEPARATOR
+    BUTTON      ID_TB_HELP_TOGGLE
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Dialog
+//
+
+IDD_SCENARIO_EDITOR_DIALOG DIALOGEX 0, 0, 740, 488
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
+EXSTYLE WS_EX_APPWINDOW
+CAPTION "ScenarioEditor"
+MENU IDR_MAIN_MENU
+FONT 12, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    CONTROL         "",IDC_MAIN_TABCTRL,"SysTabControl32",WS_TABSTOP,4,30,732,436
+END
+
+IDD_SCENARIO_SETUP_PAGE DIALOGEX 0, 0, 700, 420
+STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
+FONT 12, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    GROUPBOX        "Scenario Identification",IDC_STATIC,6,6,340,78
+    LTEXT           "Scenario Name:",IDC_STATIC,14,22,64,10
+    EDITTEXT        IDC_EDIT_SCENARIO_NAME,82,20,256,14,ES_AUTOHSCROLL
+    LTEXT           "Description:",IDC_STATIC,14,42,64,10
+    EDITTEXT        IDC_EDIT_SCENARIO_DESCRIPTION,82,40,256,38,ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL
+    GROUPBOX        "DIS Protocol",IDC_STATIC,352,6,140,38
+    CONTROL         "DIS v6",IDC_RADIO_DIS_V6,"Button",BS_AUTORADIOBUTTON | WS_GROUP,362,22,50,12
+    CONTROL         "DIS v7 (default)",IDC_RADIO_DIS_V7,"Button",BS_AUTORADIOBUTTON,416,22,70,12
+    GROUPBOX        "Exercise / Application IDs",IDC_STATIC,6,90,220,60
+    LTEXT           "Exercise ID:",IDC_STATIC,14,104,60,10
+    EDITTEXT        IDC_EDIT_EXERCISE_ID,80,102,50,14,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "Site ID:",IDC_STATIC,14,120,60,10
+    EDITTEXT        IDC_EDIT_SITE_ID,80,118,50,14,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "Application ID:",IDC_STATIC,14,136,60,10
+    EDITTEXT        IDC_EDIT_APPLICATION_ID,80,134,50,14,ES_AUTOHSCROLL | ES_NUMBER
+    GROUPBOX        "Timing",IDC_STATIC,232,90,260,60
+    LTEXT           "Scenario Start Time:",IDC_STATIC,240,104,76,10
+    CONTROL         "",IDC_DATETIME_SCENARIO_START,"SysDateTimePick32",DTS_LONGDATEFORMAT | WS_TABSTOP,320,102,140,14
+    LTEXT           "Duration (s):",IDC_STATIC,240,120,60,10
+    EDITTEXT        IDC_EDIT_DURATION_SECONDS,320,118,60,14,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "Update Rate (Hz):",IDC_STATIC,240,136,76,10
+    EDITTEXT        IDC_EDIT_DEFAULT_UPDATE_RATE,320,134,60,14,ES_AUTOHSCROLL | ES_NUMBER
+    GROUPBOX        "Default Coordinate Mode",IDC_STATIC,6,156,220,36
+    COMBOBOX        IDC_COMBO_DEFAULT_COORD_MODE,14,170,200,60,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    GROUPBOX        "Scenario Origin",IDC_STATIC,232,156,260,76
+    LTEXT           "Latitude (deg):",IDC_STATIC,240,170,64,10
+    EDITTEXT        IDC_EDIT_ORIGIN_LAT,310,168,90,14,ES_AUTOHSCROLL
+    LTEXT           "Longitude (deg):",IDC_STATIC,240,186,64,10
+    EDITTEXT        IDC_EDIT_ORIGIN_LON,310,184,90,14,ES_AUTOHSCROLL
+    LTEXT           "Altitude (m):",IDC_STATIC,240,202,64,10
+    EDITTEXT        IDC_EDIT_ORIGIN_ALT,310,200,90,14,ES_AUTOHSCROLL
+    PUSHBUTTON      "Use Current Entity As Origin",IDC_BTN_USE_ENTITY_AS_ORIGIN,240,218,120,12
+    PUSHBUTTON      "Clear Origin",IDC_BTN_CLEAR_ORIGIN,366,218,60,12
+    GROUPBOX        "Validation Options",IDC_STATIC,6,198,220,60
+    CONTROL         "Validate Before Send",IDC_CHK_VALIDATE_BEFORE_SEND,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,212,130,12
+    CONTROL         "Validate Before Record",IDC_CHK_VALIDATE_BEFORE_RECORD,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,226,130,12
+    CONTROL         "Validate Before Replay",IDC_CHK_VALIDATE_BEFORE_REPLAY,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,14,240,130,12
+END
+
+IDD_ASSET_ENTITY_EDITOR_PAGE DIALOGEX 0, 0, 700, 420
+STYLE DS_SETFONT | DS_FIXEDSYS | DS_CONTROL | WS_CHILD
+FONT 12, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    GROUPBOX        "Assets",IDC_STATIC,6,6,180,408
+    CONTROL         "",IDC_TREE_ASSETS,"SysTreeView32",TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS | WS_BORDER | WS_HSCROLL | WS_TABSTOP,12,20,168,332
+    PUSHBUTTON      "Add",IDC_BTN_ADD_ASSET,12,356,32,14
+    PUSHBUTTON      "Delete",IDC_BTN_DELETE_ASSET,46,356,32,14
+    PUSHBUTTON      "Duplicate",IDC_BTN_DUPLICATE_ASSET,80,356,42,14
+    PUSHBUTTON      "Move",IDC_BTN_MOVE_ASSET,124,356,28,14
+    PUSHBUTTON      "Validate Asset",IDC_BTN_VALIDATE_ASSET,12,374,70,14
+    GROUPBOX        "Entity Detail",IDC_STATIC,192,6,502,408
+    GROUPBOX        "General",IDC_STATIC,198,18,248,152
+    CONTROL         "Enabled",IDC_CHK_ENTITY_ENABLED,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,204,30,60,12
+    LTEXT           "Name:",IDC_STATIC,204,46,40,10
+    EDITTEXT        IDC_EDIT_ENTITY_NAME,250,44,188,14,ES_AUTOHSCROLL
+    LTEXT           "Description:",IDC_STATIC,204,62,44,10
+    EDITTEXT        IDC_EDIT_ENTITY_DESCRIPTION,250,60,188,14,ES_AUTOHSCROLL
+    LTEXT           "Marking Text:",IDC_STATIC,204,78,48,10
+    EDITTEXT        IDC_EDIT_ENTITY_MARKING,254,76,90,14,ES_AUTOHSCROLL
+    LTEXT           "Force ID:",IDC_STATIC,204,94,40,10
+    COMBOBOX        IDC_COMBO_ENTITY_FORCE_ID,250,92,80,60,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Entity Kind:",IDC_STATIC,204,110,44,10
+    COMBOBOX        IDC_COMBO_ENTITY_KIND,250,108,188,60,CBS_DROPDOWN | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Domain:",IDC_STATIC,204,126,40,10
+    COMBOBOX        IDC_COMBO_ENTITY_DOMAIN,250,124,188,60,CBS_DROPDOWN | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Country / Cat / Sub / Spec / Extra:",IDC_STATIC,204,144,130,10
+    COMBOBOX        IDC_COMBO_ENTITY_COUNTRY,204,156,60,120,CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP
+    COMBOBOX        IDC_COMBO_ENTITY_CATEGORY,268,156,60,120,CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP
+    COMBOBOX        IDC_COMBO_ENTITY_SUBCATEGORY,332,156,60,120,CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP
+    EDITTEXT        IDC_EDIT_ENTITY_SPECIFIC,396,156,22,12,ES_AUTOHSCROLL | ES_NUMBER
+    EDITTEXT        IDC_EDIT_ENTITY_EXTRA,422,156,22,12,ES_AUTOHSCROLL | ES_NUMBER
+    GROUPBOX        "Identity",IDC_STATIC,452,18,240,60
+    LTEXT           "Site ID:",IDC_STATIC,460,32,40,10
+    EDITTEXT        IDC_EDIT_ENTITY_SITE_ID,502,30,60,12,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "Application ID:",IDC_STATIC,460,46,56,10
+    EDITTEXT        IDC_EDIT_ENTITY_APP_ID,520,44,60,12,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "Entity ID:",IDC_STATIC,460,60,40,10
+    EDITTEXT        IDC_EDIT_ENTITY_ID,502,58,60,12,ES_AUTOHSCROLL | ES_NUMBER
+    GROUPBOX        "Initial State",IDC_STATIC,452,84,240,198
+    LTEXT           "Coord Mode:",IDC_STATIC,460,98,48,10
+    COMBOBOX        IDC_COMBO_ENTITY_COORD_MODE,510,96,174,60,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Lat / Lon / Alt:",IDC_STATIC,460,116,50,10
+    EDITTEXT        IDC_EDIT_ENTITY_LAT,514,114,56,12,ES_AUTOHSCROLL
+    EDITTEXT        IDC_EDIT_ENTITY_LON,572,114,56,12,ES_AUTOHSCROLL
+    EDITTEXT        IDC_EDIT_ENTITY_ALT,630,114,54,12,ES_AUTOHSCROLL
+    LTEXT           "Local X / Y / Z:",IDC_STATIC,460,132,50,10
+    EDITTEXT        IDC_EDIT_ENTITY_LOCAL_X,514,130,56,12,ES_AUTOHSCROLL
+    EDITTEXT        IDC_EDIT_ENTITY_LOCAL_Y,572,130,56,12,ES_AUTOHSCROLL
+    EDITTEXT        IDC_EDIT_ENTITY_LOCAL_Z,630,130,54,12,ES_AUTOHSCROLL
+    LTEXT           "ECEF X / Y / Z:",IDC_STATIC,460,148,50,10
+    EDITTEXT        IDC_EDIT_ENTITY_ECEF_X,514,146,56,12,ES_AUTOHSCROLL
+    EDITTEXT        IDC_EDIT_ENTITY_ECEF_Y,572,146,56,12,ES_AUTOHSCROLL
+    EDITTEXT        IDC_EDIT_ENTITY_ECEF_Z,630,146,54,12,ES_AUTOHSCROLL
+    LTEXT           "Heading (deg):",IDC_STATIC,460,168,56,10
+    EDITTEXT        IDC_EDIT_ENTITY_HEADING,520,166,60,12,ES_AUTOHSCROLL
+    LTEXT           "Pitch (deg):",IDC_STATIC,460,184,56,10
+    EDITTEXT        IDC_EDIT_ENTITY_PITCH,520,182,60,12,ES_AUTOHSCROLL
+    LTEXT           "Roll (deg):",IDC_STATIC,460,200,56,10
+    EDITTEXT        IDC_EDIT_ENTITY_ROLL,520,198,60,12,ES_AUTOHSCROLL
+    LTEXT           "Initial Speed (m/s):",IDC_STATIC,460,216,76,10
+    EDITTEXT        IDC_EDIT_ENTITY_INITIAL_SPEED,540,214,60,12,ES_AUTOHSCROLL
+    GROUPBOX        "Timing",IDC_STATIC,198,290,494,50
+    LTEXT           "Begin Time:",IDC_STATIC,206,304,50,10
+    EDITTEXT        IDC_EDIT_ENTITY_BEGIN_TIME,258,302,60,12,ES_AUTOHSCROLL
+    LTEXT           "End Time:",IDC_STATIC,332,304,50,10
+    EDITTEXT        IDC_EDIT_ENTITY_END_TIME,380,302,60,12,ES_AUTOHSCROLL
+    LTEXT           "Update Rate (Hz):",IDC_STATIC,454,304,70,10
+    EDITTEXT        IDC_EDIT_ENTITY_UPDATE_RATE,528,302,60,12,ES_AUTOHSCROLL
+END
+
+IDD_MOTION_PATH_EDITOR_PAGE DIALOGEX 0, 0, 700, 420
+STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
+FONT 12, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "Entity:",IDC_STATIC,6,8,30,10
+    COMBOBOX        IDC_COMBO_MOTION_ENTITY,40,6,240,120,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    GROUPBOX        "Motion Segment Timeline",IDC_STATIC,6,24,412,200
+    CONTROL         "",IDC_LIST_MOTION_SEGMENTS,"SysListView32",LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP,12,38,400,160
+    PUSHBUTTON      "Add",IDC_BTN_ADD_SEGMENT,12,202,32,14
+    PUSHBUTTON      "Delete",IDC_BTN_DELETE_SEGMENT,46,202,32,14
+    PUSHBUTTON      "Duplicate",IDC_BTN_DUPLICATE_SEGMENT,80,202,42,14
+    PUSHBUTTON      "Move Up",IDC_BTN_SEGMENT_MOVE_UP,124,202,38,14
+    PUSHBUTTON      "Move Down",IDC_BTN_SEGMENT_MOVE_DOWN,164,202,46,14
+    PUSHBUTTON      "Validate Segment",IDC_BTN_VALIDATE_SEGMENT,212,202,70,14
+    GROUPBOX        "Selected Segment Detail",IDC_STATIC,424,6,270,218
+    CONTROL         "Enabled",IDC_CHK_SEGMENT_ENABLED,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,430,20,60,12
+    LTEXT           "Start Time:",IDC_STATIC,430,36,44,10
+    EDITTEXT        IDC_EDIT_SEGMENT_START_TIME,478,34,60,12,ES_AUTOHSCROLL
+    LTEXT           "End Time:",IDC_STATIC,542,36,40,10
+    EDITTEXT        IDC_EDIT_SEGMENT_END_TIME,584,34,60,12,ES_AUTOHSCROLL
+    LTEXT           "Motion Type:",IDC_STATIC,430,52,48,10
+    COMBOBOX        IDC_COMBO_MOTION_TYPE,482,50,100,80,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Coord Mode:",IDC_STATIC,586,52,48,10
+    COMBOBOX        IDC_COMBO_SEGMENT_COORD_MODE,636,50,56,80,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Description:",IDC_STATIC,430,68,44,10
+    EDITTEXT        IDC_EDIT_SEGMENT_DESCRIPTION,478,66,214,12,ES_AUTOHSCROLL
+    GROUPBOX        "Type-Specific Fields (Stationary / Stop / Line / Circle / Ellipse / Waypoints)",IDC_STATIC_MOTION_PLACEHOLDER,6,230,688,130
+    LTEXT           "[ Per-type controls appear here in V2 ]",IDC_STATIC,16,246,200,10
+    GROUPBOX        "Waypoints",IDC_STATIC,6,364,540,50
+    CONTROL         "",IDC_LIST_WAYPOINTS,"SysListView32",LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP,12,378,528,30
+    PUSHBUTTON      "Import CSV",IDC_BTN_IMPORT_CSV,552,378,64,14
+    PUSHBUTTON      "Export CSV",IDC_BTN_EXPORT_CSV,622,378,64,14
+END
+
+IDD_OUTPUT_PLAYBACK_PAGE DIALOGEX 0, 0, 700, 420
+STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
+FONT 12, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    GROUPBOX        "Output Mode",IDC_STATIC,6,6,200,100
+    CONTROL         "UDP Unicast",IDC_RADIO_MODE_UDP_UNICAST,"Button",BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP,14,20,100,12
+    CONTROL         "UDP Multicast",IDC_RADIO_MODE_UDP_MULTICAST,"Button",BS_AUTORADIOBUTTON,14,34,100,12
+    CONTROL         "TCP Direct Connection",IDC_RADIO_MODE_TCP,"Button",BS_AUTORADIOBUTTON,14,48,130,12
+    CONTROL         "File Recording",IDC_RADIO_MODE_FILE_RECORDING,"Button",BS_AUTORADIOBUTTON,14,62,100,12
+    CONTROL         "Preview Only",IDC_RADIO_MODE_PREVIEW_ONLY,"Button",BS_AUTORADIOBUTTON,14,76,100,12
+    GROUPBOX        "UDP Unicast Settings",IDC_STATIC_GROUP_UDP_UNICAST,212,6,240,100
+    LTEXT           "Destination IP:",IDC_STATIC,220,22,60,10
+    EDITTEXT        IDC_EDIT_UDP_UNICAST_IP,286,20,100,12,ES_AUTOHSCROLL
+    LTEXT           "Port:",IDC_STATIC,220,40,30,10
+    EDITTEXT        IDC_EDIT_UDP_UNICAST_PORT,286,38,50,12,ES_AUTOHSCROLL | ES_NUMBER
+    GROUPBOX        "UDP Multicast Settings",IDC_STATIC_GROUP_UDP_MULTICAST,458,6,236,100
+    LTEXT           "Group:",IDC_STATIC,466,22,40,10
+    EDITTEXT        IDC_EDIT_UDP_MULTICAST_GROUP,510,20,100,12,ES_AUTOHSCROLL
+    LTEXT           "Port:",IDC_STATIC,466,38,30,10
+    EDITTEXT        IDC_EDIT_UDP_MULTICAST_PORT,510,36,50,12,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "TTL:",IDC_STATIC,466,54,30,10
+    EDITTEXT        IDC_EDIT_UDP_MULTICAST_TTL,510,52,30,12,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "Interface:",IDC_STATIC,466,70,40,10
+    EDITTEXT        IDC_EDIT_UDP_MULTICAST_IFACE,510,68,100,12,ES_AUTOHSCROLL
+    CONTROL         "Loopback",IDC_CHK_UDP_MULTICAST_LOOP,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,510,84,60,12
+    GROUPBOX        "TCP Settings",IDC_STATIC_GROUP_TCP,6,112,446,80
+    LTEXT           "(TCP output is deferred per spec §23.2.)",IDC_STATIC,16,128,220,10
+    GROUPBOX        "File Recording Settings",IDC_STATIC_GROUP_FILE_RECORD,6,198,446,56
+    LTEXT           "Recording path:",IDC_STATIC,16,214,60,10
+    EDITTEXT        IDC_EDIT_RECORDING_PATH,80,212,320,12,ES_AUTOHSCROLL
+    PUSHBUTTON      "Browse...",IDC_BTN_RECORDING_BROWSE,404,212,40,14
+    GROUPBOX        "File Replay Settings",IDC_STATIC_GROUP_FILE_REPLAY,6,258,446,56
+    LTEXT           "Replay path:",IDC_STATIC,16,274,60,10
+    EDITTEXT        IDC_EDIT_REPLAY_PATH,80,272,320,12,ES_AUTOHSCROLL
+    PUSHBUTTON      "Browse...",IDC_BTN_REPLAY_BROWSE,404,272,40,14
+    GROUPBOX        "Playback Controls",IDC_STATIC_GROUP_PLAYBACK,458,112,236,200
+    PUSHBUTTON      "Start",IDC_BTN_PLAYBACK_START,466,128,50,16
+    PUSHBUTTON      "Pause",IDC_BTN_PLAYBACK_PAUSE,520,128,50,16
+    PUSHBUTTON      "Resume",IDC_BTN_PLAYBACK_RESUME,574,128,50,16
+    PUSHBUTTON      "Stop",IDC_BTN_PLAYBACK_STOP,628,128,50,16
+    CONTROL         "Loop",IDC_CHK_PLAYBACK_LOOP,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,466,152,50,12
+    LTEXT           "Speed:",IDC_STATIC,466,172,32,10
+    COMBOBOX        IDC_COMBO_PLAYBACK_SPEED,500,170,80,80,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+END
+
+IDD_PREVIEW_PAGE DIALOGEX 0, 0, 700, 420
+STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
+FONT 12, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    CTEXT           "Preview Canvas (V2: Direct2D)",IDC_STATIC_PREVIEW_CANVAS,6,6,528,360,SS_SUNKEN
+    PUSHBUTTON      "Start",IDC_BTN_PREVIEW_START,540,8,50,14
+    PUSHBUTTON      "Pause",IDC_BTN_PREVIEW_PAUSE,540,26,50,14
+    PUSHBUTTON      "Resume",IDC_BTN_PREVIEW_RESUME,540,44,50,14
+    PUSHBUTTON      "Stop",IDC_BTN_PREVIEW_STOP,540,62,50,14
+    PUSHBUTTON      "Zoom In",IDC_BTN_PREVIEW_ZOOM_IN,596,8,56,14
+    PUSHBUTTON      "Zoom Out",IDC_BTN_PREVIEW_ZOOM_OUT,596,26,56,14
+    PUSHBUTTON      "Fit Scenario",IDC_BTN_PREVIEW_FIT,596,44,56,14
+    CONTROL         "Show Labels",IDC_CHK_PREVIEW_LABELS,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,540,86,80,12
+    CONTROL         "Show Trails",IDC_CHK_PREVIEW_TRAILS,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,540,100,80,12
+    CONTROL         "Show Paths",IDC_CHK_PREVIEW_PATHS,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,540,114,80,12
+    CONTROL         "Show Orientation Vectors",IDC_CHK_PREVIEW_ORIENTATION,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,540,128,130,12
+    LTEXT           "Time:",IDC_STATIC,6,374,30,10
+    CONTROL         "",IDC_SLIDER_PREVIEW_TIME,"msctls_trackbar32",TBS_AUTOTICKS | WS_TABSTOP,38,372,600,16
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Version
+//
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 1,0,0,0
+ PRODUCTVERSION 1,0,0,0
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "FileDescription", "ScenarioEditor"
+            VALUE "FileVersion", "1.0.0.0"
+            VALUE "InternalName", "ScenarioEditor.exe"
+            VALUE "OriginalFilename", "ScenarioEditor.exe"
+            VALUE "ProductName", "ScenarioEditor"
+            VALUE "ProductVersion", "1.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+
+
+#ifdef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// TEXTINCLUDE
+//
+
+1 TEXTINCLUDE 
+BEGIN
+    "resource.h\0"
+END
+
+2 TEXTINCLUDE 
+BEGIN
+    "\0"
+END
+
+3 TEXTINCLUDE 
+BEGIN
+    "\r\n"
+    "\0"
+END
+
+#endif    // APSTUDIO_INVOKED
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// DESIGNINFO
+//
+
+#ifdef APSTUDIO_INVOKED
+GUIDELINES DESIGNINFO
+BEGIN
+    IDD_SCENARIO_EDITOR_DIALOG, DIALOG
+    BEGIN
+    END
+
+    IDD_ASSET_ENTITY_EDITOR_PAGE, DIALOG
+    BEGIN
+    END
+END
+#endif    // APSTUDIO_INVOKED
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// AFX_DIALOG_LAYOUT
+//
+
+IDD_ASSET_ENTITY_EDITOR_PAGE AFX_DIALOG_LAYOUT
+BEGIN
+    0
+END
+
+IDD_SCENARIO_EDITOR_DIALOG AFX_DIALOG_LAYOUT
+BEGIN
+    0
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// String Table
+//
+
+STRINGTABLE
+BEGIN
+    IDS_APP_TITLE           "ScenarioEditor"
+    IDS_STATE_IDLE          "State: Idle"
+    IDS_TIME_DEFAULT        "Time: 000.000s"
+    IDS_PROGRESS_DEFAULT    "Progress: 0%"
+END
+
+STRINGTABLE
+BEGIN
+    IDS_ERRORS_DEFAULT      "Errors: 0"
+    IDS_WARNINGS_DEFAULT    "Warnings: 0"
+    IDS_INFO_DEFAULT        "Info: 0"
+    IDS_PDUS_DEFAULT        "PDUs: 0"
+    IDS_BW_DEFAULT          "BW: 0.00 Mbps"
+END
+
+STRINGTABLE
+BEGIN
+    ID_FILE_NEW_SCENARIO    "Create a new scenario\nNew Scenario"
+    ID_FILE_OPEN_SCENARIO   "Open an existing scenario\nOpen Scenario"
+    ID_FILE_SAVE_SCENARIO   "Save the current scenario\nSave Scenario"
+    ID_FILE_SAVE_SCENARIO_AS "Save the scenario under a new name\nSave As"
+    ID_FILE_OPEN_RECORDING  "Open a .disrec recording file\nOpen Recording"
+    ID_SCENARIO_VALIDATE    "Validate the current scenario\nValidate"
+    ID_SCENARIO_GENERATE_RECORDING 
+                            "Generate a recording from the scenario\nGenerate Recording"
+    ID_SCENARIO_PREVIEW     "Open the preview tab\nPreview"
+    ID_SCENARIO_RESET_CLOCK "Reset the scenario clock\nReset Clock"
+END
+
+STRINGTABLE
+BEGIN
+    ID_APP_EXIT             "Exit the application\nExit"
+END
+
+STRINGTABLE
+BEGIN
+    ID_PLAYBACK_START       "Start playback\nStart"
+    ID_PLAYBACK_PAUSE       "Pause playback\nPause"
+    ID_PLAYBACK_RESUME      "Resume playback\nResume"
+    ID_PLAYBACK_STOP        "Stop playback\nStop"
+    ID_PLAYBACK_LOOP        "Toggle loop playback\nLoop"
+END
+
+STRINGTABLE
+BEGIN
+    ID_NETWORK_OPEN_OUTPUT  "Open the configured network output\nOpen Network Output"
+    ID_NETWORK_CLOSE_OUTPUT "Close the network output\nClose Network Output"
+    ID_NETWORK_TEST_UDP     "Send a UDP test packet\nTest UDP Send"
+    ID_NETWORK_TEST_MULTICAST 
+                            "Send a multicast test packet\nTest Multicast Send"
+    ID_NETWORK_TEST_TCP     "Attempt a TCP connection\nTest TCP Connection"
+END
+
+STRINGTABLE
+BEGIN
+    ID_VIEW_VALIDATION_PANEL 
+                            "Show the full validation panel\nValidation Panel"
+    ID_HELP_ABOUT           "About ScenarioEditor\nAbout"
+    ID_HELP_PROTOCOL_NOTES  "DIS protocol notes\nProtocol Notes"
+    ID_HELP_FILE_FORMAT_NOTES "Recording file format notes\nFile Format Notes"
+END
+
+STRINGTABLE
+BEGIN
+    ID_TOOLS_RECORD         "Begin recording\nRecord"
+    ID_TOOLS_REPLAY_FILE    "Replay a .disrec file\nReplay File"
+    ID_TOOLS_SEND_LIVE      "Send live to the configured network output\nSend Live"
+    ID_TB_HELP_TOGGLE       "Toggle field-level help tooltips\nField Help"
+END
+
+#endif    // English (United States) resources
+/////////////////////////////////////////////////////////////////////////////
+
+
+
+#ifndef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 3 resource.
+//
+
+
+/////////////////////////////////////////////////////////////////////////////
+#endif    // not APSTUDIO_INVOKED
+

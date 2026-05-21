@@ -1,0 +1,285 @@
+; EntityTypeCatalog.ini
+; -----------------------------------------------------------------------------
+; ScenarioEditor Entity Type catalog.
+;
+; This file populates the Entity Kind / Domain / Country / Category / Subcategory
+; combo-box pickers in the Asset / Entity Editor tab (§7.3). It is a small
+; curated subset of the SISO-REF-010 standard - extend as needed.
+;
+; Loaded at application startup. Missing file or malformed entries are
+; non-fatal: an empty catalog means the user can still enter raw numeric
+; values, but the picker dropdowns will be empty.
+;
+; Format:
+;   [Kind.<id>]                 Top-level entity kind (1 = Platform, 2 = Munition, etc.)
+;     Name=...
+;
+;   [Domain.<kindId>.<id>]      Domain within a kind (e.g. 1.2 = Platform.Air)
+;     Name=...
+;
+;   [Country.<id>]              SISO-REF-010 country code (225 = USA, 222 = Russia, etc.)
+;     Name=...
+;
+;   [Category.<kindId>.<domainId>.<id>]
+;     Name=...                  Category within a (kind, domain) pair
+;
+;   [Subcategory.<kindId>.<domainId>.<categoryId>.<id>]
+;     Name=...                  Subcategory under a category
+;
+; Numeric IDs match the DIS Entity Type wire fields (§14.5).
+; -----------------------------------------------------------------------------
+
+[Format]
+Version=1
+Source=SISO-REF-010 subset (curated for ScenarioEditor v1)
+
+; =============================================================================
+; KINDS
+; =============================================================================
+
+[Kind.0]
+Name=Other
+
+[Kind.1]
+Name=Platform
+
+[Kind.2]
+Name=Munition
+
+[Kind.3]
+Name=Life Form
+
+[Kind.4]
+Name=Environmental
+
+[Kind.5]
+Name=Cultural Feature
+
+[Kind.6]
+Name=Supply
+
+[Kind.7]
+Name=Radio
+
+[Kind.8]
+Name=Expendable
+
+[Kind.9]
+Name=Sensor/Emitter
+
+; =============================================================================
+; DOMAINS (per kind)
+; =============================================================================
+
+; Platform domains
+[Domain.1.0]
+Name=Other
+[Domain.1.1]
+Name=Land
+[Domain.1.2]
+Name=Air
+[Domain.1.3]
+Name=Surface
+[Domain.1.4]
+Name=Subsurface
+[Domain.1.5]
+Name=Space
+
+; Life Form domains
+[Domain.3.1]
+Name=Land
+[Domain.3.2]
+Name=Air
+[Domain.3.3]
+Name=Surface
+[Domain.3.4]
+Name=Subsurface
+
+; =============================================================================
+; COUNTRIES (subset - extend as needed)
+; =============================================================================
+
+[Country.0]
+Name=Other
+
+[Country.45]
+Name=Canada
+
+[Country.71]
+Name=France
+
+[Country.78]
+Name=Germany
+
+[Country.106]
+Name=Iran
+
+[Country.111]
+Name=Israel
+
+[Country.114]
+Name=Italy
+
+[Country.121]
+Name=Japan
+
+[Country.151]
+Name=North Korea
+
+[Country.156]
+Name=South Korea
+
+[Country.213]
+Name=Ukraine
+
+[Country.222]
+Name=Russia
+
+[Country.224]
+Name=United Kingdom
+
+[Country.225]
+Name=United States
+
+[Country.255]
+Name=China (People's Republic)
+
+; =============================================================================
+; CATEGORIES (Platform.Air = Kind 1, Domain 2)
+; =============================================================================
+
+[Category.1.2.0]
+Name=Other
+[Category.1.2.1]
+Name=Fighter / Air Defense
+[Category.1.2.2]
+Name=Attack / Strike
+[Category.1.2.3]
+Name=Bomber
+[Category.1.2.4]
+Name=Cargo / Tanker
+[Category.1.2.5]
+Name=ASW / Patrol / Observation
+[Category.1.2.6]
+Name=Electronic Warfare (EW)
+[Category.1.2.7]
+Name=Reconnaissance
+[Category.1.2.8]
+Name=Surveillance / C2
+[Category.1.2.20]
+Name=Attack Helicopter
+[Category.1.2.21]
+Name=Utility Helicopter
+[Category.1.2.22]
+Name=Antisubmarine / Patrol Helicopter
+[Category.1.2.23]
+Name=Cargo Helicopter
+[Category.1.2.24]
+Name=Observation Helicopter
+[Category.1.2.40]
+Name=Trainer
+[Category.1.2.50]
+Name=Unmanned Aerial Vehicle (UAV)
+[Category.1.2.57]
+Name=Civilian Aircraft
+
+; =============================================================================
+; CATEGORIES (Platform.Land = Kind 1, Domain 1)
+; =============================================================================
+
+[Category.1.1.0]
+Name=Other
+[Category.1.1.1]
+Name=Tank
+[Category.1.1.2]
+Name=Armored Fighting Vehicle
+[Category.1.1.3]
+Name=Armored Utility Vehicle
+[Category.1.1.4]
+Name=Self-Propelled Artillery
+[Category.1.1.5]
+Name=Towed Artillery
+[Category.1.1.6]
+Name=Small Wheeled Utility Vehicle
+[Category.1.1.7]
+Name=Large Wheeled Utility Vehicle
+[Category.1.1.8]
+Name=Small Tracked Utility Vehicle
+[Category.1.1.9]
+Name=Large Tracked Utility Vehicle
+[Category.1.1.10]
+Name=Mortar
+[Category.1.1.11]
+Name=Mine Plow
+[Category.1.1.12]
+Name=Mine Rake
+[Category.1.1.13]
+Name=Mine Roller
+[Category.1.1.14]
+Name=Cargo Trailer
+[Category.1.1.50]
+Name=Unmanned Ground Vehicle (UGV)
+
+; =============================================================================
+; CATEGORIES (Platform.Surface = Kind 1, Domain 3)
+; =============================================================================
+
+[Category.1.3.0]
+Name=Other
+[Category.1.3.1]
+Name=Carrier
+[Category.1.3.2]
+Name=Command Ship / Cruiser
+[Category.1.3.3]
+Name=Guided Missile Cruiser
+[Category.1.3.4]
+Name=Guided Missile Destroyer
+[Category.1.3.5]
+Name=Destroyer
+[Category.1.3.6]
+Name=Guided Missile Frigate
+[Category.1.3.7]
+Name=Light / Patrol Craft
+[Category.1.3.50]
+Name=Unmanned Surface Vehicle (USV)
+
+; =============================================================================
+; SUBCATEGORIES - illustrative entries only.
+; Extend per asset library; format is Subcategory.<kind>.<domain>.<category>.<id>
+; =============================================================================
+
+; F-16 Fighting Falcon family under Platform.Air.Fighter
+[Subcategory.1.2.1.1]
+Name=F-16 Fighting Falcon
+[Subcategory.1.2.1.2]
+Name=F-15 Eagle
+[Subcategory.1.2.1.3]
+Name=F/A-18 Hornet
+[Subcategory.1.2.1.4]
+Name=F-22 Raptor
+[Subcategory.1.2.1.5]
+Name=F-35 Lightning II
+
+; M1 Abrams family under Platform.Land.Tank
+[Subcategory.1.1.1.1]
+Name=M1 Abrams
+[Subcategory.1.1.1.2]
+Name=M1A1 Abrams
+[Subcategory.1.1.1.3]
+Name=M1A2 Abrams
+
+; Generic UAV examples under Platform.Air.UAV
+[Subcategory.1.2.50.1]
+Name=MQ-1 Predator
+[Subcategory.1.2.50.2]
+Name=MQ-9 Reaper
+[Subcategory.1.2.50.3]
+Name=RQ-4 Global Hawk
+[Subcategory.1.2.50.99]
+Name=Generic Quadcopter
+
+; -----------------------------------------------------------------------------
+; End of curated catalog. Add entries below as needed.
+; For the full SISO-REF-010 listing see:
+;   https://www.sisostandards.org/page/ReferenceDocuments
+; -----------------------------------------------------------------------------

@@ -1,0 +1,75 @@
+# ScenarioEditor .gitignore
+
+# Build outputs (MSBuild + CMake) — keep build/*.py (E2E tests), drop the rest
+build-cmake/
+build/x64/
+build/Release/
+build/Debug/
+build/CMakeFiles/
+build/_deps/
+build/open-dis-cpp.build/
+build/CMakeCache.txt
+build/cmake_install.cmake
+build/CPack*.cmake
+build/build.ninja
+build/.ninja_*
+build/ScenarioEditor.sln
+build/ALL_BUILD.*
+build/INSTALL.*
+build/PACKAGE.*
+build/ZERO_CHECK.*
+build/ScenarioEditor.dir/
+build/ScenarioEditor.vcxproj
+build/ScenarioEditor.vcxproj.filters
+build/coord_roundtrip.*
+build/disrec_roundtrip.*
+build/motion_sampler_test.*
+build/scenario_io_roundtrip.*
+build/validator_test.*
+
+# Generic build artifacts
+[Bb]in/
+[Oo]bj/
+*.aps
+*.tlog
+*.tlb
+*.tli
+*.tlh
+*.idb
+*.ipdb
+*.iobj
+*.ilk
+*.exp
+*.lib
+*.pdb
+*.res
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.ncb
+*.opensdf
+*.sdf
+
+# Editor / IDE
+.vscode/
+*.swp
+
+# Runtime artifacts (next to the exe at runtime)
+settings.ini
+validator_fixture.ini
+error.log
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Claude Code project state
+.claude/

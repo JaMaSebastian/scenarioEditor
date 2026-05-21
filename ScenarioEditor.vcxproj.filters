@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hpp;hh;hxx</Extensions>
+    </Filter>
+    <Filter Include="Resource Files">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;bmp</Extensions>
+    </Filter>
+    <Filter Include="Source Files\Pages">
+      <UniqueIdentifier>{1A1C8E29-9E5C-4F12-9D8A-1F2E7E3D4A11}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Pages">
+      <UniqueIdentifier>{2B2D9F30-AF6D-5023-AE9B-2F3F8F4E5B22}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Docs">
+      <UniqueIdentifier>{3C3EA041-BF7E-6134-BFAC-3F4F9F5F6C33}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ClInclude Include="src\framework.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\targetver.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\pch.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\Resource.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\ScenarioEditor.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\ScenarioEditorDialog.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="log.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\ScenarioSetupPage.h"><Filter>Header Files\Pages</Filter></ClInclude>
+    <ClInclude Include="src\AssetEntityEditorPage.h"><Filter>Header Files\Pages</Filter></ClInclude>
+    <ClInclude Include="src\MotionPathEditorPage.h"><Filter>Header Files\Pages</Filter></ClInclude>
+    <ClInclude Include="src\OutputPlaybackPage.h"><Filter>Header Files\Pages</Filter></ClInclude>
+    <ClInclude Include="src\PreviewPage.h"><Filter>Header Files\Pages</Filter></ClInclude>
+    <ClInclude Include="src\Scenario.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\PduBuilder.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\UdpSender.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\ScenarioIO.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\EntityTypeCatalog.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\CoordTransforms.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\ScenarioWorker.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\MotionSampler.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\DisrecFormat.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\DisrecWriter.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\DisrecReader.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\SettingsIO.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\Validator.h"><Filter>Header Files</Filter></ClInclude>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ClCompile Include="src\pch.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\ScenarioEditor.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\ScenarioEditorDialog.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="log.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\ScenarioSetupPage.cpp"><Filter>Source Files\Pages</Filter></ClCompile>
+    <ClCompile Include="src\AssetEntityEditorPage.cpp"><Filter>Source Files\Pages</Filter></ClCompile>
+    <ClCompile Include="src\MotionPathEditorPage.cpp"><Filter>Source Files\Pages</Filter></ClCompile>
+    <ClCompile Include="src\OutputPlaybackPage.cpp"><Filter>Source Files\Pages</Filter></ClCompile>
+    <ClCompile Include="src\PreviewPage.cpp"><Filter>Source Files\Pages</Filter></ClCompile>
+    <ClCompile Include="src\PduBuilder.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\UdpSender.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\ScenarioIO.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\EntityTypeCatalog.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\CoordTransforms.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\ScenarioWorker.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\MotionSampler.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\DisrecWriter.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\DisrecReader.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\SettingsIO.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\Validator.cpp"><Filter>Source Files</Filter></ClCompile>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ResourceCompile Include="src\ScenarioEditor.rc"><Filter>Resource Files</Filter></ResourceCompile>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md"><Filter>Docs</Filter></None>
+    <None Include="spec.mk"><Filter>Docs</Filter></None>
+    <None Include="EntityTypeCatalog.ini"><Filter>Docs</Filter></None>
+    <None Include="src\toolbar.bmp"><Filter>Resource Files</Filter></None>
+    <None Include="src\make_toolbar_bmp.py"><Filter>Resource Files</Filter></None>
+  </ItemGroup>
+</Project>
