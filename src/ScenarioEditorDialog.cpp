@@ -11,7 +11,7 @@
 
 namespace
 {
-    constexpr int kStatusBarReserveBottomPx = 24;
+    constexpr int kStatusBarReserveBottomPx = 40;
     constexpr int kToolBarReserveTopPx = 72;
 
     static UINT s_statusIndicators[] = {
@@ -120,6 +120,9 @@ BOOL CScenarioEditorDialog::OnInitDialog()
                                      _T("MS Shell Dlg"));
         m_statusBar.SetFont(&m_uiFont);
         SeedStatusBar();
+        // Positioning + sizing of the status bar is owned by LayoutChildren
+        // — MFC's CStatusBar doesn't recompute its height when SetFont is
+        // called, so we don't trust its auto-layout for the 12pt font.
     }
 
     CreateToolBar();
@@ -239,26 +242,35 @@ BOOL CScenarioEditorDialog::PreTranslateMessage(MSG* pMsg)
     return CDialogEx::PreTranslateMessage(pMsg);
 }
 
+namespace
+{
+    struct StatusBarPane { int idx; UINT id; const TCHAR* seedText; int widthPx; };
+    const StatusBarPane kStatusBarPanes[] = {
+        // Pane widths sized for the 12pt status bar font at 150% DPI.
+        { 0, ID_INDICATOR_STATE,    _T("State: Idle"),         260 },
+        { 1, ID_INDICATOR_TIME,     _T("Time: 000.0s / 000s"), 340 },
+        { 2, ID_INDICATOR_PROGRESS, _T("Progress: 0%"),        240 },
+        { 3, ID_INDICATOR_ERRORS,   _T("Errors: 0"),           180 },
+        { 4, ID_INDICATOR_WARNINGS, _T("Warnings: 0"),         210 },
+        { 5, ID_INDICATOR_INFO,     _T("Info: 0"),             160 },
+        { 6, ID_INDICATOR_PDUS,     _T("PDUs: 0"),             190 },
+        { 7, ID_INDICATOR_BW,       _T("BW: 0.00 Mbps"),       260 },
+    };
+}
+
+void CScenarioEditorDialog::ApplyStatusBarPaneWidths()
+{
+    if (!::IsWindow(m_statusBar.GetSafeHwnd())) return;
+    for (const auto& p : kStatusBarPanes)
+        m_statusBar.SetPaneInfo(p.idx, p.id, SBPS_NORMAL, p.widthPx);
+}
+
 void CScenarioEditorDialog::SeedStatusBar()
 {
-    // Pane widths sized for the 12pt status bar font (≈50% bigger than the
-    // old 8pt defaults). If you change m_uiFont's size, scale these too.
-    struct Pane { int idx; UINT id; const TCHAR* text; int widthPx; };
-    const Pane panes[] = {
-        { 0, ID_INDICATOR_STATE,    _T("State: Idle"),     135 },
-        { 1, ID_INDICATOR_TIME,     _T("Time: 000.000s"),  165 },
-        { 2, ID_INDICATOR_PROGRESS, _T("Progress: 0%"),    135 },
-        { 3, ID_INDICATOR_ERRORS,   _T("Errors: 0"),       120 },
-        { 4, ID_INDICATOR_WARNINGS, _T("Warnings: 0"),     135 },
-        { 5, ID_INDICATOR_INFO,     _T("Info: 0"),         105 },
-        { 6, ID_INDICATOR_PDUS,     _T("PDUs: 0"),         120 },
-        { 7, ID_INDICATOR_BW,       _T("BW: 0.00 Mbps"),   165 },
-    };
-    for (const auto& p : panes)
-    {
-        m_statusBar.SetPaneInfo(p.idx, p.id, SBPS_NORMAL, p.widthPx);
-        m_statusBar.SetPaneText(p.idx, p.text);
-    }
+    if (!::IsWindow(m_statusBar.GetSafeHwnd())) return;
+    ApplyStatusBarPaneWidths();
+    for (const auto& p : kStatusBarPanes)
+        m_statusBar.SetPaneText(p.idx, p.seedText);
 }
 
 void CScenarioEditorDialog::CreatePages()
@@ -282,6 +294,11 @@ void CScenarioEditorDialog::CreatePages()
     // Create() so its OnInitDialog can populate combos in one pass.
     m_pageAssets.SetCatalog(&theApp.Catalog());
 
+    // Setup page needs the editable scenario so the Default Coord Mode
+    // combo can live-commit (other pages read defaultCoordMode when
+    // they add new entities / segments).
+    m_pageSetup.SetScenario(&m_scenario);
+
     // Asset page needs the editable scenario to drive the asset tree.
     m_pageAssets.SetScenario(&m_scenario);
 
@@ -290,6 +307,9 @@ void CScenarioEditorDialog::CreatePages()
 
     // Output page edits Scenario::output.
     m_pageOutput.SetScenario(&m_scenario);
+
+    // Preview page renders the scenario independently of the worker.
+    m_pagePreview.SetScenario(&m_scenario);
 
     m_pages[0] = create(m_pageSetup,   IDD_SCENARIO_SETUP_PAGE);
     m_pages[1] = create(m_pageAssets,  IDD_ASSET_ENTITY_EDITOR_PAGE);
@@ -339,12 +359,20 @@ void CScenarioEditorDialog::LayoutChildren()
     CRect rcClient;
     GetClientRect(&rcClient);
 
-    int statusBarH = 0;
+    // Pin the status bar to the bottom at our chosen height. MFC's CStatusBar
+    // would otherwise pick a height based on its original (8pt) font metrics
+    // and clip the 12pt pane text — so we own the layout here.
+    const int bottomReserve = kStatusBarReserveBottomPx;
     if (::IsWindow(m_statusBar.GetSafeHwnd()))
     {
-        CRect rcSb;
-        m_statusBar.GetWindowRect(&rcSb);
-        statusBarH = rcSb.Height();
+        m_statusBar.SetWindowPos(nullptr,
+                                 0, rcClient.bottom - bottomReserve,
+                                 rcClient.Width(), bottomReserve,
+                                 SWP_NOZORDER | SWP_NOACTIVATE);
+        // MFC's CStatusBar resets pane widths when it receives WM_SIZE
+        // (which Windows always sends from the SetWindowPos above), so
+        // re-apply our pane widths AFTER repositioning.
+        ApplyStatusBarPaneWidths();
     }
 
     int toolBarH = 0;
@@ -361,8 +389,6 @@ void CScenarioEditorDialog::LayoutChildren()
     {
         toolBarH = kToolBarReserveTopPx;
     }
-
-    const int bottomReserve = (statusBarH > 0) ? statusBarH : kStatusBarReserveBottomPx;
 
     int tabTop = toolBarH + 2;
     int tabHeight = rcClient.Height() - tabTop - bottomReserve;
@@ -392,8 +418,10 @@ void CScenarioEditorDialog::LayoutChildren()
 void CScenarioEditorDialog::OnSize(UINT nType, int cx, int cy)
 {
     CDialogEx::OnSize(nType, cx, cy);
-    if (::IsWindow(m_statusBar.GetSafeHwnd()))
-        m_statusBar.SendMessage(WM_SIZE);
+    // Don't forward WM_SIZE to the status bar — MFC's CControlBar handler
+    // would re-position the bar to its internal default height (computed
+    // from the original font), clobbering the 40-px slot we want for the
+    // 12pt pane text. LayoutChildren below positions the bar explicitly.
     LayoutChildren();
 }
 
@@ -516,6 +544,7 @@ void CScenarioEditorDialog::UpdateStatusPduCount()
 
 void CScenarioEditorDialog::OnPlaybackStart()
 {
+    LOG("OnPlaybackStart: entered");
     if (m_worker.IsRunning())
     {
         LOG("Playback > Start ignored — worker already running");
@@ -526,6 +555,13 @@ void CScenarioEditorDialog::OnPlaybackStart()
     // immutable snapshot the worker will run from (§18.0).
     CaptureUiIntoScenario();
 
+    sprintf_s(szError, sizeof(szError),
+              "OnPlaybackStart: scenario name='%s' dur=%.1fs entities=%zu outputMode=%d",
+              m_scenario.name.c_str(), m_scenario.durationSeconds,
+              m_scenario.entities.size(),
+              static_cast<int>(m_scenario.output.mode));
+    LOG(szError);
+
     auto snap = std::make_shared<RuntimeScenarioSnapshot>();
     snap->scenario = m_scenario;          // deep copy (includes OutputConfig)
 
@@ -534,6 +570,7 @@ void CScenarioEditorDialog::OnPlaybackStart()
 
     if (!m_worker.Start(GetSafeHwnd(), std::move(snap)))
     {
+        LOG("OnPlaybackStart: worker.Start returned false");
         if (::IsWindow(m_statusBar.GetSafeHwnd()))
             m_statusBar.SetPaneText(0, _T("State: Error"));
         return;
@@ -581,10 +618,33 @@ LRESULT CScenarioEditorDialog::OnPlaybackStatusMessage(WPARAM wParam, LPARAM /*l
     return 0;
 }
 
-LRESULT CScenarioEditorDialog::OnPlaybackProgressMessage(WPARAM /*timeMs*/, LPARAM totalPdus)
+LRESULT CScenarioEditorDialog::OnPlaybackProgressMessage(WPARAM timeMs, LPARAM totalPdus)
 {
     m_pduCount = static_cast<unsigned>(totalPdus);
     UpdateStatusPduCount();
+
+    // Time + Progress % panes (panes 1 and 2). wParam is the scenario-time
+    // elapsed in ms; % is computed against the scenario's nominal duration.
+    if (::IsWindow(m_statusBar.GetSafeHwnd()))
+    {
+        const double tSec = static_cast<double>(timeMs) / 1000.0;
+        const double dur  = m_scenario.durationSeconds;
+        CString buf;
+        if (dur > 0.0)
+            buf.Format(_T("Time: %.1fs / %.0fs"), tSec, dur);
+        else
+            buf.Format(_T("Time: %.1fs"), tSec);
+        m_statusBar.SetPaneText(1, buf);
+
+        if (dur > 0.0)
+        {
+            int pct = static_cast<int>(tSec / dur * 100.0 + 0.5);
+            if (pct < 0)   pct = 0;
+            if (pct > 100) pct = 100;
+            buf.Format(_T("Progress: %d%%"), pct);
+            m_statusBar.SetPaneText(2, buf);
+        }
+    }
     return 0;
 }
 
@@ -632,11 +692,31 @@ void CScenarioEditorDialog::OnDestroy()
 
 void CScenarioEditorDialog::UpdateTitle()
 {
-    CString title;
-    if (m_scenario.name.empty())
-        title = _T("ScenarioEditor");
+    // Title bar shows the FILE NAME (what the user clicked Open on) as
+    // the primary identifier — the in-INI Name= field is independent
+    // and edited via Scenario Setup. If no file is open yet, fall back
+    // to the in-INI name (or "Untitled" if both are empty).
+    CString display;
+    if (!m_currentScenarioPath.IsEmpty())
+    {
+        const int slash = m_currentScenarioPath.ReverseFind(_T('\\'));
+        const int fwd   = m_currentScenarioPath.ReverseFind(_T('/'));
+        const int cut   = (slash > fwd) ? slash : fwd;
+        display = (cut >= 0)
+            ? m_currentScenarioPath.Mid(cut + 1)
+            : m_currentScenarioPath;
+    }
+    else if (!m_scenario.name.empty())
+    {
+        display = CA2T(m_scenario.name.c_str());
+    }
     else
-        title.Format(_T("ScenarioEditor - %s"), CString(CA2T(m_scenario.name.c_str())).GetString());
+    {
+        display = _T("Untitled");
+    }
+
+    CString title;
+    title.Format(_T("ScenarioEditor - %s"), display.GetString());
     if (m_isDirty) title += _T(" *");
     SetWindowText(title);
 }
@@ -713,6 +793,7 @@ void CScenarioEditorDialog::CaptureUiIntoScenario()
                              m_scenario.originAltM);
     }
     m_pageOutput.WriteTo(m_scenario.output);
+    m_pageMotion.CommitPendingEdits();
 
     // Toolbar speed combo overrides the Output-tab speed if a value is
     // selected. The CMFCToolBarComboBoxButton lives on m_toolBar; its
@@ -739,7 +820,7 @@ void CScenarioEditorDialog::Revalidate()
     if (!m_statusBar.GetSafeHwnd())
         return;
 
-    const Validator::Report rep = Validator::Validate(m_scenario);
+    const Validator::Report rep = Validator::Validate(m_scenario, theApp.Catalog());
 
     CString buf;
     buf.Format(_T("Errors: %d"),   rep.errorCount);   m_statusBar.SetPaneText(3, buf);
@@ -776,7 +857,7 @@ void CScenarioEditorDialog::OnKbDuplicateSegment(){ ShowPage(2); FireBnClicked(m
 void CScenarioEditorDialog::OnScenarioValidate()
 {
     CaptureUiIntoScenario();
-    const Validator::Report rep = Validator::Validate(m_scenario);
+    const Validator::Report rep = Validator::Validate(m_scenario, theApp.Catalog());
 
     // Build a single multi-line message. Errors first, then warnings, then
     // info — easiest path that satisfies "pop a list dialog with the issues"
@@ -850,7 +931,7 @@ void CScenarioEditorDialog::OnFileOpen()
                     _T("ini"),
                     _T("scenario.ini"),
                     OFN_HIDEREADONLY | OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST,
-                    _T("Scenario INI (scenario.ini)|scenario.ini|All Files (*.*)|*.*||"),
+                    _T("Scenario INI (*.ini)|*.ini|All Files (*.*)|*.*||"),
                     this);
     if (dlg.DoModal() != IDOK) return;
 
@@ -948,7 +1029,7 @@ void CScenarioEditorDialog::OnFileSaveAs()
                     _T("ini"),
                     _T("scenario.ini"),
                     OFN_HIDEREADONLY | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
-                    _T("Scenario INI (scenario.ini)|scenario.ini|All Files (*.*)|*.*||"),
+                    _T("Scenario INI (*.ini)|*.ini|All Files (*.*)|*.*||"),
                     this);
     if (dlg.DoModal() != IDOK) return;
     DoSaveTo(dlg.GetPathName());

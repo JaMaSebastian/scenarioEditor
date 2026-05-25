@@ -14,6 +14,26 @@ enum class CoordMode : uint8_t
     ECEF      = 2,
 };
 
+// Physical-model application mode. Drives the Validator (warn / error on
+// envelope violations) in Phase 1; the sampler will clamp motion to
+// envelope in Phase 2 (Limit mode).
+enum class PhysicalModelMode : uint8_t
+{
+    Ignore   = 0,  // no envelope checks; current Slice 1 behavior
+    Validate = 1,  // emit motion as authored; Validator surfaces violations
+    Limit    = 2,  // sampler clamps to envelope at runtime (Phase 2)
+};
+
+// Per-entity override of the scenario-wide PhysicalModelMode. Inherit
+// means "fall through to scenario.defaultPhysicalModel".
+enum class PhysicalModelOverride : uint8_t
+{
+    Inherit  = 0,
+    Ignore   = 1,
+    Validate = 2,
+    Limit    = 3,
+};
+
 // Motion segment types per spec §23.2. v2 ships all four below; Waypoint
 // and Circle remain §23.3 deferred.
 enum class MotionType : uint8_t
@@ -21,19 +41,13 @@ enum class MotionType : uint8_t
     Stationary = 0,  // hold position; orientation fixed at start pose
     StopHold   = 1,  // resume from the previous segment's end pose
     Line       = 2,  // linear interpolation in geodetic lat/lon/alt
-    Ellipse    = 3,  // parametric orbit around (centerLat, centerLon, centerAlt)
+    Ellipse    = 3,  // parametric orbit defined by two foci + length + speed + bearing
 };
 
 enum class EllipseDirection : uint8_t
 {
     Clockwise        = 0,
     CounterClockwise = 1,
-};
-
-enum class AltitudeMode : uint8_t
-{
-    Constant = 0,
-    Linear   = 1,
 };
 
 struct MotionSegment
@@ -67,23 +81,51 @@ struct MotionSegment
     double      endPitchDeg    = 0.0;
     double      endRollDeg     = 0.0;
 
+    // ---- Local-XYZ siblings (used when coordMode == Local). Offsets in
+    //      metres from the SCENARIO origin (originLatDeg/originLonDeg/
+    //      originAltM), in ENU (East/North/Up). Resolved to ECEF on demand
+    //      by MotionSampler via CoordTransforms::LocalEnuToEcefDeg. ----
+    double      startLocalX    = 0.0;
+    double      startLocalY    = 0.0;
+    double      startLocalZ    = 0.0;
+    double      endLocalX      = 0.0;
+    double      endLocalY      = 0.0;
+    double      endLocalZ      = 0.0;
+
     // ---- Line-specific knobs (matches spec §11.2 example) ----
     // SpeedMode / HeadingMode kept as strings for v2; sampler ignores them
     // (always uses constant-rate lerp). Persisted for round-trip fidelity.
     std::string speedMode      = "CalculateFromTime";
     std::string headingMode    = "CalculateFromPath";
 
-    // ---- Ellipse-specific fields ----
-    double      centerLat      = 0.0;
-    double      centerLon      = 0.0;
-    double      centerAlt      = 0.0;
-    double      radiusXMeters  = 0.0;     // ellipse semi-axis along ENU East
-    double      radiusYMeters  = 0.0;     // ellipse semi-axis along ENU North
-    double      rotationDeg    = 0.0;     // CCW rotation of the ellipse
-    double      startAngleDeg  = 0.0;     // 0 = +X (East) before rotation
+    // ---- Ellipse-specific fields (two-foci + length form) ----
+    // Foci of the ellipse in the segment's coordMode frame. Each focus
+    // carries Lat/Lon/Alt + Local X/Y/Z + ECEF X/Y/Z; the active triple
+    // is chosen by `coordMode` at sample time, same pattern as Line
+    // start/end. The "string length" (sum of distances from any orbit
+    // point to both foci, = 2a) determines the orbit size.
+    double      f1Lat          = 0.0;
+    double      f1Lon          = 0.0;
+    double      f1Alt          = 0.0;
+    double      f1LocalX       = 0.0;
+    double      f1LocalY       = 0.0;
+    double      f1LocalZ       = 0.0;
+    double      f1EcefX        = 0.0;
+    double      f1EcefY        = 0.0;
+    double      f1EcefZ        = 0.0;
+    double      f2Lat          = 0.0;
+    double      f2Lon          = 0.0;
+    double      f2Alt          = 0.0;
+    double      f2LocalX       = 0.0;
+    double      f2LocalY       = 0.0;
+    double      f2LocalZ       = 0.0;
+    double      f2EcefX        = 0.0;
+    double      f2EcefY        = 0.0;
+    double      f2EcefZ        = 0.0;
+    double      lengthMeters   = 0.0;     // "string" = sum of distances = 2a
+    double      startBearingDeg = 0.0;    // compass deg from center: 0=N, 90=E, 180=S, 270=W
+    double      speedMps       = 0.0;     // tangential m/s (0 means seed from airframe cruise)
     EllipseDirection direction = EllipseDirection::Clockwise;
-    double      periodSeconds  = 60.0;
-    AltitudeMode altitudeMode  = AltitudeMode::Constant;
 
     std::string description;
 };
@@ -120,9 +162,16 @@ struct Entity
     double      endSecond      = 300.0;
     double      updateRateHz   = 5.0;
 
+    // Initial linear speed in m/s. Used by the PDU builder to seed the
+    // EntityStatePdu LinearVelocity field (§14.5.2). Sign convention is
+    // "scalar speed along the entity's initial heading vector"; for
+    // stationary entities this is 0. The motion sampler may overwrite the
+    // velocity at runtime; this is just the t=0 value.
+    double      initialSpeedMps = 0.0;
+
     // ----- Initial position (model; ECEF is what the wire builder
     //       consumes today, the others land with coord-transform slice) -----
-    CoordMode   initialCoordMode = CoordMode::ECEF;
+    CoordMode   initialCoordMode = CoordMode::Local;
     double      lat            = 0.0;
     double      lon            = 0.0;
     double      alt            = 0.0;
@@ -145,6 +194,11 @@ struct Entity
     // ----- Motion segments (§8 / §16). Empty = entity stays at the
     //       initial pose forever (Slice 1 "Hello DIS" behavior). -----
     std::vector<MotionSegment> motionSegments;
+
+    // ----- Physical model (Phase 1: validator hint; Phase 2: clamp). -----
+    PhysicalModelOverride physicalModelOverride  = PhysicalModelOverride::Inherit;
+    bool                  overrideSpeedMultiplier = false;
+    double                speedMultiplier         = 1.0;
 };
 
 // Output settings — drives ScenarioWorker's sink selection at Start. v2
@@ -198,7 +252,7 @@ struct Scenario
     // ----- Timing defaults -----
     double      durationSeconds      = 300.0;
     double      defaultUpdateRateHz  = 5.0;
-    CoordMode   defaultCoordMode     = CoordMode::LatLonAlt;
+    CoordMode   defaultCoordMode     = CoordMode::Local;
 
     // ----- Origin (deferred to coord-transform slice; persisted nonetheless) -----
     double      originLatDeg   = 0.0;
@@ -214,4 +268,11 @@ struct Scenario
 
     // ----- Output config (§9, §11.2 [Output] section) -----
     OutputConfig output;
+
+    // ----- Physical-model defaults (§spec.mk Future Enhancements). Each
+    //       entity may override or inherit these values. Phase 1 wires
+    //       the validator; Phase 2 wires the sampler. -----
+    PhysicalModelMode defaultPhysicalModel   = PhysicalModelMode::Ignore;
+    bool              speedMultiplierEnabled = false;
+    double            speedMultiplier        = 1.0;
 };

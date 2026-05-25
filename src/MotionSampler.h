@@ -33,6 +33,10 @@ namespace MotionSampler
                            double scenarioTimeSec);
 
     // Lower-level helper exposed for unit tests: evaluate a single segment
-    // at a normalized time u in [0, 1].
-    SampledPose EvaluateSegment(const MotionSegment& segment, double u);
+    // at a normalized time u in [0, 1]. Passing the scenario lets the
+    // sampler resolve Local-XYZ centers/endpoints to ECEF via the scenario
+    // origin; passing nullptr falls back to LatLonAlt / ECEF fields only
+    // (older test behavior).
+    SampledPose EvaluateSegment(const MotionSegment& segment, double u,
+                                const Scenario* scenario = nullptr);
 }

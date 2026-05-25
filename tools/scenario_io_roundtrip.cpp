@@ -123,15 +123,14 @@ int main()
         m.type = MotionType::Ellipse;
         m.startSecond = 120.0; m.endSecond = 240.0;
         m.coordMode = CoordMode::LatLonAlt;
-        m.centerLat = 39.0550; m.centerLon = -76.6300; m.centerAlt = 500.0;
-        m.radiusXMeters = 2000.0;
-        m.radiusYMeters = 1000.0;
-        m.rotationDeg   = 15.0;
-        m.startAngleDeg = 0.0;
-        m.direction     = EllipseDirection::Clockwise;
-        m.periodSeconds = 120.0;
-        m.altitudeMode  = AltitudeMode::Constant;
-        m.description   = "Orbit B";
+        // Two foci ~3 km apart on an E-W axis → eccentric ellipse.
+        m.f1Lat = 39.0550; m.f1Lon = -76.6300; m.f1Alt = 500.0;
+        m.f2Lat = 39.0550; m.f2Lon = -76.6125; m.f2Alt = 500.0;
+        m.lengthMeters    = 4000.0;   // 2a = 4 km > 2c (~3 km)
+        m.startBearingDeg = 90.0;
+        m.speedMps        = 100.0;
+        m.direction       = EllipseDirection::Clockwise;
+        m.description     = "Orbit B";
         e.motionSegments.push_back(m);
     }
     {
@@ -237,16 +236,16 @@ int main()
                 EXPECT_NEAR(b.endLon,   a.endLon,   1e-9, (T + ".endLon").c_str());
                 EXPECT_NEAR(b.endAlt,   a.endAlt,   1e-9, (T + ".endAlt").c_str());
 
-                EXPECT_NEAR(b.centerLat,     a.centerLat,     1e-9, (T + ".centerLat").c_str());
-                EXPECT_NEAR(b.centerLon,     a.centerLon,     1e-9, (T + ".centerLon").c_str());
-                EXPECT_NEAR(b.centerAlt,     a.centerAlt,     1e-9, (T + ".centerAlt").c_str());
-                EXPECT_NEAR(b.radiusXMeters, a.radiusXMeters, 1e-9, (T + ".radiusX").c_str());
-                EXPECT_NEAR(b.radiusYMeters, a.radiusYMeters, 1e-9, (T + ".radiusY").c_str());
-                EXPECT_NEAR(b.rotationDeg,   a.rotationDeg,   1e-9, (T + ".rotationDeg").c_str());
-                EXPECT_NEAR(b.startAngleDeg, a.startAngleDeg, 1e-9, (T + ".startAngleDeg").c_str());
+                EXPECT_NEAR(b.f1Lat,         a.f1Lat,         1e-9, (T + ".f1Lat").c_str());
+                EXPECT_NEAR(b.f1Lon,         a.f1Lon,         1e-9, (T + ".f1Lon").c_str());
+                EXPECT_NEAR(b.f1Alt,         a.f1Alt,         1e-9, (T + ".f1Alt").c_str());
+                EXPECT_NEAR(b.f2Lat,         a.f2Lat,         1e-9, (T + ".f2Lat").c_str());
+                EXPECT_NEAR(b.f2Lon,         a.f2Lon,         1e-9, (T + ".f2Lon").c_str());
+                EXPECT_NEAR(b.f2Alt,         a.f2Alt,         1e-9, (T + ".f2Alt").c_str());
+                EXPECT_NEAR(b.lengthMeters,  a.lengthMeters,  1e-9, (T + ".length").c_str());
+                EXPECT_NEAR(b.startBearingDeg, a.startBearingDeg, 1e-9, (T + ".bearing").c_str());
+                EXPECT_NEAR(b.speedMps,      a.speedMps,      1e-9, (T + ".speed").c_str());
                 EXPECT_EQ((int)b.direction,  (int)a.direction,     (T + ".direction").c_str());
-                EXPECT_NEAR(b.periodSeconds, a.periodSeconds, 1e-9, (T + ".period").c_str());
-                EXPECT_EQ((int)b.altitudeMode, (int)a.altitudeMode, (T + ".altitudeMode").c_str());
 
                 EXPECT_EQ(b.speedMode,   a.speedMode,   (T + ".speedMode").c_str());
                 EXPECT_EQ(b.headingMode, a.headingMode, (T + ".headingMode").c_str());

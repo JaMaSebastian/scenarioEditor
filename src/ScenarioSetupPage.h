@@ -21,8 +21,19 @@ public:
     // Scenario (called by File > Open).
     void ReadFrom(const Scenario& scenario);
 
+    // Pointer to the live scenario; required so the Default Coord Mode
+    // combo can commit IMMEDIATELY (other pages read scenario->defaultCoordMode
+    // when adding new entities / segments and need the latest value).
+    void SetScenario(Scenario* scenario) { m_scenario = scenario; }
+
 protected:
     BOOL OnInitDialog() override;
     void GetFieldHelpTable(const FFieldHelp*& outArray, size_t& outCount) const override;
+    afx_msg void OnDefaultCoordModeChanged();
+    afx_msg void OnPhysModeRadio();
+    afx_msg void OnSpeedMultiplierToggle();
     DECLARE_MESSAGE_MAP()
+
+private:
+    Scenario* m_scenario = nullptr;
 };

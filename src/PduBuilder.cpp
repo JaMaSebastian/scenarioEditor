@@ -2,6 +2,8 @@
 #include "PduBuilder.h"
 #include "Scenario.h"
 
+#include <cmath>
+
 #include <dis7/EntityID.h>
 #include <dis7/EntityType.h>
 #include <dis7/EntityMarking.h>
@@ -50,10 +52,30 @@ DIS::EntityStatePdu PduBuilder::BuildEntityStatePdu(const Scenario& scenario, co
     location.setZ(entity.ecefZ);
     pdu.setEntityLocation(location);
 
+    // Linear velocity in ECEF (m/s). The entity's body-forward vector in
+    // ECEF is the first column of R_body_to_ECEF; for ZYX Tait-Bryan with
+    // yaw=psi / pitch=theta / roll=phi that column is
+    //   (cos(theta)*cos(psi), cos(theta)*sin(psi), -sin(theta)).
+    // Multiply by scalar initialSpeedMps to get the velocity vector. The
+    // motion sampler may overwrite the entity's position over time but
+    // doesn't yet emit a derived velocity, so this remains the t=0 value
+    // throughout the scenario (a downstream slice will compute velocity
+    // from sampled-pose derivatives).
     DIS::Vector3Float velocity;
-    velocity.setX(0.0f);
-    velocity.setY(0.0f);
-    velocity.setZ(0.0f);
+    if (entity.initialSpeedMps != 0.0)
+    {
+        const double cPsi   = std::cos(entity.psi);
+        const double sPsi   = std::sin(entity.psi);
+        const double cTheta = std::cos(entity.theta);
+        const double sTheta = std::sin(entity.theta);
+        velocity.setX(static_cast<float>(entity.initialSpeedMps * cTheta * cPsi));
+        velocity.setY(static_cast<float>(entity.initialSpeedMps * cTheta * sPsi));
+        velocity.setZ(static_cast<float>(entity.initialSpeedMps * (-sTheta)));
+    }
+    else
+    {
+        velocity.setX(0.0f); velocity.setY(0.0f); velocity.setZ(0.0f);
+    }
     pdu.setEntityLinearVelocity(velocity);
 
     DIS::EulerAngles orientation;

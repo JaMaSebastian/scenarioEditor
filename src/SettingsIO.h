@@ -11,8 +11,8 @@ struct Settings
     // [Window]
     int  windowX        = -1;   // -1 = "leave to OS / use default"
     int  windowY        = -1;
-    int  windowWidth    = 2200;
-    int  windowHeight   = 1500;
+    int  windowWidth    = 2800;
+    int  windowHeight   = 1850;
     bool windowMaximized = false;
 
     // [Paths]

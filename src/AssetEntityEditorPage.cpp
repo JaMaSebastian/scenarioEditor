@@ -1,10 +1,16 @@
 #include "pch.h"
 #include "AssetEntityEditorPage.h"
+#include "CatalogEditorDialog.h"
 #include "CoordTransforms.h"
 #include "EntityTypeCatalog.h"
+#include "FormatUtil.h"
 #include "Scenario.h"
+#include "ScenarioEditor.h"   // theApp
 #include "ScenarioWorker.h"   // WM_APP_MARK_DIRTY
+#include "Validator.h"
 #include "../log.h"
+
+#include <cmath>
 
 namespace
 {
@@ -14,8 +20,12 @@ namespace
     void NotifyDirty(CWnd* page)
     {
         if (!page) return;
+        // SendMessage (synchronous) — see MotionPathEditorPage.cpp's
+        // matching comment. PostMessage would defer the MarkDirty call
+        // past the m_suppressDirty window in RefreshUiFromScenario, so
+        // every load would flip the dialog to "modified".
         if (CWnd* top = page->GetTopLevelParent())
-            top->PostMessage(WM_APP_MARK_DIRTY, 0, 0);
+            top->SendMessage(WM_APP_MARK_DIRTY, 0, 0);
     }
 }
 
@@ -50,15 +60,20 @@ namespace
         { IDC_EDIT_ENTITY_ID,           _T("DIS Entity ID (must be unique within Site+App). Range 1-65534."), true },
 
         { IDC_COMBO_ENTITY_COORD_MODE,  _T("Coordinate system for this entity's initial position."), true },
-        { IDC_EDIT_ENTITY_LAT,          _T("Initial latitude in decimal degrees (used when coord mode = Lat/Lon/Alt)."), false },
-        { IDC_EDIT_ENTITY_LON,          _T("Initial longitude in decimal degrees."), false },
-        { IDC_EDIT_ENTITY_ALT,          _T("Initial altitude in meters above MSL."), false },
-        { IDC_EDIT_ENTITY_LOCAL_X,      _T("Initial local X in meters (used when coord mode = Local)."), false },
-        { IDC_EDIT_ENTITY_LOCAL_Y,      _T("Initial local Y in meters."), false },
-        { IDC_EDIT_ENTITY_LOCAL_Z,      _T("Initial local Z in meters."), false },
-        { IDC_EDIT_ENTITY_ECEF_X,       _T("Initial ECEF X in meters (used when coord mode = ECEF)."), false },
-        { IDC_EDIT_ENTITY_ECEF_Y,       _T("Initial ECEF Y in meters."), false },
-        { IDC_EDIT_ENTITY_ECEF_Z,       _T("Initial ECEF Z in meters."), false },
+        { IDC_EDIT_ENTITY_LAT,          _T("Initial position component A — meaning depends on Initial Coord Mode: Lat (deg) / Local X (m) / ECEF X (m)."), false },
+        { IDC_EDIT_ENTITY_LON,          _T("Initial position component B — Lon (deg) / Local Y (m) / ECEF Y (m)."), false },
+        { IDC_EDIT_ENTITY_ALT,          _T("Initial position component C — Alt (m above MSL) / Local Z (m) / ECEF Z (m)."), false },
+        // Position edits use a single dynamic row; help text below covers
+        // all three modes via IDC_EDIT_ENTITY_LAT/LON/ALT (the labels
+        // relabel at runtime based on Initial Coord Mode).
+
+        // Physical Model override radios + per-entity speed multiplier.
+        { IDC_RADIO_PHYS_INHERIT,    _T("Inherit the scenario's Physical Model Default (Scenario Setup tab)."), false },
+        { IDC_RADIO_PHYS_E_IGNORE,   _T("Skip envelope checks for this entity, even when the scenario default says Validate/Limit."), false },
+        { IDC_RADIO_PHYS_E_VALIDATE, _T("Validator warns when this entity's motion exceeds its airframe envelope."), false },
+        { IDC_RADIO_PHYS_E_LIMIT,    _T("Sampler clamps this entity's motion to airframe envelope at runtime (Phase 2)."), false },
+        { IDC_CHK_E_SPEED_MULT,      _T("Override the scenario-wide speed multiplier for this entity only."), false },
+        { IDC_EDIT_E_SPEED_MULT,     _T("Per-entity speed multiplier (active when the override checkbox is on)."), false },
         { IDC_EDIT_ENTITY_HEADING,      _T("Initial heading in degrees (0 = north, clockwise)."), false },
         { IDC_EDIT_ENTITY_PITCH,        _T("Initial pitch in degrees."), false },
         { IDC_EDIT_ENTITY_ROLL,         _T("Initial roll in degrees."), false },
@@ -120,10 +135,22 @@ BEGIN_MESSAGE_MAP(CAssetEntityEditorPage, CHelpAwarePage)
     ON_CBN_SELCHANGE(IDC_COMBO_ENTITY_KIND,     &CAssetEntityEditorPage::OnKindChanged)
     ON_CBN_SELCHANGE(IDC_COMBO_ENTITY_DOMAIN,   &CAssetEntityEditorPage::OnDomainChanged)
     ON_CBN_SELCHANGE(IDC_COMBO_ENTITY_CATEGORY, &CAssetEntityEditorPage::OnCategoryChanged)
+    ON_CBN_SELCHANGE(IDC_COMBO_ENTITY_COORD_MODE,
+                                                &CAssetEntityEditorPage::OnEntityCoordModeChanged)
+    ON_BN_CLICKED   (IDC_RADIO_PHYS_INHERIT,    &CAssetEntityEditorPage::OnEntityPhysOverrideRadio)
+    ON_BN_CLICKED   (IDC_RADIO_PHYS_E_IGNORE,   &CAssetEntityEditorPage::OnEntityPhysOverrideRadio)
+    ON_BN_CLICKED   (IDC_RADIO_PHYS_E_VALIDATE, &CAssetEntityEditorPage::OnEntityPhysOverrideRadio)
+    ON_BN_CLICKED   (IDC_RADIO_PHYS_E_LIMIT,    &CAssetEntityEditorPage::OnEntityPhysOverrideRadio)
+    ON_BN_CLICKED   (IDC_CHK_E_SPEED_MULT,      &CAssetEntityEditorPage::OnEntitySpeedMultToggle)
+    ON_EN_CHANGE    (IDC_EDIT_ENTITY_NAME,      &CAssetEntityEditorPage::OnEntityNameChanged)
+    ON_EN_KILLFOCUS (IDC_EDIT_ENTITY_INITIAL_SPEED,
+                                                &CAssetEntityEditorPage::OnInitialSpeedKillFocus)
+    ON_BN_CLICKED   (IDC_BTN_EDIT_CATALOG,      &CAssetEntityEditorPage::OnEditCatalog)
     ON_BN_CLICKED   (IDC_BTN_ADD_ASSET,         &CAssetEntityEditorPage::OnAddAsset)
     ON_BN_CLICKED   (IDC_BTN_DELETE_ASSET,      &CAssetEntityEditorPage::OnDeleteAsset)
     ON_BN_CLICKED   (IDC_BTN_DUPLICATE_ASSET,   &CAssetEntityEditorPage::OnDuplicateAsset)
     ON_BN_CLICKED   (IDC_BTN_MOVE_ASSET,        &CAssetEntityEditorPage::OnMoveAsset)
+    ON_BN_CLICKED   (IDC_BTN_VALIDATE_ASSET,    &CAssetEntityEditorPage::OnValidateAsset)
     ON_NOTIFY       (TVN_SELCHANGED, IDC_TREE_ASSETS,
                                                 &CAssetEntityEditorPage::OnAssetTreeSelChanged)
 END_MESSAGE_MAP()
@@ -202,6 +229,8 @@ void CAssetEntityEditorPage::OnAssetTreeSelChanged(NMHDR* pNMHDR, LRESULT* pResu
         CommitToActiveEntity();
     m_selectedEntityIdx = next;
     LoadActiveEntity();
+    // Refresh tree labels so the just-committed entity's rename is visible.
+    RefreshAssetTree();
 }
 
 void CAssetEntityEditorPage::OnAddAsset()
@@ -215,6 +244,10 @@ void CAssetEntityEditorPage::OnAddAsset()
         if (e.entityId >= next) next = static_cast<uint16_t>(e.entityId + 1);
     fresh.entityId = next;
     fresh.name     = "New Entity";
+    // New entities inherit the scenario's default coord mode so the
+    // Asset page comes up authoring in whatever frame the user picked on
+    // Scenario Setup (typically Local X/Y/Z).
+    fresh.initialCoordMode = m_scenario->defaultCoordMode;
     m_scenario->entities.push_back(std::move(fresh));
     m_selectedEntityIdx = static_cast<int>(m_scenario->entities.size()) - 1;
     RefreshAssetTree();
@@ -275,6 +308,64 @@ void CAssetEntityEditorPage::OnMoveAsset()
     NotifyDirty(this);
 }
 
+void CAssetEntityEditorPage::OnValidateAsset()
+{
+    if (!m_scenario) return;
+    if (m_selectedEntityIdx < 0 ||
+        m_selectedEntityIdx >= static_cast<int>(m_scenario->entities.size()))
+    {
+        AfxMessageBox(_T("No asset is selected."), MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    // Commit pending edits into the model so validation sees the latest UI.
+    CommitToActiveEntity();
+
+    // Run the full validator and filter to issues that mention this entity.
+    const Entity& e = m_scenario->entities[m_selectedEntityIdx];
+    char prefix[64];
+    std::snprintf(prefix, sizeof(prefix), "Entity %u ",
+                  static_cast<unsigned>(e.entityId));
+
+    const Validator::Report rep = (m_catalog != nullptr)
+        ? Validator::Validate(*m_scenario, *m_catalog)
+        : Validator::Validate(*m_scenario);
+    int err = 0, warn = 0, info = 0;
+    CString body;
+    auto sevLabel = [](Validator::Severity s) -> const TCHAR* {
+        switch (s) {
+            case Validator::Severity::Error:   return _T("ERROR");
+            case Validator::Severity::Warning: return _T("WARN ");
+            default:                           return _T("INFO ");
+        }
+    };
+    for (const auto& i : rep.issues)
+    {
+        // Match either an entity-level subject ("Entity N (name)") or a
+        // motion-level subject ("Entity N / Motion M") belonging to this id.
+        if (i.subject.rfind(prefix, 0) != 0) continue;
+        switch (i.severity) {
+            case Validator::Severity::Error:   ++err;  break;
+            case Validator::Severity::Warning: ++warn; break;
+            case Validator::Severity::Info:    ++info; break;
+        }
+        CString line;
+        line.Format(_T("[%s] %s — %s\n"),
+                    sevLabel(i.severity),
+                    CString(CA2T(i.subject.c_str())).GetString(),
+                    CString(CA2T(i.message.c_str())).GetString());
+        body += line;
+    }
+
+    CString header;
+    header.Format(_T("Entity %u  —  Errors: %d   Warnings: %d   Info: %d\n\n"),
+                  static_cast<unsigned>(e.entityId), err, warn, info);
+    if (body.IsEmpty()) body = _T("(No issues found.)");
+
+    AfxMessageBox(header + body,
+                  MB_OK | (err > 0 ? MB_ICONWARNING : MB_ICONINFORMATION));
+}
+
 BOOL CAssetEntityEditorPage::OnInitDialog()
 {
     CHelpAwarePage::OnInitDialog();
@@ -293,7 +384,7 @@ BOOL CAssetEntityEditorPage::OnInitDialog()
         cb->AddString(_T("Lat/Lon/Alt"));
         cb->AddString(_T("Local X/Y/Z"));
         cb->AddString(_T("ECEF"));
-        cb->SetCurSel(0); // Lat/Lon/Alt — most user-friendly default per §15
+        cb->SetCurSel(1); // Local X/Y/Z — matches Entity::initialCoordMode default
     }
 
     // Seed the wire-relevant fields so the first PDU is well-formed even if
@@ -308,21 +399,15 @@ BOOL CAssetEntityEditorPage::OnInitDialog()
     // Defaults: San Francisco at sea level, matching the scenario origin
     // seeded by ScenarioSetupPage. With origin == entity position, the
     // Local-ENU offsets are (0, 0, 0).
+    // Seed the three position edits with the default-mode Lat/Lon/Alt
+    // values; ReadFrom will overwrite once an entity is loaded, but a
+    // fresh dialog (before any selection) shows sensible numbers.
     SetDlgItemText(IDC_EDIT_ENTITY_LAT, _T("37.7749"));
     SetDlgItemText(IDC_EDIT_ENTITY_LON, _T("-122.4194"));
     SetDlgItemText(IDC_EDIT_ENTITY_ALT, _T("0.0"));
     SetDlgItemText(IDC_EDIT_ENTITY_HEADING, _T("0.0"));
     SetDlgItemText(IDC_EDIT_ENTITY_PITCH,   _T("0.0"));
     SetDlgItemText(IDC_EDIT_ENTITY_ROLL,    _T("0.0"));
-    SetDlgItemText(IDC_EDIT_ENTITY_LOCAL_X, _T("0.0"));
-    SetDlgItemText(IDC_EDIT_ENTITY_LOCAL_Y, _T("0.0"));
-    SetDlgItemText(IDC_EDIT_ENTITY_LOCAL_Z, _T("0.0"));
-    // ECEF echo of the LLA default — populated so the ECEF combo mode is
-    // also pre-seeded with something sensible, even though the canonical
-    // value gets overwritten by WriteTo() unless the user picks ECEF mode.
-    SetDlgItemText(IDC_EDIT_ENTITY_ECEF_X, _T("-2706174.85"));
-    SetDlgItemText(IDC_EDIT_ENTITY_ECEF_Y, _T("-4261059.49"));
-    SetDlgItemText(IDC_EDIT_ENTITY_ECEF_Z, _T("3885725.49"));
 
     // Populate catalog-backed combos. Defaults pre-select Platform (1) /
     // Air (2) / USA (225) / Category 1 / Subcategory 1, matching the
@@ -421,6 +506,192 @@ void CAssetEntityEditorPage::OnCategoryChanged()
     RepopulateSubcategories();
 }
 
+namespace { double ReadDoubleText(const CWnd&, UINT, double); }   // defined below
+
+void CAssetEntityEditorPage::OnEditCatalog()
+{
+    // Edit a deep copy of the live catalog; on Save the dialog rewrites
+    // the INI and swaps the live instance. Cascading combos refresh
+    // here so any add/delete/rename is visible immediately.
+    CCatalogEditorDialog dlg(&theApp.MutableCatalog(),
+                             theApp.CatalogPath(),
+                             this);
+    dlg.DoModal();
+
+    // The dialog commits on every Save (not just Save&Close), and we
+    // can't tell from IDOK/IDCANCEL whether a save happened — just
+    // always refresh.
+    if (m_catalog)
+    {
+        FillCombo((CComboBox*)GetDlgItem(IDC_COMBO_ENTITY_KIND),
+                  m_catalog->Kinds(),
+                  static_cast<uint16_t>(ComboNumericValue(IDC_COMBO_ENTITY_KIND, 1) & 0xFF));
+        RepopulateDomains();
+        FillCombo((CComboBox*)GetDlgItem(IDC_COMBO_ENTITY_COUNTRY),
+                  m_catalog->Countries(),
+                  static_cast<uint16_t>(ComboNumericValue(IDC_COMBO_ENTITY_COUNTRY, 225)));
+        RepopulateCategories();
+        RepopulateSubcategories();
+    }
+}
+
+void CAssetEntityEditorPage::OnInitialSpeedKillFocus()
+{
+    CString t;
+    GetDlgItemText(IDC_EDIT_ENTITY_INITIAL_SPEED, t);
+    if (t.IsEmpty()) return;
+    const double mps = ParseSpeedMps(t);
+    if (!std::isnan(mps))
+        SetDlgItemText(IDC_EDIT_ENTITY_INITIAL_SPEED, FormatDoubleTrim(mps));
+}
+
+void CAssetEntityEditorPage::OnEntityNameChanged()
+{
+    if (m_suppressTreeNotify) return;
+    if (!m_scenario) return;
+    if (m_selectedEntityIdx < 0 ||
+        m_selectedEntityIdx >= (int)m_scenario->entities.size())
+        return;
+
+    // Live-update the data model AND the tree label so the user sees the
+    // rename happen as they type. EN_CHANGE fires per-keystroke; we keep
+    // the work cheap (CTreeCtrl::SetItemText on one item, no rebuild).
+    Entity& e = m_scenario->entities[m_selectedEntityIdx];
+    CString t;
+    GetDlgItemText(IDC_EDIT_ENTITY_NAME, t);
+    CT2A a(t); e.name = a.m_psz ? a.m_psz : "";
+
+    if (CTreeCtrl* tree = (CTreeCtrl*)GetDlgItem(IDC_TREE_ASSETS))
+    {
+        HTREEITEM hit = tree->GetSelectedItem();
+        if (hit)
+        {
+            CString label;
+            if (e.name.empty())
+                label.Format(_T("Entity %u"), static_cast<unsigned>(e.entityId));
+            else
+                label.Format(_T("%S  (id=%u)"), e.name.c_str(),
+                             static_cast<unsigned>(e.entityId));
+            tree->SetItemText(hit, label);
+        }
+    }
+    NotifyDirty(this);
+}
+
+void CAssetEntityEditorPage::OnEntityPhysOverrideRadio()
+{
+    if (!m_scenario) return;
+    if (m_selectedEntityIdx < 0 ||
+        m_selectedEntityIdx >= (int)m_scenario->entities.size())
+        return;
+    Entity& entity = m_scenario->entities[m_selectedEntityIdx];
+
+    if (IsDlgButtonChecked(IDC_RADIO_PHYS_E_VALIDATE) == BST_CHECKED)
+        entity.physicalModelOverride = PhysicalModelOverride::Validate;
+    else if (IsDlgButtonChecked(IDC_RADIO_PHYS_E_LIMIT) == BST_CHECKED)
+        entity.physicalModelOverride = PhysicalModelOverride::Limit;
+    else if (IsDlgButtonChecked(IDC_RADIO_PHYS_E_IGNORE) == BST_CHECKED)
+        entity.physicalModelOverride = PhysicalModelOverride::Ignore;
+    else
+        entity.physicalModelOverride = PhysicalModelOverride::Inherit;
+    NotifyDirty(this);
+}
+
+void CAssetEntityEditorPage::OnEntitySpeedMultToggle()
+{
+    if (!m_scenario) return;
+    if (m_selectedEntityIdx < 0 ||
+        m_selectedEntityIdx >= (int)m_scenario->entities.size())
+        return;
+    Entity& entity = m_scenario->entities[m_selectedEntityIdx];
+    entity.overrideSpeedMultiplier =
+        IsDlgButtonChecked(IDC_CHK_E_SPEED_MULT) == BST_CHECKED;
+    NotifyDirty(this);
+}
+
+void CAssetEntityEditorPage::OnEntityCoordModeChanged()
+{
+    // The user just flipped the Initial Coord Mode combo. Pivot the
+    // currently-displayed position triple through ECEF so the new-mode
+    // numbers describe the same physical point.
+    if (!m_scenario) return;
+    if (m_selectedEntityIdx < 0 ||
+        m_selectedEntityIdx >= (int)m_scenario->entities.size())
+        return;
+    Entity& entity = m_scenario->entities[m_selectedEntityIdx];
+
+    const CoordMode oldMode = entity.initialCoordMode;
+
+    CoordMode newMode = oldMode;
+    if (const CComboBox* cb = (const CComboBox*)GetDlgItem(IDC_COMBO_ENTITY_COORD_MODE))
+    {
+        switch (cb->GetCurSel()) {
+            case 0: newMode = CoordMode::LatLonAlt; break;
+            case 1: newMode = CoordMode::Local;     break;
+            case 2: newMode = CoordMode::ECEF;      break;
+        }
+    }
+    if (newMode == oldMode) {
+        // Edge case: combo says same mode — just relabel for safety.
+        RelabelPositionRow(newMode);
+        WriteActivePositionFields(entity, newMode);
+        return;
+    }
+
+    // Step 1: commit what the user sees into the OLD-mode fields so we
+    // have a fixed point in space.
+    const double posA = ReadDoubleText(*this, IDC_EDIT_ENTITY_LAT, 0.0);
+    const double posB = ReadDoubleText(*this, IDC_EDIT_ENTITY_LON, 0.0);
+    const double posC = ReadDoubleText(*this, IDC_EDIT_ENTITY_ALT, 0.0);
+    switch (oldMode) {
+        case CoordMode::LatLonAlt: entity.lat = posA; entity.lon = posB; entity.alt = posC; break;
+        case CoordMode::Local:     entity.localX = posA; entity.localY = posB; entity.localZ = posC; break;
+        case CoordMode::ECEF:      entity.ecefX = posA; entity.ecefY = posB; entity.ecefZ = posC; break;
+    }
+
+    // Step 2: convert OLD-mode → ECEF.
+    double ecefX = 0, ecefY = 0, ecefZ = 0;
+    switch (oldMode) {
+        case CoordMode::LatLonAlt:
+            CoordTransforms::GeodeticToEcefDeg(entity.lat, entity.lon, entity.alt,
+                                               ecefX, ecefY, ecefZ);
+            break;
+        case CoordMode::Local:
+            CoordTransforms::LocalEnuToEcefDeg(entity.localX, entity.localY, entity.localZ,
+                                               m_scenario->originLatDeg,
+                                               m_scenario->originLonDeg,
+                                               m_scenario->originAltM,
+                                               ecefX, ecefY, ecefZ);
+            break;
+        case CoordMode::ECEF:
+            ecefX = entity.ecefX; ecefY = entity.ecefY; ecefZ = entity.ecefZ;
+            break;
+    }
+    // Step 3: ECEF → NEW mode (and persist ECEF too so the wire is correct).
+    entity.ecefX = ecefX; entity.ecefY = ecefY; entity.ecefZ = ecefZ;
+    switch (newMode) {
+        case CoordMode::LatLonAlt:
+            CoordTransforms::EcefToGeodeticDeg(ecefX, ecefY, ecefZ,
+                                               entity.lat, entity.lon, entity.alt);
+            break;
+        case CoordMode::Local:
+            CoordTransforms::EcefToLocalEnuDeg(ecefX, ecefY, ecefZ,
+                                               m_scenario->originLatDeg,
+                                               m_scenario->originLonDeg,
+                                               m_scenario->originAltM,
+                                               entity.localX, entity.localY, entity.localZ);
+            break;
+        case CoordMode::ECEF:
+            // already stored above
+            break;
+    }
+    entity.initialCoordMode = newMode;
+
+    RelabelPositionRow(newMode);
+    WriteActivePositionFields(entity, newMode);
+    NotifyDirty(this);
+}
+
 namespace
 {
     double ReadDoubleText(const CWnd& wnd, UINT id, double fallback)
@@ -471,18 +742,9 @@ void CAssetEntityEditorPage::WriteTo(Entity& entity,
     const UINT extra = GetDlgItemInt(IDC_EDIT_ENTITY_EXTRA, &ok, FALSE);
     if (ok) entity.extra    = static_cast<uint8_t>(extra & 0xFF);
 
-    // Read all three position frames as the user typed them. The active
-    // one (per Coord Mode combo) becomes the source of truth for ECEF.
-    entity.lat    = ReadDoubleText(*this, IDC_EDIT_ENTITY_LAT,    entity.lat);
-    entity.lon    = ReadDoubleText(*this, IDC_EDIT_ENTITY_LON,    entity.lon);
-    entity.alt    = ReadDoubleText(*this, IDC_EDIT_ENTITY_ALT,    entity.alt);
-    entity.localX = ReadDoubleText(*this, IDC_EDIT_ENTITY_LOCAL_X, entity.localX);
-    entity.localY = ReadDoubleText(*this, IDC_EDIT_ENTITY_LOCAL_Y, entity.localY);
-    entity.localZ = ReadDoubleText(*this, IDC_EDIT_ENTITY_LOCAL_Z, entity.localZ);
-    entity.ecefX  = ReadDoubleText(*this, IDC_EDIT_ENTITY_ECEF_X,  entity.ecefX);
-    entity.ecefY  = ReadDoubleText(*this, IDC_EDIT_ENTITY_ECEF_Y,  entity.ecefY);
-    entity.ecefZ  = ReadDoubleText(*this, IDC_EDIT_ENTITY_ECEF_Z,  entity.ecefZ);
-
+    // Read the three position edits — interpretation depends on the
+    // currently-selected Initial Coord Mode (combo is the single source of
+    // truth for which frame the edits represent).
     if (const CComboBox* cb = (const CComboBox*)GetDlgItem(IDC_COMBO_ENTITY_COORD_MODE))
     {
         const int idx = cb->GetCurSel();
@@ -490,23 +752,24 @@ void CAssetEntityEditorPage::WriteTo(Entity& entity,
         else if (idx == 1) entity.initialCoordMode = CoordMode::Local;
         else if (idx == 2) entity.initialCoordMode = CoordMode::ECEF;
     }
-
-    // Normalize to ECEF (§15.6 — wire frame). Whichever frame the user
-    // picked becomes authoritative; we overwrite entity.ecefX/Y/Z so the
-    // PduBuilder is unchanged.
+    const double posA = ReadDoubleText(*this, IDC_EDIT_ENTITY_LAT, 0.0);
+    const double posB = ReadDoubleText(*this, IDC_EDIT_ENTITY_LON, 0.0);
+    const double posC = ReadDoubleText(*this, IDC_EDIT_ENTITY_ALT, 0.0);
     switch (entity.initialCoordMode)
     {
         case CoordMode::LatLonAlt:
+            entity.lat = posA; entity.lon = posB; entity.alt = posC;
             CoordTransforms::GeodeticToEcefDeg(entity.lat, entity.lon, entity.alt,
                                                entity.ecefX, entity.ecefY, entity.ecefZ);
             break;
         case CoordMode::Local:
+            entity.localX = posA; entity.localY = posB; entity.localZ = posC;
             CoordTransforms::LocalEnuToEcefDeg(entity.localX, entity.localY, entity.localZ,
                                                originLatDeg, originLonDeg, originAltM,
                                                entity.ecefX, entity.ecefY, entity.ecefZ);
             break;
         case CoordMode::ECEF:
-            // entity.ecefX/Y/Z already read above; nothing to do.
+            entity.ecefX = posA; entity.ecefY = posB; entity.ecefZ = posC;
             break;
     }
 
@@ -535,6 +798,38 @@ void CAssetEntityEditorPage::WriteTo(Entity& entity,
         if (entity.marking.size() > 11)
             entity.marking.resize(11);
     }
+
+    // General-section fields that were decorative until now: Enabled
+    // checkbox, Name, Description, and Timing block (begin / end / rate).
+    entity.enabled = IsDlgButtonChecked(IDC_CHK_ENTITY_ENABLED) == BST_CHECKED;
+    {
+        CString t;
+        GetDlgItemText(IDC_EDIT_ENTITY_NAME, t);
+        CT2A a(t); entity.name = a.m_psz ? a.m_psz : "";
+    }
+    {
+        CString t;
+        GetDlgItemText(IDC_EDIT_ENTITY_DESCRIPTION, t);
+        CT2A a(t); entity.description = a.m_psz ? a.m_psz : "";
+    }
+    entity.beginSecond     = ReadDoubleText(*this, IDC_EDIT_ENTITY_BEGIN_TIME,    entity.beginSecond);
+    entity.endSecond       = ReadDoubleText(*this, IDC_EDIT_ENTITY_END_TIME,      entity.endSecond);
+    entity.updateRateHz    = ReadDoubleText(*this, IDC_EDIT_ENTITY_UPDATE_RATE,   entity.updateRateHz);
+    entity.initialSpeedMps = ReadDoubleText(*this, IDC_EDIT_ENTITY_INITIAL_SPEED, entity.initialSpeedMps);
+
+    // Physical Model override (radios) + speed-multiplier override.
+    if (IsDlgButtonChecked(IDC_RADIO_PHYS_E_VALIDATE) == BST_CHECKED)
+        entity.physicalModelOverride = PhysicalModelOverride::Validate;
+    else if (IsDlgButtonChecked(IDC_RADIO_PHYS_E_LIMIT) == BST_CHECKED)
+        entity.physicalModelOverride = PhysicalModelOverride::Limit;
+    else if (IsDlgButtonChecked(IDC_RADIO_PHYS_E_IGNORE) == BST_CHECKED)
+        entity.physicalModelOverride = PhysicalModelOverride::Ignore;
+    else
+        entity.physicalModelOverride = PhysicalModelOverride::Inherit;
+    entity.overrideSpeedMultiplier =
+        IsDlgButtonChecked(IDC_CHK_E_SPEED_MULT) == BST_CHECKED;
+    entity.speedMultiplier =
+        ReadDoubleText(*this, IDC_EDIT_E_SPEED_MULT, entity.speedMultiplier);
 }
 
 namespace
@@ -572,6 +867,16 @@ void CAssetEntityEditorPage::ReadFrom(const Entity& entity)
 
     SetDlgItemText(IDC_EDIT_ENTITY_MARKING, CA2T(entity.marking.c_str()));
 
+    // General section (Enabled / Name / Description) + Timing.
+    CheckDlgButton(IDC_CHK_ENTITY_ENABLED,
+                   entity.enabled ? BST_CHECKED : BST_UNCHECKED);
+    SetDlgItemText(IDC_EDIT_ENTITY_NAME,        CA2T(entity.name.c_str()));
+    SetDlgItemText(IDC_EDIT_ENTITY_DESCRIPTION, CA2T(entity.description.c_str()));
+    SetDlgItemText(IDC_EDIT_ENTITY_BEGIN_TIME,    FormatDoubleTrim(entity.beginSecond));
+    SetDlgItemText(IDC_EDIT_ENTITY_END_TIME,      FormatDoubleTrim(entity.endSecond));
+    SetDlgItemText(IDC_EDIT_ENTITY_UPDATE_RATE,   FormatDoubleTrim(entity.updateRateHz));
+    SetDlgItemText(IDC_EDIT_ENTITY_INITIAL_SPEED, FormatDoubleTrim(entity.initialSpeedMps));
+
     if (CComboBox* cb = (CComboBox*)GetDlgItem(IDC_COMBO_ENTITY_FORCE_ID))
         cb->SetCurSel(entity.forceId <= 3 ? entity.forceId : 0);
 
@@ -591,17 +896,6 @@ void CAssetEntityEditorPage::ReadFrom(const Entity& entity)
     if (CComboBox* cb = (CComboBox*)GetDlgItem(IDC_COMBO_ENTITY_SUBCATEGORY))
         SelectComboById(cb, entity.subcategory);
 
-    CString buf;
-    buf.Format(_T("%.6f"),  entity.lat);    SetDlgItemText(IDC_EDIT_ENTITY_LAT, buf);
-    buf.Format(_T("%.6f"),  entity.lon);    SetDlgItemText(IDC_EDIT_ENTITY_LON, buf);
-    buf.Format(_T("%.3f"),  entity.alt);    SetDlgItemText(IDC_EDIT_ENTITY_ALT, buf);
-    buf.Format(_T("%.3f"),  entity.localX); SetDlgItemText(IDC_EDIT_ENTITY_LOCAL_X, buf);
-    buf.Format(_T("%.3f"),  entity.localY); SetDlgItemText(IDC_EDIT_ENTITY_LOCAL_Y, buf);
-    buf.Format(_T("%.3f"),  entity.localZ); SetDlgItemText(IDC_EDIT_ENTITY_LOCAL_Z, buf);
-    buf.Format(_T("%.2f"),  entity.ecefX);  SetDlgItemText(IDC_EDIT_ENTITY_ECEF_X, buf);
-    buf.Format(_T("%.2f"),  entity.ecefY);  SetDlgItemText(IDC_EDIT_ENTITY_ECEF_Y, buf);
-    buf.Format(_T("%.2f"),  entity.ecefZ);  SetDlgItemText(IDC_EDIT_ENTITY_ECEF_Z, buf);
-
     if (CComboBox* cb = (CComboBox*)GetDlgItem(IDC_COMBO_ENTITY_COORD_MODE))
     {
         int idx = 0;
@@ -612,5 +906,45 @@ void CAssetEntityEditorPage::ReadFrom(const Entity& entity)
         }
         cb->SetCurSel(idx);
     }
+
+    RelabelPositionRow(entity.initialCoordMode);
+    WriteActivePositionFields(entity, entity.initialCoordMode);
+
+    // Physical model radios + speed-multiplier override.
+    CheckDlgButton(IDC_RADIO_PHYS_INHERIT,
+                   entity.physicalModelOverride == PhysicalModelOverride::Inherit  ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(IDC_RADIO_PHYS_E_IGNORE,
+                   entity.physicalModelOverride == PhysicalModelOverride::Ignore   ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(IDC_RADIO_PHYS_E_VALIDATE,
+                   entity.physicalModelOverride == PhysicalModelOverride::Validate ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(IDC_RADIO_PHYS_E_LIMIT,
+                   entity.physicalModelOverride == PhysicalModelOverride::Limit    ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(IDC_CHK_E_SPEED_MULT,
+                   entity.overrideSpeedMultiplier ? BST_CHECKED : BST_UNCHECKED);
+    SetDlgItemText(IDC_EDIT_E_SPEED_MULT, FormatDoubleTrim(entity.speedMultiplier));
+}
+
+void CAssetEntityEditorPage::RelabelPositionRow(CoordMode mode)
+{
+    const TCHAR* text = _T("Lat / Lon / Alt:");
+    switch (mode) {
+        case CoordMode::Local: text = _T("Local X / Y / Z (m):"); break;
+        case CoordMode::ECEF:  text = _T("ECEF X / Y / Z (m):");  break;
+        case CoordMode::LatLonAlt: default: break;
+    }
+    SetDlgItemText(IDC_LBL_ENTITY_POSITION, text);
+}
+
+void CAssetEntityEditorPage::WriteActivePositionFields(const Entity& entity, CoordMode mode)
+{
+    double a = 0.0, b = 0.0, c = 0.0;
+    switch (mode) {
+        case CoordMode::LatLonAlt: a = entity.lat;   b = entity.lon;   c = entity.alt;   break;
+        case CoordMode::Local:     a = entity.localX; b = entity.localY; c = entity.localZ; break;
+        case CoordMode::ECEF:      a = entity.ecefX; b = entity.ecefY; c = entity.ecefZ; break;
+    }
+    SetDlgItemText(IDC_EDIT_ENTITY_LAT, FormatDoubleTrim(a));
+    SetDlgItemText(IDC_EDIT_ENTITY_LON, FormatDoubleTrim(b));
+    SetDlgItemText(IDC_EDIT_ENTITY_ALT, FormatDoubleTrim(c));
 }
 

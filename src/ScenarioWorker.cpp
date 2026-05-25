@@ -238,6 +238,21 @@ void ScenarioWorker::RunGeneration()
             // far into the scenario" at each wall-clock tick.
             const double tSec = std::chrono::duration<double>(now - scenarioStart).count() * speed;
 
+            // Stop when the scenario duration is reached. The Output tab
+            // (and Preview) used to keep ticking past the authored
+            // duration; users expect the entity to stop exactly when the
+            // scenario time hits scn.durationSeconds. Loop-mode (when we
+            // add it) can reset scenarioStart at this point instead of
+            // breaking.
+            if (scn.durationSeconds > 0.0 && tSec >= scn.durationSeconds)
+            {
+                sprintf_s(szError, sizeof(szError),
+                          "ScenarioWorker: reached scenario duration (%.1fs); stopping",
+                          scn.durationSeconds);
+                LOG(szError);
+                break;
+            }
+
             // Fan out one PDU per enabled entity per tick.
             bool sendFailure = false;
             for (const Entity& entStatic : scn.entities)

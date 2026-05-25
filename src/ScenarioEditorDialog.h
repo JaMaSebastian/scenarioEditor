@@ -67,6 +67,7 @@ private:
     void LayoutChildren();
     void ShowPage(int index);
     void SeedStatusBar();
+    void ApplyStatusBarPaneWidths();
     void PropagateHelpToggle();
     void UpdateStatusPduCount();
     void RefreshUiFromScenario();

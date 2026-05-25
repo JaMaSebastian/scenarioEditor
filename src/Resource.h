@@ -21,6 +21,9 @@
 #define IDD_OUTPUT_PLAYBACK_PAGE        204
 #define AFX_IDC_PRINT_PAGENUM           204
 #define IDD_PREVIEW_PAGE                205
+#define IDD_CATALOG_EDITOR              210
+#define IDD_CATALOG_ADD                 211
+#define IDD_PROMPT_NAME                 212
 #define IDS_APP_TITLE                   300
 #define IDS_STATE_IDLE                  301
 #define IDS_TIME_DEFAULT                302
@@ -104,6 +107,11 @@
 #define IDC_EDIT_ENTITY_LAT             1222
 #define IDC_EDIT_ENTITY_LON             1223
 #define IDC_EDIT_ENTITY_ALT             1224
+// LEGACY: removed from IDD_ASSET_ENTITY_EDITOR_PAGE in the Initial-State
+// single-row refactor. The IDC_EDIT_ENTITY_LAT/LON/ALT controls are now
+// polymorphic and hold whichever frame matches IDC_COMBO_ENTITY_COORD_MODE.
+// IDs retained for reference / external test tooling that may still grep
+// for them.
 #define IDC_EDIT_ENTITY_LOCAL_X         1225
 #define IDC_EDIT_ENTITY_LOCAL_Y         1226
 #define IDC_EDIT_ENTITY_LOCAL_Z         1227
@@ -176,6 +184,113 @@
 #define IDC_CHK_PREVIEW_TRAILS          1510
 #define IDC_CHK_PREVIEW_PATHS           1511
 #define IDC_CHK_PREVIEW_ORIENTATION     1512
+
+// Motion Path Editor — Ellipse fields (two-foci + length + speed +
+// start-bearing form).
+#define IDC_GROUP_ELLIPSE_PARAMS        1530
+#define IDC_LBL_F1                      1531
+#define IDC_LBL_F2                      1532
+#define IDC_LBL_LEN                     1533
+#define IDC_LBL_BRG                     1534
+#define IDC_LBL_SPD                     1535
+#define IDC_LBL_DIR                     1536
+#define IDC_EDIT_F1_A                   1540
+#define IDC_EDIT_F1_B                   1541
+#define IDC_EDIT_F1_C                   1542
+#define IDC_EDIT_F2_A                   1543
+#define IDC_EDIT_F2_B                   1544
+#define IDC_EDIT_F2_C                   1545
+#define IDC_EDIT_LEN                    1546
+#define IDC_EDIT_BEARING                1547
+#define IDC_EDIT_SPEED                  1548
+#define IDC_COMBO_DIR                   1549
+
+// Asset/Entity Editor — single dynamic label for the position triple.
+// The text switches between "Lat / Lon / Alt:" / "Local X / Y / Z (m):"
+// / "ECEF X / Y / Z:" based on the Initial Coord Mode combo.
+#define IDC_LBL_ENTITY_POSITION         1550
+
+// Scenario Setup — physical model defaults (Phase 1).
+#define IDC_GROUP_PHYSMODEL             1560
+#define IDC_RADIO_PHYS_IGNORE           1561
+#define IDC_RADIO_PHYS_VALIDATE         1562
+#define IDC_RADIO_PHYS_LIMIT            1563
+#define IDC_CHK_SPEED_MULT              1564
+#define IDC_EDIT_SPEED_MULT             1565
+
+// Asset/Entity Editor — per-entity physical model override (Phase 1).
+#define IDC_GROUP_PHYSMODEL_ENTITY      1570
+#define IDC_RADIO_PHYS_INHERIT          1571
+#define IDC_RADIO_PHYS_E_IGNORE         1572
+#define IDC_RADIO_PHYS_E_VALIDATE       1573
+#define IDC_RADIO_PHYS_E_LIMIT          1574
+#define IDC_CHK_E_SPEED_MULT            1575
+#define IDC_EDIT_E_SPEED_MULT           1576
+
+// Motion Path Editor — Line / Stationary / StopHold subfields.
+// Visible when the segment Type is Line (both Start and End rows) or
+// Stationary / StopHold (Start row only). Labels relabel based on the
+// segment's CoordMode, same pattern as the Ellipse Center fields.
+#define IDC_GROUP_LINE_PARAMS           1580
+#define IDC_LBL_LINE_START_POS          1581
+#define IDC_EDIT_LINE_START_A           1582
+#define IDC_EDIT_LINE_START_B           1583
+#define IDC_EDIT_LINE_START_C           1584
+#define IDC_EDIT_LINE_START_H           1585
+#define IDC_EDIT_LINE_START_P           1586
+#define IDC_EDIT_LINE_START_R           1587
+#define IDC_LBL_LINE_END_POS            1588
+#define IDC_EDIT_LINE_END_A             1589
+#define IDC_EDIT_LINE_END_B             1590
+#define IDC_EDIT_LINE_END_C             1591
+#define IDC_EDIT_LINE_END_H             1592
+#define IDC_EDIT_LINE_END_P             1593
+#define IDC_EDIT_LINE_END_R             1594
+
+// Per-type group static-label IDs (so SetTypeSpecificVisibility can hide
+// them when the corresponding group isn't active). Plain IDC_STATIC
+// labels share id -1 and can't be addressed individually.
+#define IDC_LBL_ELLIPSE_HINT            1617
+#define IDC_LBL_LINE_START_H_TAG        1620
+#define IDC_LBL_LINE_START_P_TAG        1621
+#define IDC_LBL_LINE_START_R_TAG        1622
+#define IDC_LBL_LINE_END_H_TAG          1623
+#define IDC_LBL_LINE_END_P_TAG          1624
+#define IDC_LBL_LINE_END_R_TAG          1625
+#define IDC_LBL_LINE_HINT               1626
+#define IDC_LBL_LINE_SPEED              1627
+#define IDC_EDIT_LINE_SPEED             1628
+
+// Catalog Editor (IDD_CATALOG_EDITOR) — wireframe pass IDs.
+#define IDC_BTN_EDIT_CATALOG            1800
+#define IDC_TREE_CATALOG                1801
+#define IDC_LBL_CATALOG_SELECTION       1802
+#define IDC_LBL_CATALOG_ID              1803
+#define IDC_EDIT_CATALOG_ID             1804
+#define IDC_LBL_CATALOG_NAME            1805
+#define IDC_EDIT_CATALOG_NAME           1806
+#define IDC_LBL_CATALOG_TYPE            1807
+// Unified Add (1810) replaces the per-type buttons. 1811..1814 retired.
+#define IDC_BTN_ADD_NODE                1810
+#define IDC_BTN_DELETE_NODE             1815
+#define IDC_BTN_SAVE_CATALOG            1816
+#define IDC_BTN_SAVE_CLOSE_CATALOG      1817
+// Attributes grid + buttons (replaces the 24 fixed envelope edits).
+#define IDC_LIST_ATTRIBUTES             1820
+#define IDC_BTN_ADD_ATTRIBUTE           1821
+#define IDC_BTN_DELETE_ATTRIBUTE        1822
+#define IDC_LBL_CATALOG_HINT            1823
+
+// Secondary "Add Catalog Node" dialog (IDD_CATALOG_ADD).
+#define IDC_COMBO_ADD_TYPE              1860
+#define IDC_LBL_ADD_ID                  1861
+#define IDC_EDIT_ADD_ID                 1862
+#define IDC_LBL_ADD_NAME                1863
+#define IDC_EDIT_ADD_NAME               1864
+#define IDC_LBL_ADD_BREADCRUMB          1865
+#define IDC_LBL_PROMPT                  1866
+#define IDC_EDIT_PROMPT                 1867
+
 #define AFX_IDC_TAB_CONTROL             0x3020
 #define ID_APPLY_NOW                    0x3021
 #define ID_WIZBACK                      0x3023

@@ -2,6 +2,7 @@
 #include "ScenarioEditor.h"
 #include "ScenarioEditorDialog.h"
 #include "Resource.h"
+#include "Direct2DContext.h"
 #include "../log.h"
 
 #include <string>
@@ -55,7 +56,8 @@ BOOL CScenarioEditorApp::InitInstance()
     if (slash != std::wstring::npos)
         exeDir.resize(slash + 1);
 
-    m_catalog.LoadFromIni(exeDir + L"EntityTypeCatalog.ini");
+    m_catalogPath = exeDir + L"EntityTypeCatalog.ini";
+    m_catalog.LoadFromIni(m_catalogPath);
 
     m_settingsPath = exeDir + L"settings.ini";
     SettingsIO::Load(m_settings, m_settingsPath);
@@ -63,6 +65,8 @@ BOOL CScenarioEditorApp::InitInstance()
     CScenarioEditorDialog dlg;
     m_pMainWnd = &dlg;
     dlg.DoModal();
+
+    Direct2DContext::Shutdown();
 
     LOG("ScenarioEditor V1 exiting");
     return FALSE;

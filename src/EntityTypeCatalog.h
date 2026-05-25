@@ -14,6 +14,56 @@ struct CatalogEntry
 {
     uint16_t    id   = 0;        // SISO-REF-010 numeric ID (uint16 covers Country)
     std::string name;            // Display name from the INI
+
+    // ---- Category schema (Category entries only; ignored elsewhere) ----
+    // Ordered list of attribute names that all Subcategories under this
+    // Category carry. Modifying this list propagates to every sibling
+    // subcategory via the Catalog Editor.
+    std::vector<std::string> attributeNames;
+
+    // ---- Subcategory values (Subcategory entries only; ignored elsewhere) ----
+    // Keyed by attribute name. Missing key = empty / unset value. The
+    // Validator's envelope checks pull well-known keys (MaxSpeedMps,
+    // MaxG, etc.) out of this map at runtime.
+    std::map<std::string, std::string> attributeValues;
+};
+
+// Physical-model envelope for a specific airframe (Kind/Domain/Category/
+// Subcategory tuple). All fields are optional — a zero value means the
+// catalog didn't supply data for that envelope, and the Validator should
+// skip the corresponding check.
+struct AirframeProfile
+{
+    bool        valid = false;       // false when no [Airframe.k.d.c.sc] section catalogued
+    std::string name;
+
+    double lengthM           = 0.0;
+    double wingspanM         = 0.0;
+    double heightM           = 0.0;
+
+    double maxSpeedMps       = 0.0;
+    double cruiseSpeedMps    = 0.0;
+    double stallSpeedMps     = 0.0;
+    double neverExceedMps    = 0.0;
+    double maxTaxiMps        = 0.0;
+
+    double serviceCeilingM   = 0.0;
+    double maxAltM           = 0.0;
+    double minAltM           = 0.0;
+
+    double maxClimbRateMps     = 0.0;
+    double normalClimbRateMps  = 0.0;
+    double maxDescentRateMps   = 0.0;
+    double normalDescentRateMps = 0.0;
+
+    double maxBankDeg        = 0.0;
+    double normalBankDeg     = 0.0;
+    double maxTurnRateDps    = 0.0;
+    double maxPitchDeg       = 0.0;
+    double maxRollRateDps    = 0.0;
+    double maxG              = 0.0;
+    double maxAccelMps2      = 0.0;
+    double maxDecelMps2      = 0.0;
 };
 
 class EntityTypeCatalog
@@ -35,6 +85,13 @@ public:
     const std::vector<CatalogEntry>& Subcategories(uint8_t kindId, uint8_t domainId,
                                                    uint8_t categoryId) const;
 
+    // Physical-model profile for a specific (Kind, Domain, Category,
+    // Subcategory) tuple. Returns a profile with valid=false when the
+    // catalog has no [Airframe.k.d.c.sc] section for that tuple — callers
+    // should skip envelope checks in that case.
+    AirframeProfile Profile(uint8_t kindId, uint8_t domainId,
+                            uint8_t categoryId, uint8_t subcategoryId) const;
+
     // True if the catalog is non-empty (at least one Kind entry).
     bool Loaded() const { return !m_kinds.empty(); }
 
@@ -43,6 +100,27 @@ public:
     // skipped with a per-line LOG warning. Existing contents are wiped
     // before loading.
     bool LoadFromIni(const std::wstring& absolutePath);
+
+    // Persist the in-memory catalog to disk. Always writes the *new*
+    // format ([Category.*] Attribute.N keys + [Subcategory.*] key=value
+    // pairs); deprecated [Airframe.*] sections are no longer emitted.
+    // Returns true on success.
+    bool SaveToIni(const std::wstring& absolutePath) const;
+
+    // -------- Mutable access (for Catalog Editor) --------
+    // The Catalog Editor edits a deep copy of the catalog and replaces
+    // the live instance on Save. Exposing the underlying containers
+    // mutably here is cheap and keeps the dialog code self-contained.
+    std::vector<CatalogEntry>& MutableKinds()                     { return m_kinds; }
+    std::map<uint8_t, std::vector<CatalogEntry>>& MutableDomains() { return m_domainsByKind; }
+    std::vector<CatalogEntry>& MutableCountries()                 { return m_countries; }
+    std::map<std::pair<uint8_t, uint8_t>, std::vector<CatalogEntry>>&
+            MutableCategories()                                   { return m_categoriesByKindDomain; }
+    std::map<std::tuple<uint8_t, uint8_t, uint8_t>, std::vector<CatalogEntry>>&
+            MutableSubcategories()                                { return m_subcategoriesByKindDomainCategory; }
+
+    // Reset all in-memory state. Used by the editor before reloading.
+    void Clear();
 
 private:
     std::vector<CatalogEntry>                                 m_kinds;

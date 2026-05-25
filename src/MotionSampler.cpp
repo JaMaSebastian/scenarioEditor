@@ -2,6 +2,7 @@
 #include "CoordTransforms.h"
 #include "Scenario.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace
@@ -13,7 +14,7 @@ namespace
     // the segment's native frame and still produce ECEF for the wire.
     struct ResolvedPoint { double lat, lon, alt, x, y, z; };
 
-    ResolvedPoint ResolveStart(const MotionSegment& s)
+    ResolvedPoint ResolveStart(const MotionSegment& s, const Scenario* scenario)
     {
         ResolvedPoint p{};
         switch (s.coordMode) {
@@ -26,16 +27,21 @@ namespace
                 CoordTransforms::EcefToGeodeticDeg(p.x, p.y, p.z, p.lat, p.lon, p.alt);
                 break;
             case CoordMode::Local:
-                // Local-ENU segments are deferred to a future slice — fall
-                // back to ECEF fields if any were authored, else zeros.
-                p.x = s.startEcefX; p.y = s.startEcefY; p.z = s.startEcefZ;
+                if (scenario) {
+                    CoordTransforms::LocalEnuToEcefDeg(
+                        s.startLocalX, s.startLocalY, s.startLocalZ,
+                        scenario->originLatDeg, scenario->originLonDeg, scenario->originAltM,
+                        p.x, p.y, p.z);
+                } else {
+                    p.x = s.startEcefX; p.y = s.startEcefY; p.z = s.startEcefZ;
+                }
                 CoordTransforms::EcefToGeodeticDeg(p.x, p.y, p.z, p.lat, p.lon, p.alt);
                 break;
         }
         return p;
     }
 
-    ResolvedPoint ResolveEnd(const MotionSegment& s)
+    ResolvedPoint ResolveEnd(const MotionSegment& s, const Scenario* scenario)
     {
         ResolvedPoint p{};
         switch (s.coordMode) {
@@ -48,7 +54,14 @@ namespace
                 CoordTransforms::EcefToGeodeticDeg(p.x, p.y, p.z, p.lat, p.lon, p.alt);
                 break;
             case CoordMode::Local:
-                p.x = s.endEcefX; p.y = s.endEcefY; p.z = s.endEcefZ;
+                if (scenario) {
+                    CoordTransforms::LocalEnuToEcefDeg(
+                        s.endLocalX, s.endLocalY, s.endLocalZ,
+                        scenario->originLatDeg, scenario->originLonDeg, scenario->originAltM,
+                        p.x, p.y, p.z);
+                } else {
+                    p.x = s.endEcefX; p.y = s.endEcefY; p.z = s.endEcefZ;
+                }
                 CoordTransforms::EcefToGeodeticDeg(p.x, p.y, p.z, p.lat, p.lon, p.alt);
                 break;
         }
@@ -56,7 +69,8 @@ namespace
     }
 }
 
-SampledPose MotionSampler::EvaluateSegment(const MotionSegment& s, double u)
+SampledPose MotionSampler::EvaluateSegment(const MotionSegment& s, double u,
+                                           const Scenario* scenario)
 {
     if (u < 0.0) u = 0.0;
     if (u > 1.0) u = 1.0;
@@ -67,7 +81,7 @@ SampledPose MotionSampler::EvaluateSegment(const MotionSegment& s, double u)
                                       // when invoked in isolation; SamplePose
                                       // injects the prior segment's end pose.
         case MotionType::Stationary: {
-            const ResolvedPoint start = ResolveStart(s);
+            const ResolvedPoint start = ResolveStart(s, scenario);
             out.ecefX = start.x;
             out.ecefY = start.y;
             out.ecefZ = start.z;
@@ -77,53 +91,158 @@ SampledPose MotionSampler::EvaluateSegment(const MotionSegment& s, double u)
             break;
         }
         case MotionType::Line: {
-            const ResolvedPoint start = ResolveStart(s);
-            const ResolvedPoint end   = ResolveEnd(s);
+            const ResolvedPoint start = ResolveStart(s, scenario);
+            const ResolvedPoint end   = ResolveEnd(s, scenario);
             const double lat = Lerp(start.lat, end.lat, u);
             const double lon = Lerp(start.lon, end.lon, u);
             const double alt = Lerp(start.alt, end.alt, u);
             CoordTransforms::GeodeticToEcefDeg(lat, lon, alt,
                                                out.ecefX, out.ecefY, out.ecefZ);
-            out.headingDeg = Lerp(s.startHeadingDeg, s.endHeadingDeg, u);
+
+            // Heading: if start/end heading are BOTH at the default 0, the
+            // user almost certainly hasn't authored an orientation and
+            // expects the entity to face along the path. Compute heading
+            // from the geodetic delta (East/North bearing). Otherwise lerp
+            // the authored values.
+            if (s.startHeadingDeg == 0.0 && s.endHeadingDeg == 0.0)
+            {
+                const double dLat = end.lat - start.lat;
+                const double dLon = end.lon - start.lon;
+                if (dLat != 0.0 || dLon != 0.0)
+                {
+                    constexpr double kPi = 3.14159265358979323846;
+                    const double midLatRad = 0.5 * (start.lat + end.lat) * (kPi / 180.0);
+                    const double dEast  = dLon * 111320.0 * std::cos(midLatRad);
+                    const double dNorth = dLat * 111320.0;
+                    // Compass bearing: atan2(East, North), 0 = North, 90 = East.
+                    double bearingDeg = std::atan2(dEast, dNorth) * (180.0 / kPi);
+                    if (bearingDeg < 0.0) bearingDeg += 360.0;
+                    out.headingDeg = bearingDeg;
+                }
+                else
+                {
+                    out.headingDeg = 0.0;
+                }
+            }
+            else
+            {
+                out.headingDeg = Lerp(s.startHeadingDeg, s.endHeadingDeg, u);
+            }
             out.pitchDeg   = Lerp(s.startPitchDeg,   s.endPitchDeg,   u);
             out.rollDeg    = Lerp(s.startRollDeg,    s.endRollDeg,    u);
             break;
         }
         case MotionType::Ellipse: {
-            // Parametric ENU position relative to (centerLat, centerLon,
-            // centerAlt). Direction Clockwise (from above) means decreasing
-            // mathematical angle, hence the negative sign.
+            // Two-foci + length parametrization. Resolve both foci to
+            // geodetic, project both into ENU at the mean foci position,
+            // build the ellipse from (center, a=length/2, c=focusDist/2),
+            // start at the bearing intercept, sweep with speed.
             constexpr double kTau = 6.28318530717958647692;
-            const double sign = (s.direction == EllipseDirection::Clockwise) ? -1.0 : 1.0;
-            const double phaseDeg = s.startAngleDeg + sign * 360.0 * u;
-            const double phaseRad = phaseDeg * (kTau / 360.0);
+            constexpr double kPi  = 3.14159265358979323846;
 
-            // Pre-rotation ellipse offset in the ENU plane.
-            const double xPre = s.radiusXMeters * std::cos(phaseRad);
-            const double yPre = s.radiusYMeters * std::sin(phaseRad);
+            double f1Lat = s.f1Lat, f1Lon = s.f1Lon, f1Alt = s.f1Alt;
+            double f2Lat = s.f2Lat, f2Lon = s.f2Lon, f2Alt = s.f2Alt;
 
-            const double rotRad = s.rotationDeg * (kTau / 360.0);
-            const double cr = std::cos(rotRad), sr = std::sin(rotRad);
-            const double east  = cr * xPre - sr * yPre;
-            const double north = sr * xPre + cr * yPre;
-
-            double altOffset = 0.0;
-            if (s.altitudeMode == AltitudeMode::Linear) {
-                // Linearly drift from centerAlt to (centerAlt + 0) — kept
-                // for parity; future enhancement could carry an endAlt.
-                altOffset = 0.0;
+            // Resolve each focus to geodetic according to coordMode.
+            if (s.coordMode == CoordMode::Local && scenario)
+            {
+                double ex, ey, ez;
+                CoordTransforms::LocalEnuToEcefDeg(
+                    s.f1LocalX, s.f1LocalY, s.f1LocalZ,
+                    scenario->originLatDeg, scenario->originLonDeg, scenario->originAltM,
+                    ex, ey, ez);
+                CoordTransforms::EcefToGeodeticDeg(ex, ey, ez, f1Lat, f1Lon, f1Alt);
+                CoordTransforms::LocalEnuToEcefDeg(
+                    s.f2LocalX, s.f2LocalY, s.f2LocalZ,
+                    scenario->originLatDeg, scenario->originLonDeg, scenario->originAltM,
+                    ex, ey, ez);
+                CoordTransforms::EcefToGeodeticDeg(ex, ey, ez, f2Lat, f2Lon, f2Alt);
+            }
+            else if (s.coordMode == CoordMode::ECEF)
+            {
+                CoordTransforms::EcefToGeodeticDeg(s.f1EcefX, s.f1EcefY, s.f1EcefZ,
+                                                   f1Lat, f1Lon, f1Alt);
+                CoordTransforms::EcefToGeodeticDeg(s.f2EcefX, s.f2EcefY, s.f2EcefZ,
+                                                   f2Lat, f2Lon, f2Alt);
             }
 
-            CoordTransforms::LocalEnuToEcefDeg(east, north, altOffset,
-                                               s.centerLat, s.centerLon, s.centerAlt,
+            // Mean geodetic position used as ENU origin for planar math.
+            const double midLat = 0.5 * (f1Lat + f2Lat);
+            const double midLon = 0.5 * (f1Lon + f2Lon);
+            const double midAlt = 0.5 * (f1Alt + f2Alt);
+
+            // Project both foci to ENU at midLat/midLon/midAlt.
+            double f1Ex, f1Ey, f1Ez;
+            CoordTransforms::GeodeticToEcefDeg(f1Lat, f1Lon, f1Alt, f1Ex, f1Ey, f1Ez);
+            double f2Ex, f2Ey, f2Ez;
+            CoordTransforms::GeodeticToEcefDeg(f2Lat, f2Lon, f2Alt, f2Ex, f2Ey, f2Ez);
+            double e1, n1, u1, e2, n2, u2;
+            CoordTransforms::EcefToLocalEnuDeg(f1Ex, f1Ey, f1Ez,
+                                               midLat, midLon, midAlt, e1, n1, u1);
+            CoordTransforms::EcefToLocalEnuDeg(f2Ex, f2Ey, f2Ez,
+                                               midLat, midLon, midAlt, e2, n2, u2);
+
+            // Ellipse geometry in the ENU plane.
+            const double dx = e2 - e1;
+            const double dy = n2 - n1;
+            const double focusDist = std::sqrt(dx * dx + dy * dy);
+            const double c = 0.5 * focusDist;
+            const double a = 0.5 * std::max(s.lengthMeters, 2.0 * c);  // 2a >= 2c
+            const double b = std::sqrt(std::max(0.0, a * a - c * c));
+
+            // Major-axis unit vector in ENU. For circles (c=0): default +East.
+            double majorE = 1.0, majorN = 0.0;
+            if (focusDist > 1e-9)
+            {
+                majorE = dx / focusDist;
+                majorN = dy / focusDist;
+            }
+
+            // Period from speed via Ramanujan circumference approx.
+            const double circumference = kPi *
+                (3.0 * (a + b) - std::sqrt((3.0 * a + b) * (a + 3.0 * b)));
+            const double speed  = (s.speedMps > 0.0) ? s.speedMps : 100.0;
+            const double period = (circumference > 0.0) ? (circumference / speed) : 1.0;
+            const double segDuration = s.endSecond - s.startSecond;
+
+            // Start parameter angle: place the entity at the orbit point
+            // that lies on the bearing line from center. Compass bearing
+            // (0=N, 90=E ...) maps to math angle (measured CCW from +East).
+            const double bearingMath = (90.0 - s.startBearingDeg) * (kTau / 360.0);
+            // Bearing direction in ENU plane:
+            const double bxE = std::cos(bearingMath);
+            const double bxN = std::sin(bearingMath);
+            // Express the bearing direction in the ELLIPSE-LOCAL frame
+            // (major-axis aligned). Local +X = (majorE, majorN).
+            const double bLocalX =  bxE * majorE + bxN * majorN;   // along major
+            const double bLocalY = -bxE * majorN + bxN * majorE;   // along minor
+            // Parametric angle θ such that (a·cos θ, b·sin θ) points along
+            // (bLocalX, bLocalY) is θ = atan2(bLocalY / b, bLocalX / a).
+            const double theta0 = std::atan2(bLocalY * a, bLocalX * b);
+
+            // Sweep direction. Clockwise from above = decreasing math angle.
+            const double sign = (s.direction == EllipseDirection::Clockwise) ? -1.0 : 1.0;
+            const double theta = theta0 + sign * kTau * (u * segDuration / period);
+
+            // Parametric position in ellipse-local frame.
+            const double lx = a * std::cos(theta);
+            const double ly = b * std::sin(theta);
+            // Rotate back to ENU plane (major axis aligned with majorE/N).
+            const double east  = 0.5 * (e1 + e2) + lx * majorE - ly * majorN;
+            const double north = 0.5 * (n1 + n2) + lx * majorN + ly * majorE;
+            const double up    = 0.5 * (u1 + u2);
+
+            // Back to ECEF.
+            CoordTransforms::LocalEnuToEcefDeg(east, north, up,
+                                               midLat, midLon, midAlt,
                                                out.ecefX, out.ecefY, out.ecefZ);
 
-            // Tangential heading: derivative of (east, north) w.r.t. phase.
-            // d/dφ (rx cos, ry sin) = (-rx sin, ry cos), then apply rotation.
-            const double dxPre = -s.radiusXMeters * std::sin(phaseRad);
-            const double dyPre =  s.radiusYMeters * std::cos(phaseRad);
-            const double dEast  = (cr * dxPre - sr * dyPre) * sign;
-            const double dNorth = (sr * dxPre + cr * dyPre) * sign;
+            // Tangential heading: derivative of (east, north) w.r.t. θ.
+            const double dlx = -a * std::sin(theta);
+            const double dly =  b * std::cos(theta);
+            const double dEast  = (dlx * majorE - dly * majorN) * sign;
+            const double dNorth = (dlx * majorN + dly * majorE) * sign;
+            // Heading (compass deg, 0=N, 90=E) from velocity vector.
             const double headingRad = std::atan2(dEast, dNorth);
             out.headingDeg = headingRad * (360.0 / kTau);
             out.pitchDeg   = s.startPitchDeg;
@@ -134,9 +253,10 @@ SampledPose MotionSampler::EvaluateSegment(const MotionSegment& s, double u)
     return out;
 }
 
-SampledPose MotionSampler::SamplePose(const Entity& entity, const Scenario& /*scenario*/,
+SampledPose MotionSampler::SamplePose(const Entity& entity, const Scenario& scenario,
                                       double scenarioTimeSec)
 {
+    const Scenario* const scn = &scenario;
     SampledPose out{};
 
     if (entity.motionSegments.empty())
@@ -184,8 +304,8 @@ SampledPose MotionSampler::SamplePose(const Entity& entity, const Scenario& /*sc
     {
         // Time falls before first segment or after last — clamp.
         if (scenarioTimeSec < first->startSecond)
-            return EvaluateSegment(*first, 0.0);
-        return EvaluateSegment(*last, 1.0);
+            return EvaluateSegment(*first, 0.0, scn);
+        return EvaluateSegment(*last, 1.0, scn);
     }
 
     const double duration = active->endSecond - active->startSecond;
@@ -206,9 +326,9 @@ SampledPose MotionSampler::SamplePose(const Entity& entity, const Scenario& /*sc
             prev = &s;
         }
         if (prev)
-            return EvaluateSegment(*prev, 1.0);
-        return EvaluateSegment(*active, 0.0);
+            return EvaluateSegment(*prev, 1.0, scn);
+        return EvaluateSegment(*active, 0.0, scn);
     }
 
-    return EvaluateSegment(*active, u);
+    return EvaluateSegment(*active, u, scn);
 }

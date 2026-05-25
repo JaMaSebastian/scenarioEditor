@@ -37,6 +37,26 @@ time.sleep(0.8)   # let pages finish OnInitDialog so their edits exist
 
 fails = 0
 
+# Flip the Entity's Initial Coord Mode combo to LatLonAlt (index 0) so the
+# single dynamic position row is interpreted as Lat / Lon / Alt. After the
+# Initial State refactor (Local/ECEF edits removed), the three visible
+# edits IDC_EDIT_ENTITY_LAT/LON/ALT are polymorphic.
+IDC_COMBO_ENTITY_COORD_MODE = 1221
+CB_SETCURSEL = 0x014E
+CBN_SELCHANGE = 1
+WM_COMMAND_HI_SELCHANGE = (CBN_SELCHANGE << 16)
+h_combo = find_ctrl(hwnd, IDC_COMBO_ENTITY_COORD_MODE)
+if h_combo:
+    user32.SendMessageW(h_combo, CB_SETCURSEL, 0, 0)   # 0 = LatLonAlt
+    # Synthesize CBN_SELCHANGE so the page's handler relabels + repopulates.
+    parent_hwnd = user32.GetParent(h_combo)
+    user32.SendMessageW(parent_hwnd, WM_COMMAND,
+                        (CBN_SELCHANGE << 16) | IDC_COMBO_ENTITY_COORD_MODE,
+                        h_combo)
+    time.sleep(0.2)
+else:
+    print("WARN: IDC_COMBO_ENTITY_COORD_MODE not found")
+
 # Set origin = entity (so ENU offset is (0,0,0) and the heading lerp uses
 # the entity's geodetic for psi/theta/phi).
 for cid, val in [
@@ -49,11 +69,6 @@ for cid, val in [
     (IDC_EDIT_ENTITY_HEADING, "90"),
     (IDC_EDIT_ENTITY_PITCH,   "0"),
     (IDC_EDIT_ENTITY_ROLL,    "0"),
-    # Default entity coord mode is ECEF — set the ECEF edits directly so
-    # the wire location matches London regardless of coord-mode dropdown.
-    (1228, "3978009.83"),   # IDC_EDIT_ENTITY_ECEF_X
-    (1229, "8873.09"),      # IDC_EDIT_ENTITY_ECEF_Y
-    (1230, "4968894.50"),   # IDC_EDIT_ENTITY_ECEF_Z
 ]:
     h = find_ctrl(hwnd, cid)
     if not h:

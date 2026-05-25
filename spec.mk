@@ -3036,6 +3036,42 @@ Absolute (UTC-synced) DIS timestamps as a per-output-target option (§14.4.1)
 Dead-reckoning algorithms 3/4/6/7/8/9 in the motion engine (§16.4)
 ```
 
+### Physical-Model Application (multi-phase feature)
+
+Phase 1 ships catalog data + Scenario/Entity radios (Ignore / Validate /
+Limit, plus per-entity speed multiplier) + Validator envelope checks.
+The two follow-on phases are tracked here:
+
+```text
+Physical Model — Phase 2 (sampler-level enforcement)
+  - When mode resolves to "Limit", MotionSampler clamps speed, turn rate,
+    bank angle, climb / descent rate, and altitude to the airframe's
+    envelope at sample time. Wire output reflects what's physically
+    possible, not what was authored.
+  - Speed multiplier becomes a runtime per-entity clock accelerator:
+    effectiveTimeSec = scenarioTimeSec * speedMultiplier. Segment
+    boundaries trigger on the entity's accelerated clock, not the
+    scenario clock.
+  - Preview HUD shows the active multiplier ("t = 12.3s x 2.0x").
+  - Validator still emits the same diagnostics so the user knows
+    something was clamped; sampler logs (rate-limited) when a clamp
+    actually fires during playback.
+
+Physical Model — Phase 3 (authoring assistance + wider data)
+  - When the user adds a new Ellipse segment after selecting an airframe,
+    seed PeriodSeconds from the airframe's CruiseSpeed so the default
+    orbit is achievable (period = 2*pi*radius / cruiseSpeed).
+  - When the user adds a new Line segment, seed the start/end times to
+    match cruiseSpeed across the authored distance.
+  - Wider curated catalog (target ~50 airframes covering common
+    SISO-REF-010 entries) + a small CSV-to-INI importer so a user can
+    paste rows from a spreadsheet of envelope data and regenerate the
+    [Airframe.*] sections.
+  - Per-airframe drag/thrust model for more realistic acceleration in
+    Limit mode (Phase 2 uses a simple max-accel clamp; Phase 3 layers a
+    thrust-vs-drag curve on top).
+```
+
 ---
 
 ## 25. Design Principle

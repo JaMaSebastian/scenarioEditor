@@ -17,6 +17,9 @@ public:
     // Lifetime equals the application; passed by const-pointer into the
     // Asset / Entity Editor page (§7.5).
     const EntityTypeCatalog& Catalog() const { return m_catalog; }
+    // Mutable accessor used by the Catalog Editor dialog. The dialog
+    // operates on a deep copy and writes back here on Save.
+    EntityTypeCatalog& MutableCatalog() { return m_catalog; }
 
     // Mutable: the dialog reads on init, updates on destroy.
     Settings&       Settings()       { return m_settings; }
@@ -24,11 +27,14 @@ public:
 
     // Absolute path to settings.ini next to the executable.
     const std::wstring& SettingsPath() const { return m_settingsPath; }
+    // Absolute path to EntityTypeCatalog.ini next to the executable.
+    const std::wstring& CatalogPath() const { return m_catalogPath; }
 
 private:
     EntityTypeCatalog  m_catalog;
     ::Settings         m_settings;
     std::wstring       m_settingsPath;
+    std::wstring       m_catalogPath;
 };
 
 extern CScenarioEditorApp theApp;

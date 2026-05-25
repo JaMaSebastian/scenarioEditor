@@ -68,12 +68,12 @@ int main()
         Expect(r.mbpsAvg > 0.005 && r.mbpsAvg < 0.01, "Mbps estimate band");
     }
 
-    // ---- Case 6: ellipse without radius/period → errors ----
+    // ---- Case 6: ellipse without length / speed → errors ----
     {
         Scenario s;
         Entity& e = s.entities.front();
         MotionSegment m; m.type = MotionType::Ellipse; m.startSecond = 0; m.endSecond = 60;
-        m.radiusXMeters = 0; m.radiusYMeters = 0; m.periodSeconds = 0;
+        m.lengthMeters = 0; m.speedMps = 0;
         e.motionSegments.push_back(m);
         auto r = Validator::Validate(s);
         Expect(r.errorCount >= 2, "bad ellipse → errors");

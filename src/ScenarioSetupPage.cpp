@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "ScenarioSetupPage.h"
+#include "FormatUtil.h"
 #include "Scenario.h"
 
 #include <cstdlib>
@@ -26,11 +27,57 @@ namespace
         { IDC_CHK_VALIDATE_BEFORE_SEND,   _T("Run scenario validation before sending PDUs over the network."), false },
         { IDC_CHK_VALIDATE_BEFORE_RECORD, _T("Run scenario validation before starting a recording."), false },
         { IDC_CHK_VALIDATE_BEFORE_REPLAY, _T("Run scenario validation before replaying a recording."), false },
+        { IDC_RADIO_PHYS_IGNORE,   _T("Don't check authored motion against airframe physical envelope. Default."), false },
+        { IDC_RADIO_PHYS_VALIDATE, _T("Validator warns when motion exceeds airframe envelope (max speed, ceiling, G, etc.); wire output unchanged."), false },
+        { IDC_RADIO_PHYS_LIMIT,    _T("Sampler clamps motion to airframe envelope at runtime (Phase 2 — wired up in a follow-on)."), false },
+        { IDC_CHK_SPEED_MULT,      _T("Apply a scenario-wide speed multiplier to all entities (per-entity overrides apply)."), false },
+        { IDC_EDIT_SPEED_MULT,     _T("Scenario-wide speed multiplier. 1.0 = no change; >1 faster; <1 slower."), false },
     };
 }
 
 BEGIN_MESSAGE_MAP(CScenarioSetupPage, CHelpAwarePage)
+    ON_CBN_SELCHANGE(IDC_COMBO_DEFAULT_COORD_MODE,
+                     &CScenarioSetupPage::OnDefaultCoordModeChanged)
+    ON_BN_CLICKED(IDC_RADIO_PHYS_IGNORE,   &CScenarioSetupPage::OnPhysModeRadio)
+    ON_BN_CLICKED(IDC_RADIO_PHYS_VALIDATE, &CScenarioSetupPage::OnPhysModeRadio)
+    ON_BN_CLICKED(IDC_RADIO_PHYS_LIMIT,    &CScenarioSetupPage::OnPhysModeRadio)
+    ON_BN_CLICKED(IDC_CHK_SPEED_MULT,      &CScenarioSetupPage::OnSpeedMultiplierToggle)
 END_MESSAGE_MAP()
+
+void CScenarioSetupPage::OnDefaultCoordModeChanged()
+{
+    // Live-commit the default coord mode so Asset.OnAddAsset and
+    // Motion.OnAddSegment see the latest value when they read
+    // scenario->defaultCoordMode (without waiting for Save/Validate to
+    // flush WriteTo).
+    if (!m_scenario) return;
+    if (const CComboBox* cb = (const CComboBox*)GetDlgItem(IDC_COMBO_DEFAULT_COORD_MODE))
+    {
+        switch (cb->GetCurSel()) {
+            case 0: m_scenario->defaultCoordMode = CoordMode::LatLonAlt; break;
+            case 1: m_scenario->defaultCoordMode = CoordMode::Local;     break;
+            case 2: m_scenario->defaultCoordMode = CoordMode::ECEF;      break;
+        }
+    }
+}
+
+void CScenarioSetupPage::OnPhysModeRadio()
+{
+    if (!m_scenario) return;
+    if (IsDlgButtonChecked(IDC_RADIO_PHYS_VALIDATE) == BST_CHECKED)
+        m_scenario->defaultPhysicalModel = PhysicalModelMode::Validate;
+    else if (IsDlgButtonChecked(IDC_RADIO_PHYS_LIMIT) == BST_CHECKED)
+        m_scenario->defaultPhysicalModel = PhysicalModelMode::Limit;
+    else
+        m_scenario->defaultPhysicalModel = PhysicalModelMode::Ignore;
+}
+
+void CScenarioSetupPage::OnSpeedMultiplierToggle()
+{
+    if (!m_scenario) return;
+    m_scenario->speedMultiplierEnabled =
+        IsDlgButtonChecked(IDC_CHK_SPEED_MULT) == BST_CHECKED;
+}
 
 void CScenarioSetupPage::GetFieldHelpTable(const FFieldHelp*& outArray, size_t& outCount) const
 {
@@ -47,7 +94,7 @@ BOOL CScenarioSetupPage::OnInitDialog()
         cb->AddString(_T("Lat/Lon/Alt"));
         cb->AddString(_T("Local X/Y/Z"));
         cb->AddString(_T("ECEF"));
-        cb->SetCurSel(0);
+        cb->SetCurSel(1); // Local X/Y/Z — matches Scenario::defaultCoordMode
     }
 
     CheckDlgButton(IDC_RADIO_DIS_V7, BST_CHECKED);
@@ -65,6 +112,13 @@ BOOL CScenarioSetupPage::OnInitDialog()
     SetDlgItemText(IDC_EDIT_ORIGIN_LAT, _T("37.7749"));
     SetDlgItemText(IDC_EDIT_ORIGIN_LON, _T("-122.4194"));
     SetDlgItemText(IDC_EDIT_ORIGIN_ALT, _T("0.0"));
+
+    // Physical Model Defaults — default to Ignore + multiplier=1.0 disabled.
+    CheckDlgButton(IDC_RADIO_PHYS_IGNORE,   BST_CHECKED);
+    CheckDlgButton(IDC_RADIO_PHYS_VALIDATE, BST_UNCHECKED);
+    CheckDlgButton(IDC_RADIO_PHYS_LIMIT,    BST_UNCHECKED);
+    CheckDlgButton(IDC_CHK_SPEED_MULT,      BST_UNCHECKED);
+    SetDlgItemText(IDC_EDIT_SPEED_MULT, _T("1.0"));
 
     return TRUE;
 }
@@ -126,6 +180,18 @@ void CScenarioSetupPage::WriteTo(Scenario& scenario) const
     // Duration + default update rate.
     scenario.durationSeconds      = ReadDoubleText(*this, IDC_EDIT_DURATION_SECONDS,       scenario.durationSeconds);
     scenario.defaultUpdateRateHz  = ReadDoubleText(*this, IDC_EDIT_DEFAULT_UPDATE_RATE,    scenario.defaultUpdateRateHz);
+
+    // Physical Model Defaults — radios + speed multiplier.
+    if (IsDlgButtonChecked(IDC_RADIO_PHYS_VALIDATE) == BST_CHECKED)
+        scenario.defaultPhysicalModel = PhysicalModelMode::Validate;
+    else if (IsDlgButtonChecked(IDC_RADIO_PHYS_LIMIT) == BST_CHECKED)
+        scenario.defaultPhysicalModel = PhysicalModelMode::Limit;
+    else
+        scenario.defaultPhysicalModel = PhysicalModelMode::Ignore;
+    scenario.speedMultiplierEnabled =
+        IsDlgButtonChecked(IDC_CHK_SPEED_MULT) == BST_CHECKED;
+    scenario.speedMultiplier =
+        ReadDoubleText(*this, IDC_EDIT_SPEED_MULT, scenario.speedMultiplier);
 }
 
 void CScenarioSetupPage::ReadFrom(const Scenario& scenario)
@@ -142,13 +208,12 @@ void CScenarioSetupPage::ReadFrom(const Scenario& scenario)
     SetDlgItemInt(IDC_EDIT_SITE_ID,        scenario.siteId,        FALSE);
     SetDlgItemInt(IDC_EDIT_APPLICATION_ID, scenario.applicationId, FALSE);
 
-    CString buf;
-    buf.Format(_T("%.6f"), scenario.originLatDeg); SetDlgItemText(IDC_EDIT_ORIGIN_LAT, buf);
-    buf.Format(_T("%.6f"), scenario.originLonDeg); SetDlgItemText(IDC_EDIT_ORIGIN_LON, buf);
-    buf.Format(_T("%.3f"), scenario.originAltM);   SetDlgItemText(IDC_EDIT_ORIGIN_ALT, buf);
+    SetDlgItemText(IDC_EDIT_ORIGIN_LAT, FormatDoubleTrim(scenario.originLatDeg));
+    SetDlgItemText(IDC_EDIT_ORIGIN_LON, FormatDoubleTrim(scenario.originLonDeg));
+    SetDlgItemText(IDC_EDIT_ORIGIN_ALT, FormatDoubleTrim(scenario.originAltM));
 
-    buf.Format(_T("%.3f"), scenario.durationSeconds);     SetDlgItemText(IDC_EDIT_DURATION_SECONDS, buf);
-    buf.Format(_T("%.3f"), scenario.defaultUpdateRateHz); SetDlgItemText(IDC_EDIT_DEFAULT_UPDATE_RATE, buf);
+    SetDlgItemText(IDC_EDIT_DURATION_SECONDS,     FormatDoubleTrim(scenario.durationSeconds));
+    SetDlgItemText(IDC_EDIT_DEFAULT_UPDATE_RATE,  FormatDoubleTrim(scenario.defaultUpdateRateHz));
 
     if (CComboBox* cb = (CComboBox*)GetDlgItem(IDC_COMBO_DEFAULT_COORD_MODE))
     {
@@ -160,4 +225,15 @@ void CScenarioSetupPage::ReadFrom(const Scenario& scenario)
         }
         cb->SetCurSel(idx);
     }
+
+    // Physical Model Defaults.
+    CheckDlgButton(IDC_RADIO_PHYS_IGNORE,
+                   scenario.defaultPhysicalModel == PhysicalModelMode::Ignore   ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(IDC_RADIO_PHYS_VALIDATE,
+                   scenario.defaultPhysicalModel == PhysicalModelMode::Validate ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(IDC_RADIO_PHYS_LIMIT,
+                   scenario.defaultPhysicalModel == PhysicalModelMode::Limit    ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(IDC_CHK_SPEED_MULT,
+                   scenario.speedMultiplierEnabled ? BST_CHECKED : BST_UNCHECKED);
+    SetDlgItemText(IDC_EDIT_SPEED_MULT, FormatDoubleTrim(scenario.speedMultiplier));
 }

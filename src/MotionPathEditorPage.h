@@ -19,17 +19,28 @@ public:
     // Rebuild the entity selector combo + segment list from the model.
     void Refresh();
 
+    // Flush the in-progress UI edits into the active segment. Called from
+    // the main dialog's CaptureUiIntoScenario() before Save / Validate /
+    // Playback Start so pending edits aren't lost.
+    void CommitPendingEdits() { CommitActiveSegmentFromUi(); }
+
 protected:
     BOOL OnInitDialog() override;
     void GetFieldHelpTable(const FFieldHelp*& outArray, size_t& outCount) const override;
 
+    afx_msg void OnShowWindow(BOOL bShow, UINT nStatus);
     afx_msg void OnEntityChanged();
     afx_msg void OnSegmentTypeChanged();
+    afx_msg void OnSegmentCoordModeChanged();
+    afx_msg void OnSegmentTimingChanged();
+    afx_msg void OnEllipseSpeedKillFocus();
+    afx_msg void OnLineSpeedKillFocus();
     afx_msg void OnAddSegment();
     afx_msg void OnDeleteSegment();
     afx_msg void OnDuplicateSegment();
     afx_msg void OnMoveSegmentUp();
     afx_msg void OnMoveSegmentDown();
+    afx_msg void OnValidateSegment();
     afx_msg void OnSegmentListSelChanged(NMHDR* pNMHDR, LRESULT* pResult);
 
     DECLARE_MESSAGE_MAP()
@@ -40,6 +51,12 @@ private:
     void LoadActiveSegment();
     void CommitActiveSegmentFromUi();
     void SetTypeSpecificVisibility();
+    void LoadEllipseFromSegment(const MotionSegment& s);
+    void CommitEllipseToSegment(MotionSegment& s);
+    void SeedEllipseDefaultsIfBlank(MotionSegment& s);
+    void LoadLineFromSegment(const MotionSegment& s);
+    void CommitLineToSegment(MotionSegment& s);
+    void SeedLineDefaultsIfBlank(MotionSegment& s);
 
     Entity*       ActiveEntity();
     MotionSegment* ActiveSegment();

@@ -85,6 +85,42 @@ namespace
         return fallback;
     }
 
+    const wchar_t* PhysModeName(PhysicalModelMode m)
+    {
+        switch (m) {
+            case PhysicalModelMode::Ignore:   return L"Ignore";
+            case PhysicalModelMode::Validate: return L"Validate";
+            case PhysicalModelMode::Limit:    return L"Limit";
+        }
+        return L"Ignore";
+    }
+    PhysicalModelMode ParsePhysMode(const std::wstring& v, PhysicalModelMode fallback)
+    {
+        if (v == L"Ignore")   return PhysicalModelMode::Ignore;
+        if (v == L"Validate") return PhysicalModelMode::Validate;
+        if (v == L"Limit")    return PhysicalModelMode::Limit;
+        return fallback;
+    }
+
+    const wchar_t* PhysOverrideName(PhysicalModelOverride o)
+    {
+        switch (o) {
+            case PhysicalModelOverride::Inherit:  return L"Inherit";
+            case PhysicalModelOverride::Ignore:   return L"Ignore";
+            case PhysicalModelOverride::Validate: return L"Validate";
+            case PhysicalModelOverride::Limit:    return L"Limit";
+        }
+        return L"Inherit";
+    }
+    PhysicalModelOverride ParsePhysOverride(const std::wstring& v, PhysicalModelOverride fallback)
+    {
+        if (v == L"Inherit")  return PhysicalModelOverride::Inherit;
+        if (v == L"Ignore")   return PhysicalModelOverride::Ignore;
+        if (v == L"Validate") return PhysicalModelOverride::Validate;
+        if (v == L"Limit")    return PhysicalModelOverride::Limit;
+        return fallback;
+    }
+
     const wchar_t* MotionTypeName(MotionType t)
     {
         switch (t) {
@@ -134,17 +170,6 @@ namespace
     {
         if (v == L"Clockwise")        return EllipseDirection::Clockwise;
         if (v == L"CounterClockwise") return EllipseDirection::CounterClockwise;
-        return fb;
-    }
-
-    const wchar_t* AltModeName(AltitudeMode m)
-    {
-        return m == AltitudeMode::Linear ? L"Linear" : L"Constant";
-    }
-    AltitudeMode ParseAltMode(const std::wstring& v, AltitudeMode fb)
-    {
-        if (v == L"Linear")   return AltitudeMode::Linear;
-        if (v == L"Constant") return AltitudeMode::Constant;
         return fb;
     }
 
@@ -278,6 +303,11 @@ ScenarioIO::Result ScenarioIO::Save(const Scenario& scenario,
     WriteDouble(L"Scenario", L"DefaultUpdateRateHz", scenario.defaultUpdateRateHz, path);
     WriteStr   (L"Scenario", L"DefaultCoordinateMode",
                 CoordModeName(scenario.defaultCoordMode), path);
+    WriteStr   (L"Scenario", L"DefaultPhysicalModel",
+                PhysModeName(scenario.defaultPhysicalModel), path);
+    WriteInt   (L"Scenario", L"SpeedMultiplierEnabled",
+                scenario.speedMultiplierEnabled ? 1 : 0, path);
+    WriteDouble(L"Scenario", L"SpeedMultiplier", scenario.speedMultiplier, path);
 
     WriteDouble(L"Origin", L"LatitudeDeg",    scenario.originLatDeg, path);
     WriteDouble(L"Origin", L"LongitudeDeg",   scenario.originLonDeg, path);
@@ -311,6 +341,13 @@ ScenarioIO::Result ScenarioIO::Save(const Scenario& scenario,
         WriteDouble(S, L"BeginSecond",    e.beginSecond, path);
         WriteDouble(S, L"EndSecond",      e.endSecond, path);
         WriteDouble(S, L"UpdateRateHz",   e.updateRateHz, path);
+        WriteDouble(S, L"InitialSpeedMetersPerSecond", e.initialSpeedMps, path);
+
+        WriteStr   (S, L"PhysicalModelOverride",
+                    PhysOverrideName(e.physicalModelOverride), path);
+        WriteInt   (S, L"OverrideSpeedMultiplier",
+                    e.overrideSpeedMultiplier ? 1 : 0, path);
+        WriteDouble(S, L"SpeedMultiplier", e.speedMultiplier, path);
 
         WriteStr   (S, L"InitialCoordinateMode",
                     CoordModeName(e.initialCoordMode), path);
@@ -347,6 +384,9 @@ ScenarioIO::Result ScenarioIO::Save(const Scenario& scenario,
             WriteDouble(M, L"StartEcefX",        m.startEcefX, path);
             WriteDouble(M, L"StartEcefY",        m.startEcefY, path);
             WriteDouble(M, L"StartEcefZ",        m.startEcefZ, path);
+            WriteDouble(M, L"StartLocalX",       m.startLocalX, path);
+            WriteDouble(M, L"StartLocalY",       m.startLocalY, path);
+            WriteDouble(M, L"StartLocalZ",       m.startLocalZ, path);
             WriteDouble(M, L"StartHeadingDeg",   m.startHeadingDeg, path);
             WriteDouble(M, L"StartPitchDeg",     m.startPitchDeg, path);
             WriteDouble(M, L"StartRollDeg",      m.startRollDeg, path);
@@ -358,6 +398,9 @@ ScenarioIO::Result ScenarioIO::Save(const Scenario& scenario,
             WriteDouble(M, L"EndEcefX",          m.endEcefX, path);
             WriteDouble(M, L"EndEcefY",          m.endEcefY, path);
             WriteDouble(M, L"EndEcefZ",          m.endEcefZ, path);
+            WriteDouble(M, L"EndLocalX",         m.endLocalX, path);
+            WriteDouble(M, L"EndLocalY",         m.endLocalY, path);
+            WriteDouble(M, L"EndLocalZ",         m.endLocalZ, path);
             WriteDouble(M, L"EndHeadingDeg",     m.endHeadingDeg, path);
             WriteDouble(M, L"EndPitchDeg",       m.endPitchDeg, path);
             WriteDouble(M, L"EndRollDeg",        m.endRollDeg, path);
@@ -365,17 +408,29 @@ ScenarioIO::Result ScenarioIO::Save(const Scenario& scenario,
             WriteStr   (M, L"SpeedMode",   Widen(m.speedMode),   path);
             WriteStr   (M, L"HeadingMode", Widen(m.headingMode), path);
 
-            // Ellipse
-            WriteDouble(M, L"CenterLatitudeDeg",  m.centerLat, path);
-            WriteDouble(M, L"CenterLongitudeDeg", m.centerLon, path);
-            WriteDouble(M, L"CenterAltitudeMeters", m.centerAlt, path);
-            WriteDouble(M, L"RadiusXMeters",   m.radiusXMeters, path);
-            WriteDouble(M, L"RadiusYMeters",   m.radiusYMeters, path);
-            WriteDouble(M, L"RotationDeg",     m.rotationDeg, path);
-            WriteDouble(M, L"StartAngleDeg",   m.startAngleDeg, path);
-            WriteStr   (M, L"Direction",       DirectionName(m.direction), path);
-            WriteDouble(M, L"PeriodSeconds",   m.periodSeconds, path);
-            WriteStr   (M, L"AltitudeMode",    AltModeName(m.altitudeMode), path);
+            // Ellipse (two-foci + length form)
+            WriteDouble(M, L"Focus1LatitudeDeg",    m.f1Lat, path);
+            WriteDouble(M, L"Focus1LongitudeDeg",   m.f1Lon, path);
+            WriteDouble(M, L"Focus1AltitudeMeters", m.f1Alt, path);
+            WriteDouble(M, L"Focus1LocalX",         m.f1LocalX, path);
+            WriteDouble(M, L"Focus1LocalY",         m.f1LocalY, path);
+            WriteDouble(M, L"Focus1LocalZ",         m.f1LocalZ, path);
+            WriteDouble(M, L"Focus1EcefX",          m.f1EcefX, path);
+            WriteDouble(M, L"Focus1EcefY",          m.f1EcefY, path);
+            WriteDouble(M, L"Focus1EcefZ",          m.f1EcefZ, path);
+            WriteDouble(M, L"Focus2LatitudeDeg",    m.f2Lat, path);
+            WriteDouble(M, L"Focus2LongitudeDeg",   m.f2Lon, path);
+            WriteDouble(M, L"Focus2AltitudeMeters", m.f2Alt, path);
+            WriteDouble(M, L"Focus2LocalX",         m.f2LocalX, path);
+            WriteDouble(M, L"Focus2LocalY",         m.f2LocalY, path);
+            WriteDouble(M, L"Focus2LocalZ",         m.f2LocalZ, path);
+            WriteDouble(M, L"Focus2EcefX",          m.f2EcefX, path);
+            WriteDouble(M, L"Focus2EcefY",          m.f2EcefY, path);
+            WriteDouble(M, L"Focus2EcefZ",          m.f2EcefZ, path);
+            WriteDouble(M, L"LengthMeters",         m.lengthMeters, path);
+            WriteDouble(M, L"StartBearingDeg",      m.startBearingDeg, path);
+            WriteDouble(M, L"SpeedMetersPerSecond", m.speedMps, path);
+            WriteStr   (M, L"Direction",            DirectionName(m.direction), path);
 
             WriteStr   (M, L"Description",     Widen(m.description), path);
         }
@@ -438,6 +493,10 @@ ScenarioIO::Result ScenarioIO::Load(Scenario& s, const std::wstring& path)
     s.defaultUpdateRateHz  = ReadDouble(L"Scenario", L"DefaultUpdateRateHz", s.defaultUpdateRateHz, path);
     s.defaultCoordMode     = ParseCoordMode(ReadStr(L"Scenario", L"DefaultCoordinateMode", L"", path),
                                             s.defaultCoordMode);
+    s.defaultPhysicalModel = ParsePhysMode(ReadStr(L"Scenario", L"DefaultPhysicalModel", L"", path),
+                                           s.defaultPhysicalModel);
+    s.speedMultiplierEnabled = ReadInt(L"Scenario", L"SpeedMultiplierEnabled", 0, path) != 0;
+    s.speedMultiplier      = ReadDouble(L"Scenario", L"SpeedMultiplier", 1.0, path);
 
     s.originLatDeg = ReadDouble(L"Origin", L"LatitudeDeg",    s.originLatDeg, path);
     s.originLonDeg = ReadDouble(L"Origin", L"LongitudeDeg",   s.originLonDeg, path);
@@ -486,6 +545,16 @@ ScenarioIO::Result ScenarioIO::Load(Scenario& s, const std::wstring& path)
         e.beginSecond    = ReadDouble(sec, L"BeginSecond",  e.beginSecond, path);
         e.endSecond      = ReadDouble(sec, L"EndSecond",    e.endSecond, path);
         e.updateRateHz   = ReadDouble(sec, L"UpdateRateHz", e.updateRateHz, path);
+        e.initialSpeedMps = ReadDouble(sec, L"InitialSpeedMetersPerSecond",
+                                       e.initialSpeedMps, path);
+
+        e.physicalModelOverride =
+            ParsePhysOverride(ReadStr(sec, L"PhysicalModelOverride", L"", path),
+                              e.physicalModelOverride);
+        e.overrideSpeedMultiplier =
+            ReadInt(sec, L"OverrideSpeedMultiplier", 0, path) != 0;
+        e.speedMultiplier =
+            ReadDouble(sec, L"SpeedMultiplier", e.speedMultiplier, path);
 
         e.initialCoordMode = ParseCoordMode(ReadStr(sec, L"InitialCoordinateMode", L"", path),
                                             e.initialCoordMode);
@@ -554,6 +623,9 @@ ScenarioIO::Result ScenarioIO::Load(Scenario& s, const std::wstring& path)
             m.startEcefX     = ReadDouble(M, L"StartEcefX",          0.0, path);
             m.startEcefY     = ReadDouble(M, L"StartEcefY",          0.0, path);
             m.startEcefZ     = ReadDouble(M, L"StartEcefZ",          0.0, path);
+            m.startLocalX    = ReadDouble(M, L"StartLocalX",         0.0, path);
+            m.startLocalY    = ReadDouble(M, L"StartLocalY",         0.0, path);
+            m.startLocalZ    = ReadDouble(M, L"StartLocalZ",         0.0, path);
             m.startHeadingDeg = ReadDouble(M, L"StartHeadingDeg",    0.0, path);
             m.startPitchDeg   = ReadDouble(M, L"StartPitchDeg",      0.0, path);
             m.startRollDeg    = ReadDouble(M, L"StartRollDeg",       0.0, path);
@@ -564,6 +636,9 @@ ScenarioIO::Result ScenarioIO::Load(Scenario& s, const std::wstring& path)
             m.endEcefX       = ReadDouble(M, L"EndEcefX",            0.0, path);
             m.endEcefY       = ReadDouble(M, L"EndEcefY",            0.0, path);
             m.endEcefZ       = ReadDouble(M, L"EndEcefZ",            0.0, path);
+            m.endLocalX      = ReadDouble(M, L"EndLocalX",           0.0, path);
+            m.endLocalY      = ReadDouble(M, L"EndLocalY",           0.0, path);
+            m.endLocalZ      = ReadDouble(M, L"EndLocalZ",           0.0, path);
             m.endHeadingDeg  = ReadDouble(M, L"EndHeadingDeg",       0.0, path);
             m.endPitchDeg    = ReadDouble(M, L"EndPitchDeg",         0.0, path);
             m.endRollDeg     = ReadDouble(M, L"EndRollDeg",          0.0, path);
@@ -571,18 +646,29 @@ ScenarioIO::Result ScenarioIO::Load(Scenario& s, const std::wstring& path)
             m.speedMode      = Narrow(ReadStr(M, L"SpeedMode",   L"CalculateFromTime", path));
             m.headingMode    = Narrow(ReadStr(M, L"HeadingMode", L"CalculateFromPath", path));
 
-            m.centerLat      = ReadDouble(M, L"CenterLatitudeDeg",    0.0, path);
-            m.centerLon      = ReadDouble(M, L"CenterLongitudeDeg",   0.0, path);
-            m.centerAlt      = ReadDouble(M, L"CenterAltitudeMeters", 0.0, path);
-            m.radiusXMeters  = ReadDouble(M, L"RadiusXMeters", 0.0, path);
-            m.radiusYMeters  = ReadDouble(M, L"RadiusYMeters", 0.0, path);
-            m.rotationDeg    = ReadDouble(M, L"RotationDeg",   0.0, path);
-            m.startAngleDeg  = ReadDouble(M, L"StartAngleDeg", 0.0, path);
+            m.f1Lat          = ReadDouble(M, L"Focus1LatitudeDeg",    0.0, path);
+            m.f1Lon          = ReadDouble(M, L"Focus1LongitudeDeg",   0.0, path);
+            m.f1Alt          = ReadDouble(M, L"Focus1AltitudeMeters", 0.0, path);
+            m.f1LocalX       = ReadDouble(M, L"Focus1LocalX",         0.0, path);
+            m.f1LocalY       = ReadDouble(M, L"Focus1LocalY",         0.0, path);
+            m.f1LocalZ       = ReadDouble(M, L"Focus1LocalZ",         0.0, path);
+            m.f1EcefX        = ReadDouble(M, L"Focus1EcefX",          0.0, path);
+            m.f1EcefY        = ReadDouble(M, L"Focus1EcefY",          0.0, path);
+            m.f1EcefZ        = ReadDouble(M, L"Focus1EcefZ",          0.0, path);
+            m.f2Lat          = ReadDouble(M, L"Focus2LatitudeDeg",    0.0, path);
+            m.f2Lon          = ReadDouble(M, L"Focus2LongitudeDeg",   0.0, path);
+            m.f2Alt          = ReadDouble(M, L"Focus2AltitudeMeters", 0.0, path);
+            m.f2LocalX       = ReadDouble(M, L"Focus2LocalX",         0.0, path);
+            m.f2LocalY       = ReadDouble(M, L"Focus2LocalY",         0.0, path);
+            m.f2LocalZ       = ReadDouble(M, L"Focus2LocalZ",         0.0, path);
+            m.f2EcefX        = ReadDouble(M, L"Focus2EcefX",          0.0, path);
+            m.f2EcefY        = ReadDouble(M, L"Focus2EcefY",          0.0, path);
+            m.f2EcefZ        = ReadDouble(M, L"Focus2EcefZ",          0.0, path);
+            m.lengthMeters   = ReadDouble(M, L"LengthMeters",         0.0, path);
+            m.startBearingDeg = ReadDouble(M, L"StartBearingDeg",     0.0, path);
+            m.speedMps       = ReadDouble(M, L"SpeedMetersPerSecond", 0.0, path);
             m.direction      = ParseDirection(ReadStr(M, L"Direction", L"Clockwise", path),
                                               EllipseDirection::Clockwise);
-            m.periodSeconds  = ReadDouble(M, L"PeriodSeconds", 60.0, path);
-            m.altitudeMode   = ParseAltMode(ReadStr(M, L"AltitudeMode", L"Constant", path),
-                                            AltitudeMode::Constant);
 
             m.description    = Narrow(ReadStr(M, L"Description", L"", path));
 

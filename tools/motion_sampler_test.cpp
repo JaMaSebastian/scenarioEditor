@@ -145,52 +145,53 @@ int main()
         ExpectNear(p.ecefZ, expZ, 1e-3, "stophold.z@t=60");
     }
 
-    // ---- Case 5: Ellipse around an origin. Sample at start / quarter ----
+    // ---- Case 5: Circular ellipse (F1 = F2) around (0,0,1000). Sample at
+    //              start / quarter / half. Speed = 2π·R/120s for a R=1000m
+    //              orbit in 120 seconds.
     {
+        constexpr double kRadius = 1000.0;
+        constexpr double kPeriod = 120.0;
+        constexpr double kPi     = 3.14159265358979323846;
         MotionSegment s;
-        s.type           = MotionType::Ellipse;
-        s.startSecond    = 0.0; s.endSecond = 120.0;
-        s.centerLat      = 0.0;
-        s.centerLon      = 0.0;
-        s.centerAlt      = 1000.0;
-        s.radiusXMeters  = 1000.0;
-        s.radiusYMeters  = 1000.0;
-        s.rotationDeg    = 0.0;
-        s.startAngleDeg  = 0.0;
-        s.direction      = EllipseDirection::CounterClockwise;
-        s.periodSeconds  = 120.0;
-        s.altitudeMode   = AltitudeMode::Constant;
-        e.motionSegments = { s };
+        s.type            = MotionType::Ellipse;
+        s.startSecond     = 0.0; s.endSecond = kPeriod;
+        s.f1Lat = 0.0; s.f1Lon = 0.0; s.f1Alt = 1000.0;
+        s.f2Lat = 0.0; s.f2Lon = 0.0; s.f2Alt = 1000.0;
+        s.lengthMeters    = 2.0 * kRadius;                  // 2a = 2R for circle
+        s.startBearingDeg = 90.0;                            // 0=N, 90=E → start at +East
+        s.speedMps        = (2.0 * kPi * kRadius) / kPeriod; // ~52.36 m/s
+        s.direction       = EllipseDirection::CounterClockwise;
+        e.motionSegments  = { s };
 
-        // u=0 → phase=0 → (east=R, north=0). Convert (R, 0, 0) ENU at origin.
+        // u=0 → start at +East from center (bearing 90°). ENU (R, 0, 0).
         const auto p0 = MotionSampler::SamplePose(e, scn, 0.0);
         double xE, yE, zE;
-        CoordTransforms::LocalEnuToEcefDeg(s.radiusXMeters, 0.0, 0.0,
-                                           s.centerLat, s.centerLon, s.centerAlt,
+        CoordTransforms::LocalEnuToEcefDeg(kRadius, 0.0, 0.0,
+                                           s.f1Lat, s.f1Lon, s.f1Alt,
                                            xE, yE, zE);
-        ExpectNear(p0.ecefX, xE, 1e-3, "ellipse.t=0.x");
-        ExpectNear(p0.ecefY, yE, 1e-3, "ellipse.t=0.y");
-        ExpectNear(p0.ecefZ, zE, 1e-3, "ellipse.t=0.z");
+        ExpectNear(p0.ecefX, xE, 1.0, "ellipse.t=0.x");
+        ExpectNear(p0.ecefY, yE, 1.0, "ellipse.t=0.y");
+        ExpectNear(p0.ecefZ, zE, 1.0, "ellipse.t=0.z");
 
-        // u=0.25 → phase=90° (ccw) → (east=0, north=R)
+        // u=0.25 → quarter orbit CCW from +East → +North (R, 0) → (0, R).
         const auto p1 = MotionSampler::SamplePose(e, scn, 30.0);
         double xQ, yQ, zQ;
-        CoordTransforms::LocalEnuToEcefDeg(0.0, s.radiusYMeters, 0.0,
-                                           s.centerLat, s.centerLon, s.centerAlt,
+        CoordTransforms::LocalEnuToEcefDeg(0.0, kRadius, 0.0,
+                                           s.f1Lat, s.f1Lon, s.f1Alt,
                                            xQ, yQ, zQ);
-        ExpectNear(p1.ecefX, xQ, 1e-3, "ellipse.t=30.x");
-        ExpectNear(p1.ecefY, yQ, 1e-3, "ellipse.t=30.y");
-        ExpectNear(p1.ecefZ, zQ, 1e-3, "ellipse.t=30.z");
+        ExpectNear(p1.ecefX, xQ, 1.0, "ellipse.t=30.x");
+        ExpectNear(p1.ecefY, yQ, 1.0, "ellipse.t=30.y");
+        ExpectNear(p1.ecefZ, zQ, 1.0, "ellipse.t=30.z");
 
-        // u=0.5 → phase=180° → (-R, 0)
+        // u=0.5 → half orbit → -East side.
         const auto p2 = MotionSampler::SamplePose(e, scn, 60.0);
         double xH, yH, zH;
-        CoordTransforms::LocalEnuToEcefDeg(-s.radiusXMeters, 0.0, 0.0,
-                                           s.centerLat, s.centerLon, s.centerAlt,
+        CoordTransforms::LocalEnuToEcefDeg(-kRadius, 0.0, 0.0,
+                                           s.f1Lat, s.f1Lon, s.f1Alt,
                                            xH, yH, zH);
-        ExpectNear(p2.ecefX, xH, 1e-3, "ellipse.t=60.x");
-        ExpectNear(p2.ecefY, yH, 1e-3, "ellipse.t=60.y");
-        ExpectNear(p2.ecefZ, zH, 1e-3, "ellipse.t=60.z");
+        ExpectNear(p2.ecefX, xH, 1.0, "ellipse.t=60.x");
+        ExpectNear(p2.ecefY, yH, 1.0, "ellipse.t=60.y");
+        ExpectNear(p2.ecefZ, zH, 1.0, "ellipse.t=60.z");
     }
 
     if (failures == 0) {

@@ -4,9 +4,12 @@
 #include "Resource.h"
 #include "HelpAwarePage.h"
 
+#include <cstdint>
+
 struct Entity;
 struct Scenario;
 class  EntityTypeCatalog;
+enum class CoordMode : uint8_t;   // full definition in Scenario.h
 
 class CAssetEntityEditorPage : public CHelpAwarePage
 {
@@ -45,10 +48,17 @@ protected:
     afx_msg void OnKindChanged();
     afx_msg void OnDomainChanged();
     afx_msg void OnCategoryChanged();
+    afx_msg void OnEntityCoordModeChanged();
+    afx_msg void OnEntityPhysOverrideRadio();
+    afx_msg void OnEntitySpeedMultToggle();
+    afx_msg void OnEntityNameChanged();
+    afx_msg void OnEditCatalog();
+    afx_msg void OnInitialSpeedKillFocus();
     afx_msg void OnAddAsset();
     afx_msg void OnDeleteAsset();
     afx_msg void OnDuplicateAsset();
     afx_msg void OnMoveAsset();
+    afx_msg void OnValidateAsset();
     afx_msg void OnAssetTreeSelChanged(NMHDR* pNMHDR, LRESULT* pResult);
 
     DECLARE_MESSAGE_MAP()
@@ -66,6 +76,12 @@ private:
 
     // Load entities[m_selectedEntityIdx] into the controls.
     void LoadActiveEntity();
+
+    // Update the dynamic position label text to match the given coord mode,
+    // and write the appropriate triple from `entity` into the three position
+    // edit controls.
+    void RelabelPositionRow(CoordMode mode);
+    void WriteActivePositionFields(const Entity& entity, CoordMode mode);
 
     const EntityTypeCatalog* m_catalog          = nullptr;
     Scenario*                m_scenario         = nullptr;

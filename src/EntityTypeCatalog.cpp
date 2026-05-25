@@ -97,6 +97,165 @@ const std::vector<CatalogEntry>& EntityTypeCatalog::Subcategories(uint8_t kindId
     return (it == m_subcategoriesByKindDomainCategory.end()) ? m_empty : it->second;
 }
 
+AirframeProfile EntityTypeCatalog::Profile(uint8_t kindId, uint8_t domainId,
+                                           uint8_t categoryId, uint8_t subcategoryId) const
+{
+    // Compatibility shim: look up well-known attribute names in the
+    // Subcategory's attribute map and populate the legacy struct fields.
+    auto it = m_subcategoriesByKindDomainCategory.find({ kindId, domainId, categoryId });
+    if (it == m_subcategoriesByKindDomainCategory.end()) return AirframeProfile{};
+    const CatalogEntry* sub = nullptr;
+    for (const auto& e : it->second)
+        if (e.id == subcategoryId) { sub = &e; break; }
+    if (!sub || sub->attributeValues.empty()) return AirframeProfile{};
+
+    auto getD = [&](const char* key) -> double
+    {
+        auto kv = sub->attributeValues.find(key);
+        if (kv == sub->attributeValues.end() || kv->second.empty()) return 0.0;
+        char* end = nullptr;
+        const double d = std::strtod(kv->second.c_str(), &end);
+        return (end == kv->second.c_str()) ? 0.0 : d;
+    };
+
+    AirframeProfile p;
+    p.valid               = true;
+    p.name                = sub->name;
+    p.lengthM             = getD("LengthMeters");
+    p.wingspanM           = getD("WingspanMeters");
+    p.heightM             = getD("HeightMeters");
+    p.maxSpeedMps         = getD("MaxSpeedMetersPerSecond");
+    p.cruiseSpeedMps      = getD("CruiseSpeedMetersPerSecond");
+    p.stallSpeedMps       = getD("StallSpeedMetersPerSecond");
+    p.neverExceedMps      = getD("NeverExceedSpeedMetersPerSecond");
+    p.maxTaxiMps          = getD("MaxTaxiSpeedMetersPerSecond");
+    p.serviceCeilingM     = getD("ServiceCeilingMeters");
+    p.maxAltM             = getD("MaxAltitudeMeters");
+    p.minAltM             = getD("MinAltitudeMeters");
+    p.maxClimbRateMps     = getD("MaxClimbRateMetersPerSecond");
+    p.normalClimbRateMps  = getD("NormalClimbRateMetersPerSecond");
+    p.maxDescentRateMps   = getD("MaxDescentRateMetersPerSecond");
+    p.normalDescentRateMps= getD("NormalDescentRateMetersPerSecond");
+    p.maxBankDeg          = getD("MaxBankAngleDeg");
+    p.normalBankDeg       = getD("NormalBankAngleDeg");
+    p.maxTurnRateDps      = getD("MaxTurnRateDegPerSec");
+    p.maxPitchDeg         = getD("MaxPitchAngleDeg");
+    p.maxRollRateDps      = getD("MaxRollRateDegPerSec");
+    p.maxG                = getD("MaxG");
+    p.maxAccelMps2        = getD("MaxAccelMetersPerSecond2");
+    p.maxDecelMps2        = getD("MaxDecelMetersPerSecond2");
+    return p;
+}
+
+void EntityTypeCatalog::Clear()
+{
+    m_kinds.clear();
+    m_domainsByKind.clear();
+    m_countries.clear();
+    m_categoriesByKindDomain.clear();
+    m_subcategoriesByKindDomainCategory.clear();
+}
+
+bool EntityTypeCatalog::SaveToIni(const std::wstring& path) const
+{
+    // Delete the existing file so we can write fresh (avoids stale
+    // sections/keys from a smaller-than-current catalog). Then use
+    // WritePrivateProfileString to write each section.
+    ::DeleteFileW(path.c_str());
+
+    auto WriteStr = [&path](const wchar_t* sec, const wchar_t* key, const std::wstring& val)
+    {
+        ::WritePrivateProfileStringW(sec, key, val.c_str(), path.c_str());
+    };
+    auto Widen = [](const std::string& s) -> std::wstring
+    {
+        if (s.empty()) return {};
+        const int n = ::MultiByteToWideChar(CP_UTF8, 0, s.c_str(),
+                                            static_cast<int>(s.size()), nullptr, 0);
+        std::wstring w(n, L'\0');
+        ::MultiByteToWideChar(CP_UTF8, 0, s.c_str(),
+                              static_cast<int>(s.size()), w.data(), n);
+        return w;
+    };
+
+    // [Format]
+    WriteStr(L"Format", L"Version", L"1");
+    WriteStr(L"Format", L"Source",
+             L"SISO-REF-010 subset (ScenarioEditor Catalog Editor)");
+
+    // [Kind.N]
+    for (const auto& k : m_kinds)
+    {
+        wchar_t sec[32]; std::swprintf(sec, 32, L"Kind.%u", k.id);
+        WriteStr(sec, L"Name", Widen(k.name));
+    }
+    // [Domain.K.D]
+    for (const auto& [kid, doms] : m_domainsByKind)
+        for (const auto& d : doms)
+        {
+            wchar_t sec[64]; std::swprintf(sec, 64, L"Domain.%u.%u", kid, d.id);
+            WriteStr(sec, L"Name", Widen(d.name));
+        }
+    // [Country.N]
+    for (const auto& c : m_countries)
+    {
+        wchar_t sec[32]; std::swprintf(sec, 32, L"Country.%u", c.id);
+        WriteStr(sec, L"Name", Widen(c.name));
+    }
+    // [Category.K.D.C] — Name + Attribute.N list
+    for (const auto& [kd, cats] : m_categoriesByKindDomain)
+        for (const auto& c : cats)
+        {
+            wchar_t sec[64]; std::swprintf(sec, 64, L"Category.%u.%u.%u", kd.first, kd.second, c.id);
+            WriteStr(sec, L"Name", Widen(c.name));
+            for (size_t i = 0; i < c.attributeNames.size(); ++i)
+            {
+                wchar_t key[32]; std::swprintf(key, 32, L"Attribute.%zu", i + 1);
+                WriteStr(sec, key, Widen(c.attributeNames[i]));
+            }
+        }
+    // [Subcategory.K.D.C.SC] — Name + attribute values (in the order
+    // the parent Category lists them, so the INI is human-readable).
+    for (const auto& [kdc, subs] : m_subcategoriesByKindDomainCategory)
+    {
+        const uint8_t k = std::get<0>(kdc);
+        const uint8_t d = std::get<1>(kdc);
+        const uint8_t c = std::get<2>(kdc);
+        // Resolve the parent Category for the attribute order.
+        const std::vector<std::string>* order = nullptr;
+        auto catIt = m_categoriesByKindDomain.find({ k, d });
+        if (catIt != m_categoriesByKindDomain.end())
+            for (const auto& ce : catIt->second)
+                if (ce.id == c) { order = &ce.attributeNames; break; }
+
+        for (const auto& s : subs)
+        {
+            wchar_t sec[64]; std::swprintf(sec, 64, L"Subcategory.%u.%u.%u.%u", k, d, c, s.id);
+            WriteStr(sec, L"Name", Widen(s.name));
+            if (order)
+            {
+                for (const auto& key : *order)
+                {
+                    auto kv = s.attributeValues.find(key);
+                    const std::string val = (kv == s.attributeValues.end()) ? "" : kv->second;
+                    WriteStr(sec, std::wstring(Widen(key)).c_str(), Widen(val));
+                }
+            }
+            else
+            {
+                // Fallback (no parent Category): write attributes in
+                // whatever order the map iterates.
+                for (const auto& kv : s.attributeValues)
+                    WriteStr(sec, Widen(kv.first).c_str(), Widen(kv.second));
+            }
+        }
+    }
+
+    // Flush (Windows caches profile writes).
+    ::WritePrivateProfileStringW(nullptr, nullptr, nullptr, path.c_str());
+    return true;
+}
+
 bool EntityTypeCatalog::LoadFromIni(const std::wstring& path)
 {
     m_kinds.clear();
@@ -130,7 +289,36 @@ bool EntityTypeCatalog::LoadFromIni(const std::wstring& path)
     }
 
     int kindCount = 0, domainCount = 0, countryCount = 0,
-        categoryCount = 0, subcategoryCount = 0, skipped = 0;
+        categoryCount = 0, subcategoryCount = 0, airframeCount = 0, skipped = 0;
+
+    // Read all keys from a section as raw UTF-16 chunks. Returns
+    // [key, value] pairs in source order.
+    auto ReadAllKeys = [&path](const wchar_t* sec) -> std::vector<std::pair<std::wstring, std::wstring>>
+    {
+        std::vector<std::pair<std::wstring, std::wstring>> out;
+        std::vector<wchar_t> buf(8192);
+        DWORD got = 0;
+        for (;;)
+        {
+            got = ::GetPrivateProfileSectionW(sec, buf.data(),
+                                              static_cast<DWORD>(buf.size()),
+                                              path.c_str());
+            if (got + 2 < buf.size()) break;
+            buf.resize(buf.size() * 2);
+            if (buf.size() > (1 << 18)) break;
+        }
+        for (DWORD i = 0; i < got; )
+        {
+            const wchar_t* line = buf.data() + i;
+            const size_t len = std::wcslen(line);
+            i += static_cast<DWORD>(len + 1);
+            if (len == 0) continue;
+            const wchar_t* eq = std::wcschr(line, L'=');
+            if (!eq) continue;
+            out.emplace_back(std::wstring(line, eq), std::wstring(eq + 1));
+        }
+        return out;
+    };
 
     for (DWORD i = 0; i < nameLen; )
     {
@@ -138,6 +326,54 @@ bool EntityTypeCatalog::LoadFromIni(const std::wstring& path)
         const size_t len = std::wcslen(sec);
         i += static_cast<DWORD>(len + 1);
         if (len == 0) continue;
+
+        // Legacy [Airframe.k.d.c.sc] sections — migrate to the new
+        // per-Subcategory attribute model. Every non-Name key becomes
+        // an attribute value on Subcategory (k,d,c,sc) AND its name is
+        // appended to Category (k,d,c)'s schema (if not already present).
+        // Subcategory + Category sections always appear earlier in the
+        // INI per our canonical ordering, so lookup is reliable.
+        {
+            int afNum[4] = {};
+            if (ParseSection(sec, L"Airframe", 4, afNum))
+            {
+                const uint8_t k = static_cast<uint8_t>(afNum[0]);
+                const uint8_t d = static_cast<uint8_t>(afNum[1]);
+                const uint8_t c = static_cast<uint8_t>(afNum[2]);
+                const uint16_t sc = static_cast<uint16_t>(afNum[3]);
+
+                // Locate the parent Category and the Subcategory.
+                CatalogEntry* catEntry = nullptr;
+                auto catIt = m_categoriesByKindDomain.find({ k, d });
+                if (catIt != m_categoriesByKindDomain.end())
+                    for (auto& ce : catIt->second)
+                        if (ce.id == c) { catEntry = &ce; break; }
+
+                CatalogEntry* subEntry = nullptr;
+                auto subIt = m_subcategoriesByKindDomainCategory.find({ k, d, c });
+                if (subIt != m_subcategoriesByKindDomainCategory.end())
+                    for (auto& se : subIt->second)
+                        if (se.id == sc) { subEntry = &se; break; }
+
+                if (catEntry && subEntry)
+                {
+                    for (const auto& kv : ReadAllKeys(sec))
+                    {
+                        const std::string key = Narrow(kv.first);
+                        if (key == "Name") continue;
+                        // Append to Category schema if not already there.
+                        bool already = false;
+                        for (const auto& n : catEntry->attributeNames)
+                            if (n == key) { already = true; break; }
+                        if (!already) catEntry->attributeNames.push_back(key);
+                        // Store the value on the Subcategory.
+                        subEntry->attributeValues[key] = Narrow(kv.second);
+                    }
+                }
+                ++airframeCount;
+                continue;
+            }
+        }
 
         const std::wstring name = ReadKey(sec, L"Name", path);
         if (name.empty())
@@ -176,17 +412,54 @@ bool EntityTypeCatalog::LoadFromIni(const std::wstring& path)
         }
         else if (ParseSection(sec, L"Category", 3, numbers))
         {
+            CatalogEntry e;
+            e.id   = static_cast<uint16_t>(numbers[2]);
+            e.name = narrowName;
+            // Pick up explicit schema entries: Attribute.1, Attribute.2, ...
+            // (skip in-order; missing numbers terminate the scan).
+            for (int n = 1; n < 1000; ++n)
+            {
+                wchar_t key[32];
+                std::swprintf(key, 32, L"Attribute.%d", n);
+                const std::wstring v = ReadKey(sec, key, path);
+                if (v.empty()) break;
+                e.attributeNames.push_back(Narrow(v));
+            }
             m_categoriesByKindDomain[{ static_cast<uint8_t>(numbers[0]),
                                        static_cast<uint8_t>(numbers[1]) }]
-                .push_back({ static_cast<uint16_t>(numbers[2]), narrowName });
+                .push_back(std::move(e));
             ++categoryCount;
         }
         else if (ParseSection(sec, L"Subcategory", 4, numbers))
         {
-            m_subcategoriesByKindDomainCategory[{ static_cast<uint8_t>(numbers[0]),
-                                                  static_cast<uint8_t>(numbers[1]),
-                                                  static_cast<uint8_t>(numbers[2]) }]
-                .push_back({ static_cast<uint16_t>(numbers[3]), narrowName });
+            const uint8_t k = static_cast<uint8_t>(numbers[0]);
+            const uint8_t d = static_cast<uint8_t>(numbers[1]);
+            const uint8_t c = static_cast<uint8_t>(numbers[2]);
+            CatalogEntry e;
+            e.id   = static_cast<uint16_t>(numbers[3]);
+            e.name = narrowName;
+            // Any key other than "Name" is an attribute value. The
+            // parent Category's schema is extended to include any
+            // attribute names not already in its list.
+            CatalogEntry* catEntry = nullptr;
+            auto catIt = m_categoriesByKindDomain.find({ k, d });
+            if (catIt != m_categoriesByKindDomain.end())
+                for (auto& ce : catIt->second)
+                    if (ce.id == c) { catEntry = &ce; break; }
+            for (const auto& kv : ReadAllKeys(sec))
+            {
+                const std::string key = Narrow(kv.first);
+                if (key == "Name") continue;
+                e.attributeValues[key] = Narrow(kv.second);
+                if (catEntry)
+                {
+                    bool already = false;
+                    for (const auto& n : catEntry->attributeNames)
+                        if (n == key) { already = true; break; }
+                    if (!already) catEntry->attributeNames.push_back(key);
+                }
+            }
+            m_subcategoriesByKindDomainCategory[{ k, d, c }].push_back(std::move(e));
             ++subcategoryCount;
         }
         else if (std::wcsncmp(sec, L"Format", 6) == 0)
@@ -210,9 +483,9 @@ bool EntityTypeCatalog::LoadFromIni(const std::wstring& path)
 
     sprintf_s(szError, sizeof(szError),
               "EntityTypeCatalog loaded: %d kinds, %d domains, %d countries, "
-              "%d categories, %d subcategories (skipped %d)",
+              "%d categories, %d subcategories, %d airframes (skipped %d)",
               kindCount, domainCount, countryCount,
-              categoryCount, subcategoryCount, skipped);
+              categoryCount, subcategoryCount, airframeCount, skipped);
     LOG(szError);
     return Loaded();
 }

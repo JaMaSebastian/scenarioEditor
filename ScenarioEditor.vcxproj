@@ -86,6 +86,10 @@
       <AdditionalLibraryDirectories>$(ProjectDir)..\open-dis-cpp-master\build\Debug;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>Ws2_32.lib;d2d1.lib;dwrite.lib;OpenDIS7.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <PostBuildEvent>
+      <Command>copy /Y "$(ProjectDir)EntityTypeCatalog.ini" "$(OutDir)EntityTypeCatalog.ini"</Command>
+      <Message>Copying EntityTypeCatalog.ini next to the exe</Message>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
 
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -115,6 +119,10 @@
       <AdditionalLibraryDirectories>$(ProjectDir)..\open-dis-cpp-master\build\Release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>Ws2_32.lib;d2d1.lib;dwrite.lib;OpenDIS7.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <PostBuildEvent>
+      <Command>copy /Y "$(ProjectDir)EntityTypeCatalog.ini" "$(OutDir)EntityTypeCatalog.ini"</Command>
+      <Message>Copying EntityTypeCatalog.ini next to the exe</Message>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
 
   <ItemGroup>
@@ -130,6 +138,8 @@
     <ClInclude Include="src\MotionPathEditorPage.h" />
     <ClInclude Include="src\OutputPlaybackPage.h" />
     <ClInclude Include="src\PreviewPage.h" />
+    <ClInclude Include="src\PreviewCanvas.h" />
+    <ClInclude Include="src\Direct2DContext.h" />
     <ClInclude Include="src\Scenario.h" />
     <ClInclude Include="src\PduBuilder.h" />
     <ClInclude Include="src\UdpSender.h" />
@@ -143,6 +153,9 @@
     <ClInclude Include="src\DisrecReader.h" />
     <ClInclude Include="src\SettingsIO.h" />
     <ClInclude Include="src\Validator.h" />
+    <ClInclude Include="src\FormatUtil.h" />
+    <ClInclude Include="src\CatalogEditorDialog.h" />
+    <ClInclude Include="src\CatalogAddDialog.h" />
     <ClInclude Include="log.h" />
   </ItemGroup>
 
@@ -158,6 +171,10 @@
     <ClCompile Include="src\MotionPathEditorPage.cpp" />
     <ClCompile Include="src\OutputPlaybackPage.cpp" />
     <ClCompile Include="src\PreviewPage.cpp" />
+    <ClCompile Include="src\PreviewCanvas.cpp" />
+    <ClCompile Include="src\CatalogEditorDialog.cpp" />
+    <ClCompile Include="src\CatalogAddDialog.cpp" />
+    <ClCompile Include="src\Direct2DContext.cpp" />
     <ClCompile Include="src\PduBuilder.cpp" />
     <ClCompile Include="src\UdpSender.cpp" />
     <ClCompile Include="src\ScenarioIO.cpp">
