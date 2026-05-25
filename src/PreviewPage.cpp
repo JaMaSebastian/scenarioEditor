@@ -27,7 +27,8 @@ namespace
     // Sample N evenly-spaced points along [0, duration] for FitScenario
     // and the per-entity motion-path cache.
     constexpr size_t kFitSampleCount  = 32;
-    constexpr size_t kPathSampleCount = 96;
+    // (path sampling now lives per-segment inside RebuildPathsCache —
+    // see kLinePts / kEllipsePts there)
 }
 
 BEGIN_MESSAGE_MAP(CPreviewPage, CHelpAwarePage)
@@ -235,6 +236,50 @@ void CPreviewPage::OnFit()
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
 
+void CPreviewPage::PanByPixels(int dxPx, int dyPx)
+{
+    // Screen +x = East (right); screen +y = South (down), so subtract dy
+    // to convert into ENU North (which is screen-up).
+    m_centerEnuE -= dxPx * m_zoomMetersPerPx;
+    m_centerEnuN += dyPx * m_zoomMetersPerPx;
+    RebuildRenderState();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+}
+
+void CPreviewPage::ZoomAtPixel(double factor, int cursorXPx, int cursorYPx)
+{
+    if (factor <= 0.0) return;
+    if (!m_canvas.GetSafeHwnd())
+    {
+        m_zoomMetersPerPx *= factor;
+        if (m_zoomMetersPerPx < 0.001) m_zoomMetersPerPx = 0.001;
+        if (m_zoomMetersPerPx > 1e9)   m_zoomMetersPerPx = 1e9;
+        RebuildRenderState();
+        return;
+    }
+
+    // World point currently under the cursor (canvas coords -> ENU).
+    CRect rc; m_canvas.GetClientRect(&rc);
+    const double w = std::max<LONG>(rc.Width(),  1);
+    const double h = std::max<LONG>(rc.Height(), 1);
+    const double oldZoom = m_zoomMetersPerPx;
+    const double worldE = m_centerEnuE + (cursorXPx - w * 0.5) * oldZoom;
+    const double worldN = m_centerEnuN - (cursorYPx - h * 0.5) * oldZoom;
+
+    // New zoom, clamped.
+    double newZoom = oldZoom * factor;
+    if (newZoom < 0.001) newZoom = 0.001;
+    if (newZoom > 1e9)   newZoom = 1e9;
+    m_zoomMetersPerPx = newZoom;
+
+    // Shift center so the same world point ends up back under the cursor.
+    m_centerEnuE = worldE - (cursorXPx - w * 0.5) * newZoom;
+    m_centerEnuN = worldN + (cursorYPx - h * 0.5) * newZoom;
+
+    RebuildRenderState();
+    m_canvas.Invalidate(FALSE);
+}
+
 void CPreviewPage::OnLabelsToggle()
 {
     m_showLabels = IsDlgButtonChecked(IDC_CHK_PREVIEW_LABELS) == BST_CHECKED;
@@ -278,23 +323,24 @@ void CPreviewPage::RebuildPathsCache()
 {
     m_pathsCache.clear();
     if (!m_scenario) return;
-    const double dur = m_scenario->durationSeconds;
-    if (dur <= 0.0) return;
 
     const size_t n = m_scenario->entities.size();
     m_pathsCache.resize(n);
+
+    // Per-segment-type sample counts. Ellipse needs the most points so the
+    // curve looks smooth; Line is a straight chord so 2 points suffice
+    // (extra points are harmless). Stationary / StopHold contribute one
+    // anchor point (the entity's resting position).
+    constexpr size_t kLinePts       = 2;
+    constexpr size_t kEllipsePts    = 96;
+    constexpr size_t kStaticPts     = 1;
 
     for (size_t i = 0; i < n; ++i)
     {
         const Entity& e = m_scenario->entities[i];
         if (!e.enabled || e.motionSegments.empty()) continue;
 
-        m_pathsCache[i].reserve(kPathSampleCount);
-        for (size_t k = 0; k < kPathSampleCount; ++k)
-        {
-            const double t = dur * static_cast<double>(k)
-                           / static_cast<double>(kPathSampleCount - 1);
-            const SampledPose pose = MotionSampler::SamplePose(e, *m_scenario, t);
+        auto pushEnu = [&](const SampledPose& pose) {
             double east, north, up;
             CoordTransforms::EcefToLocalEnuDeg(
                 pose.ecefX, pose.ecefY, pose.ecefZ,
@@ -302,6 +348,30 @@ void CPreviewPage::RebuildPathsCache()
                 east, north, up);
             m_pathsCache[i].push_back(D2D1::Point2F(
                 static_cast<float>(east), static_cast<float>(north)));
+        };
+
+        for (const MotionSegment& s : e.motionSegments)
+        {
+            if (!s.enabled) continue;
+
+            size_t nPts = kStaticPts;
+            if (s.type == MotionType::Line)    nPts = kLinePts;
+            if (s.type == MotionType::Ellipse) nPts = kEllipsePts;
+
+            for (size_t k = 0; k < nPts; ++k)
+            {
+                const double u = (nPts <= 1)
+                                  ? 0.0
+                                  : static_cast<double>(k) / static_cast<double>(nPts - 1);
+                // geometricMode=true: u ∈ [0,1] traces one full cycle of
+                // the segment's shape (line start→end, or ONE ellipse
+                // revolution), regardless of how many real orbits the
+                // segment's time window contains. This kills the chord-
+                // overlay "thick ring" artifact for many-orbit ellipses.
+                const SampledPose pose = MotionSampler::EvaluateSegment(
+                    s, u, m_scenario, /*geometricMode*/ true);
+                pushEnu(pose);
+            }
         }
     }
 }

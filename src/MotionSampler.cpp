@@ -70,7 +70,8 @@ namespace
 }
 
 SampledPose MotionSampler::EvaluateSegment(const MotionSegment& s, double u,
-                                           const Scenario* scenario)
+                                           const Scenario* scenario,
+                                           bool geometricMode)
 {
     if (u < 0.0) u = 0.0;
     if (u > 1.0) u = 1.0;
@@ -222,7 +223,14 @@ SampledPose MotionSampler::EvaluateSegment(const MotionSegment& s, double u,
 
             // Sweep direction. Clockwise from above = decreasing math angle.
             const double sign = (s.direction == EllipseDirection::Clockwise) ? -1.0 : 1.0;
-            const double theta = theta0 + sign * kTau * (u * segDuration / period);
+            // In geometric mode, u ∈ [0,1] maps to exactly one full
+            // revolution — used by the path renderer so the trace covers
+            // the ellipse once regardless of how many orbits fit in the
+            // segment time window. Otherwise use the time-coupled formula
+            // that respects speed and segment duration.
+            const double theta = geometricMode
+                ? (theta0 + sign * kTau * u)
+                : (theta0 + sign * kTau * (u * segDuration / period));
 
             // Parametric position in ellipse-local frame.
             const double lx = a * std::cos(theta);
@@ -309,9 +317,42 @@ SampledPose MotionSampler::SamplePose(const Entity& entity, const Scenario& scen
     }
 
     const double duration = active->endSecond - active->startSecond;
-    const double u = (duration > 1e-9)
-                     ? (scenarioTimeSec - active->startSecond) / duration
-                     : 0.0;
+    double u = (duration > 1e-9)
+               ? (scenarioTimeSec - active->startSecond) / duration
+               : 0.0;
+
+    // Speed-authoritative Line: when speedMps is set, position advances at
+    // exactly that rate (in ECEF chord distance, close to great-circle for
+    // short segments). The entity arrives at the end point once
+    // speed × elapsed >= distance and HOLDS there until the segment's
+    // endSecond — at which point the segment-selection loop above hands
+    // off to the next segment (or the post-last clamp). This makes the
+    // visible motion match the authored speedMps regardless of how big
+    // the segment's time window is.
+    //
+    // speedMps <= 0 falls back to the legacy duration-based lerp so any
+    // segments authored without a Speed value behave as before.
+    if (active->type == MotionType::Line && active->speedMps > 0.0)
+    {
+        const ResolvedPoint sp = ResolveStart(*active, scn);
+        const ResolvedPoint ep = ResolveEnd(*active, scn);
+        const double dx = ep.x - sp.x;
+        const double dy = ep.y - sp.y;
+        const double dz = ep.z - sp.z;
+        const double dist = std::sqrt(dx*dx + dy*dy + dz*dz);
+        if (dist > 1e-9)
+        {
+            const double elapsed = scenarioTimeSec - active->startSecond;
+            const double traveled = active->speedMps * elapsed;
+            u = traveled / dist;
+            if (u < 0.0) u = 0.0;
+            if (u > 1.0) u = 1.0;
+        }
+        else
+        {
+            u = 0.0;
+        }
+    }
 
     // StopHold = freeze at the end pose of the immediately preceding
     // segment. With no predecessor, fall back to its own start (matches

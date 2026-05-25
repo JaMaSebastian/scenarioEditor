@@ -657,18 +657,16 @@ void CMotionPathEditorPage::CommitLineToSegment(MotionSegment& s)
         s.endHeadingDeg = ReadDoubleText(*this, IDC_EDIT_LINE_END_H, s.endHeadingDeg);
         s.endPitchDeg   = ReadDoubleText(*this, IDC_EDIT_LINE_END_P, s.endPitchDeg);
         s.endRollDeg    = ReadDoubleText(*this, IDC_EDIT_LINE_END_R, s.endRollDeg);
-        // Line uses speedMps too. If the user typed a positive speed,
-        // also recompute endSecond so the segment's duration matches the
-        // requested speed across the start→end distance — keeping the
-        // authored speed in sync with the sampler's distance/duration.
+        // Line uses speedMps. Read it back, but do NOT re-derive endSecond
+        // here. This function runs on routine commits (entity / segment
+        // switching, list refresh, etc.) where the speed field still
+        // holds the previously-loaded value — recomputing endSecond from
+        // it would silently clobber a user-authored End Time. The
+        // speed↔endTime coupling now lives in OnLineSpeedKillFocus so it
+        // only fires when the user actually edits the Speed field.
         const double newSpeed = ReadDoubleText(*this, IDC_EDIT_LINE_SPEED, 0.0);
         if (newSpeed > 0.0)
-        {
             s.speedMps = newSpeed;
-            const double dist = ApproxLineDistanceMeters(s);
-            if (dist > 0.0)
-                s.endSecond = s.startSecond + dist / newSpeed;
-        }
     }
 }
 
@@ -785,8 +783,26 @@ void CMotionPathEditorPage::OnLineSpeedKillFocus()
     GetDlgItemText(IDC_EDIT_LINE_SPEED, t);
     if (t.IsEmpty()) return;
     const double mps = ParseSpeedMps(t);
-    if (!std::isnan(mps))
-        SetDlgItemText(IDC_EDIT_LINE_SPEED, FormatDoubleTrim(mps));
+    if (std::isnan(mps)) return;
+
+    // Re-format the field back as plain m/s (handles Mach / mph / km/h).
+    SetDlgItemText(IDC_EDIT_LINE_SPEED, FormatDoubleTrim(mps));
+
+    // Speed→EndTime coupling: when the user actively edits Speed, slide
+    // End Time so distance = speed × duration stays self-consistent. We
+    // only do this on the kill-focus event (a real user edit), NOT on
+    // routine commits, so a user-authored End Time is preserved when
+    // they bounce between entities / segments.
+    MotionSegment* s = ActiveSegment();
+    if (!s || s->type != MotionType::Line || mps <= 0.0) return;
+    s->speedMps = mps;
+    const double dist = ApproxLineDistanceMeters(*s);
+    if (dist <= 0.0) return;
+    s->endSecond = s->startSecond + dist / mps;
+    SetDlgItemText(IDC_EDIT_SEGMENT_END_TIME, FormatDoubleTrim(s->endSecond));
+    if (CListCtrl* lv = (CListCtrl*)GetDlgItem(IDC_LIST_MOTION_SEGMENTS))
+        if (m_segmentIdx >= 0)
+            lv->SetItemText(m_segmentIdx, 3, FormatDoubleTrim(s->endSecond));
 }
 
 void CMotionPathEditorPage::OnSegmentTimingChanged()

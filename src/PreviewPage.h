@@ -18,6 +18,13 @@ public:
     // Canvas reads this every paint to project entities onto the screen.
     const PreviewRenderState& GetRenderState() const { return m_state; }
 
+    // Pan / zoom inputs from the canvas (left-drag + scroll wheel).
+    // PanByPixels shifts the view by an integer-pixel delta. ZoomAtPixel
+    // anchors the zoom on a specific screen point so the world point
+    // under the cursor stays put.
+    void PanByPixels(int dxPx, int dyPx);
+    void ZoomAtPixel(double factor, int cursorXPx, int cursorYPx);
+
 protected:
     BOOL OnInitDialog() override;
     void GetFieldHelpTable(const FFieldHelp*& outArray, size_t& outCount) const override;

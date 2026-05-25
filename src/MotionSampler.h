@@ -37,6 +37,13 @@ namespace MotionSampler
     // sampler resolve Local-XYZ centers/endpoints to ECEF via the scenario
     // origin; passing nullptr falls back to LatLonAlt / ECEF fields only
     // (older test behavior).
+    //
+    // geometricMode = true makes u parametrize the *geometric* path
+    // (u ∈ [0,1] = one full cycle: start→end for Line, one revolution
+    // for Ellipse), rather than the time-coupled trajectory. Used by
+    // the preview path renderer so the trace covers the shape exactly
+    // once regardless of how many real orbits fit in the segment window.
     SampledPose EvaluateSegment(const MotionSegment& segment, double u,
-                                const Scenario* scenario = nullptr);
+                                const Scenario* scenario = nullptr,
+                                bool geometricMode = false);
 }

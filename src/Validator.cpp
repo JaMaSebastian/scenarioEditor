@@ -176,7 +176,15 @@ namespace
                     const double horiz = std::sqrt((dLat * m_per_deg_lat) * (dLat * m_per_deg_lat)
                                                  + (dLon * m_per_deg_lon) * (dLon * m_per_deg_lon));
                     const double dist  = std::sqrt(horiz * horiz + dAlt * dAlt);
-                    const double speed = (dist / duration) * mult;
+                    // Speed-authoritative: when speedMps is set, MotionSampler
+                    // animates at that rate (entity arrives early + holds),
+                    // so envelope checks must use speedMps as the truth.
+                    // Fall back to dist/duration for segments authored
+                    // without a Speed (legacy behavior).
+                    const double effective = (m.speedMps > 0.0)
+                                              ? m.speedMps
+                                              : (dist / duration);
+                    const double speed = effective * mult;
 
                     char buf[200];
                     if (p.neverExceedMps > 0.0 && speed > p.neverExceedMps) {
@@ -193,8 +201,16 @@ namespace
                         Add(r, Severity::Warning, msub, buf);
                     }
 
-                    // Climb / descent rate.
-                    const double vClimb = dAlt / duration;   // signed
+                    // Climb / descent rate. With speed-authoritative Line,
+                    // the entity traverses the segment in dist/speedMps
+                    // seconds (not the full segment duration), so the
+                    // effective vertical rate is dAlt × speed / dist.
+                    const double travelTime = (m.speedMps > 0.0 && dist > 1e-9)
+                                               ? (dist / m.speedMps)
+                                               : duration;
+                    const double vClimb = (travelTime > 0.0)
+                                           ? (dAlt / travelTime)
+                                           : 0.0;   // signed
                     if (vClimb > 0 && p.maxClimbRateMps > 0.0 && vClimb > p.maxClimbRateMps) {
                         std::snprintf(buf, sizeof(buf),
                                       "%s: Line climb rate %.1f m/s exceeds MaxClimbRate %.1f m/s.",

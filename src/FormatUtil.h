@@ -40,47 +40,65 @@ inline CString FormatDoubleTrim(double v, int maxFractionalDigits = 6)
 
 // Parse a speed input string. Accepts:
 //   "260"        -> 260 m/s
-//   "Mach 1.2"   -> 411.6 m/s
-//   "M 1.2"      -> 411.6
-//   "M1.2"       -> 411.6
-//   "1.2 Mach"   -> 411.6
-//   "1.2M"       -> 411.6  (trailing M, no separator)
-// Case-insensitive. Conversion uses 343 m/s (ISA sea-level speed of sound).
+//   "Mach 1.2"   -> 411.6 m/s     (343 * 1.2, ISA sea level)
+//   "M 1.2"      -> 411.6         (lone "M" treated as Mach)
+//   "600 mph"    -> 268.224       (0.44704 m/s per mph)
+//   "1000 km/h"  -> 277.778       (1 / 3.6 m/s per km/h)
+//   "1000 kph"   -> 277.778       (same; "kph" / "kmh" / "km/h" all accepted)
+// Case-insensitive. Unit detection order: mph -> km/h -> mach -> bare M.
+// (mph and km/h are checked first so their embedded 'm' / 'k' don't trip
+// the Mach shorthand.)
 // Returns NaN if the text can't be parsed as a number.
 inline double ParseSpeedMps(const CString& text)
 {
-    constexpr double kMachToMps = 343.0;   // ISA sea-level
+    constexpr double kMachToMps = 343.0;        // ISA sea-level speed of sound
+    constexpr double kMphToMps  = 0.44704;      // statute mph -> m/s
+    constexpr double kKphToMps  = 1.0 / 3.6;    // km/h -> m/s (~0.27778)
 
     // Narrow + lowercase for parsing.
     CT2A ascii(text);
     if (!ascii.m_psz) return std::nan("");
     std::string buf(ascii.m_psz);
 
-    // Detect a "Mach" or standalone "M" cue anywhere in the string.
-    bool isMach = false;
     std::string lower; lower.reserve(buf.size());
     for (char c : buf) lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-    if (lower.find("mach") != std::string::npos)
+
+    // Pick the multiplier from the unit cue. Order matters: check the
+    // multi-letter unit suffixes BEFORE the bare-M Mach shorthand, since
+    // both "mph" and "kmh" contain an 'm' that the shorthand check would
+    // otherwise interpret as Mach.
+    double multiplier = 1.0;
+    if (lower.find("mph") != std::string::npos)
     {
-        isMach = true;
+        multiplier = kMphToMps;
+    }
+    else if (lower.find("km/h") != std::string::npos ||
+             lower.find("kmh")  != std::string::npos ||
+             lower.find("kph")  != std::string::npos)
+    {
+        multiplier = kKphToMps;
+    }
+    else if (lower.find("mach") != std::string::npos)
+    {
+        multiplier = kMachToMps;
     }
     else
     {
         // Standalone 'm' (not part of another letter). Common forms:
-        // "M 1.2", "M1.2", "1.2M", "1.2 M". Reject if 'm' appears next
-        // to another letter (avoids matching unit suffixes like "mph"
-        // or "mile" if they slip in).
+        // "M 1.2", "M1.2", "1.2M", "1.2 M".
         for (size_t i = 0; i < lower.size(); ++i)
         {
             if (lower[i] != 'm') continue;
             const bool prevIsAlpha = (i > 0 && std::isalpha(static_cast<unsigned char>(lower[i-1])));
             const bool nextIsAlpha = (i+1 < lower.size() &&
                                       std::isalpha(static_cast<unsigned char>(lower[i+1])));
-            if (!prevIsAlpha && !nextIsAlpha) { isMach = true; break; }
+            if (!prevIsAlpha && !nextIsAlpha) { multiplier = kMachToMps; break; }
         }
     }
 
-    // Strip all alphabetic chars and re-parse the residue as a number.
+    // Strip alphabetic chars and re-parse the residue as a number.
+    // (The '/' in "km/h" is non-alpha and survives the strip; strtod
+    // happily stops at it after consuming the leading number.)
     std::string numeric; numeric.reserve(buf.size());
     for (char c : buf)
         if (!std::isalpha(static_cast<unsigned char>(c))) numeric.push_back(c);
@@ -89,5 +107,5 @@ inline double ParseSpeedMps(const CString& text)
     const double n = std::strtod(numeric.c_str(), &end);
     if (end == numeric.c_str()) return std::nan("");
 
-    return isMach ? (n * kMachToMps) : n;
+    return n * multiplier;
 }

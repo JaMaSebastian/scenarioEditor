@@ -32,11 +32,11 @@ namespace
 {
     struct AttrHint { const TCHAR* key; const TCHAR* hint; };
     const AttrHint kHints[] = {
-        { _T("MaxSpeedMetersPerSecond"),         _T("Speed (m/s). Accepts Mach: e.g. \"Mach 1.2\" or \"M 0.8\" (343 m/s @ ISA sea level).") },
-        { _T("CruiseSpeedMetersPerSecond"),      _T("Speed (m/s). Accepts Mach.") },
-        { _T("StallSpeedMetersPerSecond"),       _T("Speed (m/s). Accepts Mach.") },
-        { _T("NeverExceedSpeedMetersPerSecond"), _T("Speed (m/s). Accepts Mach.") },
-        { _T("MaxTaxiSpeedMetersPerSecond"),     _T("Speed (m/s). Accepts Mach.") },
+        { _T("MaxSpeedMetersPerSecond"),         _T("Speed (m/s). Accepts: \"Mach 1.2\" / \"M 0.8\" (x343), \"600 mph\" (x0.44704), \"1000 km/h\" (x0.27778).") },
+        { _T("CruiseSpeedMetersPerSecond"),      _T("Speed (m/s). Accepts Mach / mph / km/h (e.g. \"Mach 0.8\", \"500 mph\", \"800 km/h\").") },
+        { _T("StallSpeedMetersPerSecond"),       _T("Speed (m/s). Accepts Mach / mph / km/h.") },
+        { _T("NeverExceedSpeedMetersPerSecond"), _T("Speed (m/s). Accepts Mach / mph / km/h.") },
+        { _T("MaxTaxiSpeedMetersPerSecond"),     _T("Speed (m/s). Accepts Mach / mph / km/h.") },
         { _T("MaxClimbRateMetersPerSecond"),     _T("Rate (m/s). ft/min input coming in a future version.") },
         { _T("MaxDescentRateMetersPerSecond"),   _T("Rate (m/s). ft/min input coming in a future version.") },
         { _T("NormalClimbRateMetersPerSecond"),  _T("Rate (m/s).") },

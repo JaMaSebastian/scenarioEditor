@@ -28,7 +28,72 @@ BEGIN_MESSAGE_MAP(CPreviewCanvas, CWnd)
     ON_WM_PAINT()
     ON_WM_ERASEBKGND()
     ON_WM_SIZE()
+    ON_WM_LBUTTONDOWN()
+    ON_WM_LBUTTONUP()
+    ON_WM_MOUSEMOVE()
+    ON_WM_MOUSEWHEEL()
+    ON_WM_NCHITTEST()
 END_MESSAGE_MAP()
+
+// We're subclassing a STATIC control, which by default returns HTTRANSPARENT
+// from its hit test — that causes Windows to deliver WM_LBUTTONDOWN /
+// WM_MOUSEWHEEL etc. to the parent dialog instead of to us. Override the
+// hit test to claim the client area so the pan / zoom handlers receive
+// their messages.
+LRESULT CPreviewCanvas::OnNcHitTest(CPoint /*pt*/)
+{
+    return HTCLIENT;
+}
+
+void CPreviewCanvas::OnLButtonDown(UINT nFlags, CPoint pt)
+{
+    SetFocus();           // so the wheel comes to us if the user clicks first
+    m_dragging   = true;
+    m_lastDragPt = pt;
+    SetCapture();
+    CWnd::OnLButtonDown(nFlags, pt);
+}
+
+void CPreviewCanvas::OnLButtonUp(UINT nFlags, CPoint pt)
+{
+    if (m_dragging)
+    {
+        m_dragging = false;
+        ReleaseCapture();
+    }
+    CWnd::OnLButtonUp(nFlags, pt);
+}
+
+void CPreviewCanvas::OnMouseMove(UINT nFlags, CPoint pt)
+{
+    if (m_dragging && m_owner)
+    {
+        const int dx = pt.x - m_lastDragPt.x;
+        const int dy = pt.y - m_lastDragPt.y;
+        m_lastDragPt = pt;
+        if (dx != 0 || dy != 0) m_owner->PanByPixels(dx, dy);
+    }
+    CWnd::OnMouseMove(nFlags, pt);
+}
+
+BOOL CPreviewCanvas::OnMouseWheel(UINT /*nFlags*/, short zDelta, CPoint screenPt)
+{
+    if (!m_owner) return FALSE;
+    // Wheel forward (positive zDelta) = zoom IN (fewer meters per pixel).
+    // 120 ticks per detent → 1.25x per detent feels right.
+    const int detents = zDelta / WHEEL_DELTA;
+    if (detents == 0) return TRUE;
+    const int steps = (detents < 0) ? -detents : detents;
+    double factor = 1.0;
+    for (int i = 0; i < steps; ++i) factor *= 1.25;
+    if (detents > 0) factor = 1.0 / factor;   // forward → divide
+
+    // screenPt is in *screen* coords; OnMouseWheel doesn't pre-translate.
+    CPoint client = screenPt;
+    ScreenToClient(&client);
+    m_owner->ZoomAtPixel(factor, client.x, client.y);
+    return TRUE;
+}
 
 BOOL CPreviewCanvas::OnEraseBkgnd(CDC*)
 {
