@@ -565,6 +565,24 @@ void CScenarioEditorDialog::OnPlaybackStart()
     auto snap = std::make_shared<RuntimeScenarioSnapshot>();
     snap->scenario = m_scenario;          // deep copy (includes OutputConfig)
 
+    // Resolve "speed defaults to airframe cruise" for ellipse orbits that have
+    // no explicit Speed: playback needs a concrete speed to space the
+    // equidistant waypoints. Mutate only the throwaway snapshot copy.
+    {
+        const EntityTypeCatalog& cat = theApp.Catalog();
+        for (Entity& e : snap->scenario.entities)
+        {
+            for (MotionSegment& seg : e.motionSegments)
+            {
+                if (seg.type != MotionType::Ellipse || seg.speedMps > 0.0) continue;
+                const AirframeProfile prof =
+                    cat.Profile(e.kind, e.domain, e.category, e.subcategory);
+                if (prof.valid && prof.cruiseSpeedMps > 0.0)
+                    seg.speedMps = prof.cruiseSpeedMps;
+            }
+        }
+    }
+
     m_pduCount = 0;
     UpdateStatusPduCount();
 

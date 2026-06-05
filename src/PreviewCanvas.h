@@ -18,11 +18,25 @@ struct PreviewEntityPose
     std::string name;
 };
 
+// One pickable ellipse orbit: its sampled ENU polyline plus center (foci
+// midpoint, ENU). Used by the canvas to hit-test "Set Start" clicks in the
+// exact same projection it draws with (so picking is DPI-correct).
+struct PreviewEllipse
+{
+    size_t                      entityIdx = 0;
+    size_t                      segIdx    = 0;
+    std::vector<D2D1_POINT_2F>  enuPts;            // scenario-origin ENU
+    double                      centerE   = 0.0;
+    double                      centerN   = 0.0;
+};
+
 struct PreviewRenderState
 {
     std::vector<PreviewEntityPose>             poses;
     std::vector<std::vector<D2D1_POINT_2F>>    paths;   // per entity, ENU meters
     std::vector<std::vector<D2D1_POINT_2F>>    trails;  // per entity, ENU meters
+    std::vector<D2D1_POINT_2F>                 ellipseStarts; // ENU start point per ellipse segment
+    std::vector<PreviewEllipse>                ellipses;      // pickable orbits (hit-testing)
 
     double  zoomMetersPerPx = 1.0;
     double  centerEnuE      = 0.0;
@@ -59,6 +73,9 @@ private:
     D2D1_POINT_2F ProjectEnu(double e, double n, const PreviewRenderState& s,
                              float canvasW, float canvasH) const;
     ID2D1SolidColorBrush* BrushForForce(uint8_t forceId);
+    // "Set Start" hit-test: pxPt is a physical-pixel client click. Returns true
+    // if it landed within range of an ellipse orbit (and applied the pick).
+    bool PickStartAt(CPoint pxPt);
 
     CPreviewPage*                                 m_owner = nullptr;
 
@@ -68,6 +85,7 @@ private:
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush>  m_brushLabel;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush>  m_brushForce[4]; // Other/Friendly/Opposing/Neutral
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush>  m_brushOutline;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush>  m_brushStart;    // ellipse start markers
     Microsoft::WRL::ComPtr<ID2D1StrokeStyle>      m_dashedStroke;
     Microsoft::WRL::ComPtr<IDWriteTextFormat>     m_textFormat;
     Microsoft::WRL::ComPtr<IDWriteTextFormat>     m_hudTextFormat;

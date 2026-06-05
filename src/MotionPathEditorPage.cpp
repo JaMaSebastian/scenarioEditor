@@ -5,6 +5,7 @@
 #include "ScenarioWorker.h"   // WM_APP_MARK_DIRTY
 #include "Validator.h"
 #include "CoordTransforms.h"
+#include "MotionSampler.h"
 #include "FormatUtil.h"
 
 #include <cmath>
@@ -362,6 +363,8 @@ void CMotionPathEditorPage::SetTypeSpecificVisibility()
         IDC_EDIT_F2_A, IDC_EDIT_F2_B, IDC_EDIT_F2_C,
         IDC_EDIT_LEN, IDC_EDIT_BEARING, IDC_EDIT_SPEED,
         IDC_COMBO_DIR,
+        IDC_LBL_ELLIPSE_START,
+        IDC_EDIT_ELLIPSE_START_A, IDC_EDIT_ELLIPSE_START_B, IDC_EDIT_ELLIPSE_START_C,
         IDC_LBL_ELLIPSE_HINT,
     };
     for (int id : ellipseIds)
@@ -401,19 +404,23 @@ void CMotionPathEditorPage::SetTypeSpecificVisibility()
     {
         const TCHAR* f1Txt = _T("Focus 1 (Lat/Lon/Alt):");
         const TCHAR* f2Txt = _T("Focus 2 (Lat/Lon/Alt):");
+        const TCHAR* stTxt = _T("Start (Lat/Lon/Alt):");
         switch (s->coordMode) {
             case CoordMode::Local:
                 f1Txt = _T("Focus 1 (X/Y/Z m):");
                 f2Txt = _T("Focus 2 (X/Y/Z m):");
+                stTxt = _T("Start (X/Y/Z m):");
                 break;
             case CoordMode::ECEF:
                 f1Txt = _T("Focus 1 (ECEF X/Y/Z):");
                 f2Txt = _T("Focus 2 (ECEF X/Y/Z):");
+                stTxt = _T("Start (ECEF X/Y/Z):");
                 break;
             case CoordMode::LatLonAlt: default: break;
         }
         SetDlgItemText(IDC_LBL_F1, f1Txt);
         SetDlgItemText(IDC_LBL_F2, f2Txt);
+        SetDlgItemText(IDC_LBL_ELLIPSE_START, stTxt);
     }
     if (showLine)
     {
@@ -501,6 +508,38 @@ void CMotionPathEditorPage::LoadEllipseFromSegment(const MotionSegment& s)
 
     if (CComboBox* cb = (CComboBox*)GetDlgItem(IDC_COMBO_DIR))
         cb->SetCurSel(s.direction == EllipseDirection::Clockwise ? 0 : 1);
+
+    // Computed start position (read-only). The exact start is what the sampler
+    // produces at geometric u=0 (theta0 from startBearingDeg). Show it in the
+    // segment's coordMode so it matches the focus fields. Set on the Preview tab.
+    double sa = 0.0, sb = 0.0, sc = 0.0;
+    if (m_scenario)
+    {
+        const SampledPose p = MotionSampler::EvaluateSegment(
+            s, 0.0, m_scenario, /*geometricMode*/ true);
+        switch (s.coordMode)
+        {
+        case CoordMode::Local:
+        {
+            double up;
+            CoordTransforms::EcefToLocalEnuDeg(
+                p.ecefX, p.ecefY, p.ecefZ,
+                m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM,
+                sa, sb, sc);   // East/North/Up → X/Y/Z
+            break;
+        }
+        case CoordMode::ECEF:
+            sa = p.ecefX; sb = p.ecefY; sc = p.ecefZ;
+            break;
+        case CoordMode::LatLonAlt:
+        default:
+            CoordTransforms::EcefToGeodeticDeg(p.ecefX, p.ecefY, p.ecefZ, sa, sb, sc);
+            break;
+        }
+    }
+    WriteDoubleText(*this, IDC_EDIT_ELLIPSE_START_A, sa);
+    WriteDoubleText(*this, IDC_EDIT_ELLIPSE_START_B, sb);
+    WriteDoubleText(*this, IDC_EDIT_ELLIPSE_START_C, sc);
 }
 
 void CMotionPathEditorPage::CommitEllipseToSegment(MotionSegment& s)

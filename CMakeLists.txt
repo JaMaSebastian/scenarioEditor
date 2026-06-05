@@ -27,6 +27,10 @@ add_executable(ScenarioEditor WIN32
     src/MotionPathEditorPage.cpp
     src/OutputPlaybackPage.cpp
     src/PreviewPage.cpp
+    src/PreviewCanvas.cpp
+    src/CatalogEditorDialog.cpp
+    src/CatalogAddDialog.cpp
+    src/Direct2DContext.cpp
     src/PduBuilder.cpp
     src/UdpSender.cpp
     src/ScenarioIO.cpp
@@ -92,9 +96,19 @@ target_include_directories(disrec_roundtrip PRIVATE
 add_executable(validator_test
     tools/validator_test.cpp
     src/Validator.cpp
+    src/EntityTypeCatalog.cpp
+    log.cpp
 )
 target_include_directories(validator_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+# EntityTypeCatalog.cpp pulls in pch.h → MFC, so this console test needs the
+# same MFC-shared/Unicode config as the main app (otherwise afx.h errors on /MD).
+target_compile_definitions(validator_test PRIVATE _AFXDLL UNICODE _UNICODE)
+set_target_properties(validator_test PROPERTIES
+    VS_GLOBAL_UseOfMfc "Dynamic"
+    VS_GLOBAL_CharacterSet "Unicode"
 )
 
 target_include_directories(ScenarioEditor PRIVATE
@@ -115,6 +129,7 @@ target_link_libraries(ScenarioEditor PRIVATE
     Ws2_32
     d2d1
     dwrite
+    winmm
     OpenDIS7
 )
 

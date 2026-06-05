@@ -22,6 +22,7 @@ namespace
         { IDC_CHK_PREVIEW_TRAILS,      _T("Show motion trails behind moving entities."), false },
         { IDC_CHK_PREVIEW_PATHS,       _T("Show configured motion paths."), false },
         { IDC_CHK_PREVIEW_ORIENTATION, _T("Show heading vectors on each entity."), false },
+        { IDC_BTN_PREVIEW_SET_START,   _T("Click, then click an ellipse to set where that entity starts."), false },
     };
 
     // Sample N evenly-spaced points along [0, duration] for FitScenario
@@ -47,6 +48,8 @@ BEGIN_MESSAGE_MAP(CPreviewPage, CHelpAwarePage)
     ON_BN_CLICKED(IDC_CHK_PREVIEW_TRAILS,      &CPreviewPage::OnTrailsToggle)
     ON_BN_CLICKED(IDC_CHK_PREVIEW_PATHS,       &CPreviewPage::OnPathsToggle)
     ON_BN_CLICKED(IDC_CHK_PREVIEW_ORIENTATION, &CPreviewPage::OnOrientationToggle)
+    ON_BN_CLICKED(IDC_BTN_PREVIEW_SET_START,   &CPreviewPage::OnSetStart)
+    ON_WM_DRAWITEM()
 END_MESSAGE_MAP()
 
 void CPreviewPage::GetFieldHelpTable(const FFieldHelp*& outArray, size_t& outCount) const
@@ -309,6 +312,111 @@ void CPreviewPage::OnOrientationToggle()
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
 
+void CPreviewPage::OnSetStart()
+{
+    // Toggle pick mode. While armed, the green "?" shows and the next click on
+    // an ellipse records that entity's start; clicking the button again cancels.
+    m_startPickArmed = !m_startPickArmed;
+    if (CWnd* btn = GetDlgItem(IDC_BTN_PREVIEW_SET_START))
+        btn->Invalidate();   // repaint owner-draw to show/hide the armed "?"
+    if (m_startPickArmed && m_canvas.GetSafeHwnd())
+        ::SetCursor(::LoadCursor(nullptr, IDC_CROSS));
+}
+
+void CPreviewPage::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT lpDIS)
+{
+    if (nIDCtl != IDC_BTN_PREVIEW_SET_START || !lpDIS)
+    {
+        CHelpAwarePage::OnDrawItem(nIDCtl, lpDIS);
+        return;
+    }
+
+    CDC* dc = CDC::FromHandle(lpDIS->hDC);
+    CRect rc = lpDIS->rcItem;
+    const bool pressed = (lpDIS->itemState & ODS_SELECTED) != 0;
+
+    // Button face.
+    dc->DrawFrameControl(&rc, DFC_BUTTON,
+                         DFCS_BUTTONPUSH | (pressed ? DFCS_PUSHED : 0));
+
+    // Label: "Set Start" in the normal button color, plus a trailing green "?"
+    // while a start has not yet been picked (or pick mode is armed).
+    HFONT hf = (HFONT)::SendMessage(lpDIS->hwndItem, WM_GETFONT, 0, 0);
+    CFont* oldFont = hf ? dc->SelectObject(CFont::FromHandle(hf)) : nullptr;
+    const int oldBk = dc->SetBkMode(TRANSPARENT);
+
+    const bool showHint = m_startPickArmed;   // green "?" only while pick mode is active
+    CString base  = _T("Set Start");
+    CString hint  = _T(" ?");
+    const CSize baseSz = dc->GetTextExtent(base);
+    const CSize hintSz = showHint ? dc->GetTextExtent(hint) : CSize(0, 0);
+    const int totalW = baseSz.cx + hintSz.cx;
+
+    if (pressed) rc.OffsetRect(1, 1);   // classic pressed nudge
+    int x = rc.left + (rc.Width()  - totalW) / 2;
+    const int y = rc.top + (rc.Height() - baseSz.cy) / 2;
+
+    const COLORREF oldColor = dc->SetTextColor(::GetSysColor(COLOR_BTNTEXT));
+    dc->TextOut(x, y, base);
+    x += baseSz.cx;
+    if (showHint)
+    {
+        dc->SetTextColor(RGB(0, 160, 0));
+        dc->TextOut(x, y, hint);
+    }
+
+    dc->SetTextColor(oldColor);
+    dc->SetBkMode(oldBk);
+    if (oldFont) dc->SelectObject(oldFont);
+}
+
+void CPreviewPage::ApplyStartPick(size_t entityIdx, size_t segIdx,
+                                  double enuE, double enuN)
+{
+    if (!m_scenario) return;
+    if (entityIdx >= m_scenario->entities.size()) return;
+    Entity& e = m_scenario->entities[entityIdx];
+    if (segIdx >= e.motionSegments.size()) return;
+    MotionSegment& seg = e.motionSegments[segIdx];
+
+    // Ellipse center (foci midpoint, ENU) from the matching pick target.
+    double centerE = 0.0, centerN = 0.0;
+    bool found = false;
+    for (const PreviewEllipse& t : m_ellipseTargets)
+        if (t.entityIdx == entityIdx && t.segIdx == segIdx)
+        {
+            centerE = t.centerE; centerN = t.centerN; found = true; break;
+        }
+    if (!found) return;
+
+    // Compass bearing (0=N, 90=E) from the ellipse center to the snapped point.
+    // Inverse of the sampler's bearing→start-point mapping, so the start lands
+    // where the user clicked.
+    const double vE = enuE - centerE;
+    const double vN = enuN - centerN;
+    double brg = std::atan2(vE, vN) * (180.0 / 3.14159265358979323846);
+    if (brg < 0.0) brg += 360.0;
+    seg.startBearingDeg = brg;
+
+    {
+        char buf[200];
+        sprintf_s(buf, sizeof(buf),
+                  "PreviewPage::ApplyStartPick: entity=%zu seg=%zu bearing=%.2f deg",
+                  entityIdx, segIdx, brg);
+        LOG(buf);
+    }
+
+    // Pick complete: leave pick mode (this hides the green "?") and rebuild so
+    // the start dot + t=0 entity dot move to the picked point.
+    m_startPickArmed = false;
+    if (CWnd* btn = GetDlgItem(IDC_BTN_PREVIEW_SET_START))
+        btn->Invalidate();
+
+    RebuildPathsCache();
+    RebuildRenderState();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+}
+
 void CPreviewPage::UpdateSliderFromTime()
 {
     if (CSliderCtrl* s = (CSliderCtrl*)GetDlgItem(IDC_SLIDER_PREVIEW_TIME))
@@ -322,6 +430,7 @@ void CPreviewPage::UpdateSliderFromTime()
 void CPreviewPage::RebuildPathsCache()
 {
     m_pathsCache.clear();
+    m_ellipseTargets.clear();
     if (!m_scenario) return;
 
     const size_t n = m_scenario->entities.size();
@@ -340,23 +449,29 @@ void CPreviewPage::RebuildPathsCache()
         const Entity& e = m_scenario->entities[i];
         if (!e.enabled || e.motionSegments.empty()) continue;
 
-        auto pushEnu = [&](const SampledPose& pose) {
+        auto enuOf = [&](const SampledPose& pose) -> D2D1_POINT_2F {
             double east, north, up;
             CoordTransforms::EcefToLocalEnuDeg(
                 pose.ecefX, pose.ecefY, pose.ecefZ,
                 m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM,
                 east, north, up);
-            m_pathsCache[i].push_back(D2D1::Point2F(
-                static_cast<float>(east), static_cast<float>(north)));
+            return D2D1::Point2F(static_cast<float>(east), static_cast<float>(north));
         };
 
-        for (const MotionSegment& s : e.motionSegments)
+        for (size_t segIdx = 0; segIdx < e.motionSegments.size(); ++segIdx)
         {
+            const MotionSegment& s = e.motionSegments[segIdx];
             if (!s.enabled) continue;
 
             size_t nPts = kStaticPts;
             if (s.type == MotionType::Line)    nPts = kLinePts;
             if (s.type == MotionType::Ellipse) nPts = kEllipsePts;
+
+            // For ellipse segments, collect this segment's points separately
+            // so the canvas can hit-test individual orbits in "Set Start".
+            PreviewEllipse target;
+            const bool isEllipse = (s.type == MotionType::Ellipse);
+            if (isEllipse) { target.entityIdx = i; target.segIdx = segIdx; }
 
             for (size_t k = 0; k < nPts; ++k)
             {
@@ -370,10 +485,63 @@ void CPreviewPage::RebuildPathsCache()
                 // overlay "thick ring" artifact for many-orbit ellipses.
                 const SampledPose pose = MotionSampler::EvaluateSegment(
                     s, u, m_scenario, /*geometricMode*/ true);
-                pushEnu(pose);
+                const D2D1_POINT_2F pt = enuOf(pose);
+                m_pathsCache[i].push_back(pt);
+                if (isEllipse) target.enuPts.push_back(pt);
+            }
+
+            if (isEllipse && target.enuPts.size() >= 2)
+            {
+                // Ellipse center = foci midpoint, resolved to scenario-origin
+                // ENU (mirrors the sampler's coordMode handling). Used to
+                // invert a clicked orbit point into a start bearing.
+                double f1E, f1N, f2E, f2N;
+                FocusToEnu(s, /*focus2*/ false, f1E, f1N);
+                FocusToEnu(s, /*focus2*/ true,  f2E, f2N);
+                target.centerE = 0.5 * (f1E + f2E);
+                target.centerN = 0.5 * (f1N + f2N);
+                m_ellipseTargets.push_back(std::move(target));
             }
         }
     }
+}
+
+void CPreviewPage::FocusToEnu(const MotionSegment& s, bool focus2,
+                              double& outE, double& outN) const
+{
+    outE = outN = 0.0;
+    if (!m_scenario) return;
+
+    double X = 0.0, Y = 0.0, Z = 0.0;
+    switch (s.coordMode)
+    {
+    case CoordMode::Local:
+        CoordTransforms::LocalEnuToEcefDeg(
+            focus2 ? s.f2LocalX : s.f1LocalX,
+            focus2 ? s.f2LocalY : s.f1LocalY,
+            focus2 ? s.f2LocalZ : s.f1LocalZ,
+            m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM,
+            X, Y, Z);
+        break;
+    case CoordMode::ECEF:
+        X = focus2 ? s.f2EcefX : s.f1EcefX;
+        Y = focus2 ? s.f2EcefY : s.f1EcefY;
+        Z = focus2 ? s.f2EcefZ : s.f1EcefZ;
+        break;
+    default: // LatLonAlt
+        CoordTransforms::GeodeticToEcefDeg(
+            focus2 ? s.f2Lat : s.f1Lat,
+            focus2 ? s.f2Lon : s.f1Lon,
+            focus2 ? s.f2Alt : s.f1Alt,
+            X, Y, Z);
+        break;
+    }
+
+    double up = 0.0;
+    CoordTransforms::EcefToLocalEnuDeg(
+        X, Y, Z,
+        m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM,
+        outE, outN, up);
 }
 
 void CPreviewPage::FitScenario()
@@ -447,6 +615,7 @@ void CPreviewPage::RebuildRenderState()
     m_state.poses.clear();
     m_state.paths.clear();
     m_state.trails.clear();
+    m_state.ellipseStarts.clear();
 
     m_state.zoomMetersPerPx = m_zoomMetersPerPx;
     m_state.centerEnuE      = m_centerEnuE;
@@ -502,4 +671,13 @@ void CPreviewPage::RebuildRenderState()
 
     m_state.paths  = m_pathsCache;
     m_state.trails = m_trails;
+
+    // Pickable orbits for the canvas's "Set Start" hit-test.
+    m_state.ellipses = m_ellipseTargets;
+
+    // Start markers: geometric u=0 (each ellipse target's first point) is the
+    // entity's start on that orbit.
+    for (const PreviewEllipse& t : m_ellipseTargets)
+        if (!t.enuPts.empty())
+            m_state.ellipseStarts.push_back(t.enuPts.front());
 }

@@ -48,6 +48,16 @@ LRESULT CPreviewCanvas::OnNcHitTest(CPoint /*pt*/)
 void CPreviewCanvas::OnLButtonDown(UINT nFlags, CPoint pt)
 {
     SetFocus();           // so the wheel comes to us if the user clicks first
+
+    // "Set Start" pick mode: hit-test the click against ellipse orbits here,
+    // in the same projection we draw with, then record the start instead of
+    // starting a pan.
+    if (m_owner && m_owner->IsStartPickArmed() && PickStartAt(pt))
+    {
+        CWnd::OnLButtonDown(nFlags, pt);
+        return;
+    }
+
     m_dragging   = true;
     m_lastDragPt = pt;
     SetCapture();
@@ -139,6 +149,7 @@ bool CPreviewCanvas::EnsureResources()
     m_rt->CreateSolidColorBrush(MakeRgb(0xCCCCCC), &m_brushGrid);
     m_rt->CreateSolidColorBrush(MakeRgb(0x222222), &m_brushLabel);
     m_rt->CreateSolidColorBrush(MakeRgb(0xFFFFFF), &m_brushOutline);
+    m_rt->CreateSolidColorBrush(MakeRgb(0x00A000), &m_brushStart);   // green
 
     // Force-ID palette: 0 Other, 1 Friendly, 2 Opposing, 3 Neutral
     m_rt->CreateSolidColorBrush(MakeRgb(0x808080), &m_brushForce[0]);
@@ -185,6 +196,7 @@ void CPreviewCanvas::DiscardDeviceResources()
     m_brushGrid.Reset();
     m_brushLabel.Reset();
     m_brushOutline.Reset();
+    m_brushStart.Reset();
     for (auto& b : m_brushForce) b.Reset();
 }
 
@@ -203,6 +215,63 @@ D2D1_POINT_2F CPreviewCanvas::ProjectEnu(double e, double n,
     const float sx = canvasW * 0.5f + static_cast<float>((e - s.centerEnuE) * pxPerMeter);
     const float sy = canvasH * 0.5f - static_cast<float>((n - s.centerEnuN) * pxPerMeter);
     return D2D1::Point2F(sx, sy);
+}
+
+bool CPreviewCanvas::PickStartAt(CPoint pxPt)
+{
+    if (!m_owner || !m_rt) return false;
+    const PreviewRenderState& s = m_owner->GetRenderState();
+    if (s.ellipses.empty()) return false;
+
+    // Project in DIP space (what ProjectEnu/Render use), and convert the
+    // physical-pixel click into DIPs so the two match on scaled displays.
+    const D2D1_SIZE_F dip = m_rt->GetSize();
+    if (dip.width <= 0.0f || dip.height <= 0.0f) return false;
+    CRect rc; GetClientRect(&rc);
+    const double scaleX = (rc.Width()  > 0) ? rc.Width()  / dip.width  : 1.0;
+    const double scaleY = (rc.Height() > 0) ? rc.Height() / dip.height : 1.0;
+    const double clickX = pxPt.x / scaleX;
+    const double clickY = pxPt.y / scaleY;
+
+    // Snap radius: 50 physical px expressed in DIPs.
+    const double hitDip = 50.0 / ((scaleX > 0.0) ? scaleX : 1.0);
+    double bestDist2 = hitDip * hitDip;
+
+    const PreviewEllipse* bestEll = nullptr;
+    double bestE = 0.0, bestN = 0.0;
+
+    for (const PreviewEllipse& el : s.ellipses)
+    {
+        if (el.enuPts.size() < 2) continue;
+        D2D1_POINT_2F a = ProjectEnu(el.enuPts[0].x, el.enuPts[0].y, s, dip.width, dip.height);
+        for (size_t k = 1; k < el.enuPts.size(); ++k)
+        {
+            const D2D1_POINT_2F b =
+                ProjectEnu(el.enuPts[k].x, el.enuPts[k].y, s, dip.width, dip.height);
+
+            // Closest point on segment (a,b) to the DIP click.
+            const double abx = b.x - a.x, aby = b.y - a.y;
+            const double apx = clickX - a.x, apy = clickY - a.y;
+            const double len2 = abx * abx + aby * aby;
+            double u = (len2 > 0.0) ? (apx * abx + apy * aby) / len2 : 0.0;
+            if (u < 0.0) u = 0.0; else if (u > 1.0) u = 1.0;
+            const double cx = a.x + u * abx, cy = a.y + u * aby;
+            const double dx = cx - clickX, dy = cy - clickY;
+            const double d2 = dx * dx + dy * dy;
+            if (d2 < bestDist2)
+            {
+                bestDist2 = d2;
+                bestEll   = &el;
+                bestE = el.enuPts[k - 1].x + u * (el.enuPts[k].x - el.enuPts[k - 1].x);
+                bestN = el.enuPts[k - 1].y + u * (el.enuPts[k].y - el.enuPts[k - 1].y);
+            }
+            a = b;
+        }
+    }
+
+    if (!bestEll) return false;   // nothing within snap range
+    m_owner->ApplyStartPick(bestEll->entityIdx, bestEll->segIdx, bestE, bestN);
+    return true;
 }
 
 void CPreviewCanvas::OnPaint()
@@ -295,6 +364,18 @@ void CPreviewCanvas::Render(const PreviewRenderState& state)
                 prev = cur;
             }
             b->SetOpacity(oldA);
+        }
+    }
+
+    // Ellipse start markers: a filled green dot where each orbit begins.
+    if (state.showPaths && m_brushStart)
+    {
+        for (const D2D1_POINT_2F& startEnu : state.ellipseStarts)
+        {
+            const D2D1_POINT_2F sp = ProjectEnu(startEnu.x, startEnu.y, state, w, h);
+            D2D1_ELLIPSE dot = D2D1::Ellipse(sp, 5.0f, 5.0f);
+            m_rt->FillEllipse(dot, m_brushStart.Get());
+            m_rt->DrawEllipse(dot, m_brushOutline.Get(), 1.5f);  // white rim for contrast
         }
     }
 

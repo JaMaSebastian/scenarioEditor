@@ -184,6 +184,7 @@
 #define IDC_CHK_PREVIEW_TRAILS          1510
 #define IDC_CHK_PREVIEW_PATHS           1511
 #define IDC_CHK_PREVIEW_ORIENTATION     1512
+#define IDC_BTN_PREVIEW_SET_START       1513
 
 // Motion Path Editor — Ellipse fields (two-foci + length + speed +
 // start-bearing form).
@@ -260,6 +261,12 @@
 #define IDC_LBL_LINE_HINT               1626
 #define IDC_LBL_LINE_SPEED              1627
 #define IDC_EDIT_LINE_SPEED             1628
+
+// Motion Path Editor — Ellipse start-position readout (computed from bearing).
+#define IDC_LBL_ELLIPSE_START           1630
+#define IDC_EDIT_ELLIPSE_START_A        1631
+#define IDC_EDIT_ELLIPSE_START_B        1632
+#define IDC_EDIT_ELLIPSE_START_C        1633
 
 // Catalog Editor (IDD_CATALOG_EDITOR) — wireframe pass IDs.
 #define IDC_BTN_EDIT_CATALOG            1800

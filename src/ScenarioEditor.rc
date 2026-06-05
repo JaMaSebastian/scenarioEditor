@@ -409,7 +409,12 @@ BEGIN
     LTEXT           "Speed (m/s):",IDC_LBL_SPD,300,316,48,10
     EDITTEXT        IDC_EDIT_SPEED,350,314,58,12,ES_AUTOHSCROLL
 
-    LTEXT           "F1 = F2 yields a circle (radius = Length/2). Bearing measured from center: 0=N, 90=E, 180=S, 270=W. Speed defaults to airframe cruise.",IDC_LBL_ELLIPSE_HINT,22,344,650,10
+    LTEXT           "Start (X/Y/Z m):",IDC_LBL_ELLIPSE_START,22,332,40,10
+    EDITTEXT        IDC_EDIT_ELLIPSE_START_A,64,330,72,12,ES_AUTOHSCROLL | ES_READONLY
+    EDITTEXT        IDC_EDIT_ELLIPSE_START_B,142,330,72,12,ES_AUTOHSCROLL | ES_READONLY
+    EDITTEXT        IDC_EDIT_ELLIPSE_START_C,220,330,72,12,ES_AUTOHSCROLL | ES_READONLY
+
+    LTEXT           "F1 = F2 yields a circle (radius = Length/2). Bearing measured from center: 0=N, 90=E, 180=S, 270=W. Speed defaults to airframe cruise. Start is computed from the bearing (set it on the Preview tab).",IDC_LBL_ELLIPSE_HINT,22,348,650,10
 
     // ---- Line / Stationary / StopHold parameter group: visible only when
     //      Motion Type = Line (both rows) or Stationary/StopHold (Start row).
@@ -508,6 +513,7 @@ BEGIN
     CONTROL         "Show Paths",IDC_CHK_PREVIEW_PATHS,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,540,114,80,12
     CONTROL         "Show Orientation Vectors",IDC_CHK_PREVIEW_ORIENTATION,
                     "Button",BS_AUTOCHECKBOX | WS_TABSTOP,540,128,130,12
+    PUSHBUTTON      "Set Start",IDC_BTN_PREVIEW_SET_START,540,148,80,16,BS_OWNERDRAW
     LTEXT           "Time:",IDC_STATIC,6,374,30,10
     CONTROL         "",IDC_SLIDER_PREVIEW_TIME,"msctls_trackbar32",TBS_AUTOTICKS | WS_TABSTOP,38,372,600,16
 END
