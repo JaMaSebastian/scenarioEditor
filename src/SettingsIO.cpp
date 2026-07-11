@@ -93,6 +93,47 @@ bool SettingsIO::Load(Settings& out, const std::wstring& path)
 
     out.lastScenarioPath = Narrow(ReadStr(L"Paths", L"LastScenario", L"", path));
 
+    // [Deploy] ColumnWidths — comma-separated pixel widths.
+    out.deployColumnWidths.clear();
+    {
+        const std::wstring csv = ReadStr(L"Deploy", L"ColumnWidths", L"", path);
+        size_t start = 0;
+        while (start <= csv.size() && !csv.empty())
+        {
+            const size_t comma = csv.find(L',', start);
+            const std::wstring tok =
+                csv.substr(start, comma == std::wstring::npos ? std::wstring::npos : comma - start);
+            if (!tok.empty())
+                out.deployColumnWidths.push_back(_wtoi(tok.c_str()));
+            if (comma == std::wstring::npos) break;
+            start = comma + 1;
+        }
+    }
+
+    // [Places] — named map locations: Count + PlaceN=<lat>|<lon>|<label>.
+    out.mapPlaces.clear();
+    {
+        const int count = static_cast<int>(ReadInt(L"Places", L"Count", 0, path));
+        for (int i = 0; i < count; ++i)
+        {
+            wchar_t key[24]; swprintf_s(key, L"Place%d", i);
+            const std::wstring v = ReadStr(L"Places", key, L"", path);
+            if (v.empty()) continue;
+            const size_t p1 = v.find(L'|');
+            const size_t p2 = (p1 == std::wstring::npos) ? p1 : v.find(L'|', p1 + 1);
+            if (p1 == std::wstring::npos || p2 == std::wstring::npos) continue;
+            MapPlace mp;
+            mp.lat   = _wtof(v.substr(0, p1).c_str());
+            mp.lon   = _wtof(v.substr(p1 + 1, p2 - p1 - 1).c_str());
+            mp.label = Narrow(v.substr(p2 + 1));
+            // Altitude in a parallel key so the pipe format stays backward
+            // compatible (old files have no Alt key -> 0).
+            wchar_t akey[28]; swprintf_s(akey, L"Place%dAlt", i);
+            mp.alt   = _wtof(ReadStr(L"Places", akey, L"0", path).c_str());
+            if (!mp.label.empty()) out.mapPlaces.push_back(std::move(mp));
+        }
+    }
+
     sprintf_s(szError, sizeof(szError),
               "SettingsIO::Load read %s (window %dx%d at %d,%d max=%d)",
               Narrow(path).c_str(),
@@ -118,6 +159,35 @@ bool SettingsIO::Save(const Settings& s, const std::wstring& path)
     ok &= WriteInt(L"Window", L"Height",        s.windowHeight,       tmp);
     ok &= WriteInt(L"Window", L"Maximized",     s.windowMaximized ? 1 : 0, tmp);
     ok &= WriteStr(L"Paths",  L"LastScenario",  Widen(s.lastScenarioPath).c_str(), tmp);
+
+    if (!s.deployColumnWidths.empty())
+    {
+        std::wstring csv;
+        for (size_t i = 0; i < s.deployColumnWidths.size(); ++i)
+        {
+            if (i) csv += L',';
+            wchar_t b[16]; swprintf_s(b, L"%d", s.deployColumnWidths[i]);
+            csv += b;
+        }
+        ok &= WriteStr(L"Deploy", L"ColumnWidths", csv.c_str(), tmp);
+    }
+
+    // [Places] — named map locations.
+    ok &= WriteInt(L"Places", L"Count", static_cast<long long>(s.mapPlaces.size()), tmp);
+    for (size_t i = 0; i < s.mapPlaces.size(); ++i)
+    {
+        const MapPlace& mp = s.mapPlaces[i];
+        wchar_t key[24]; swprintf_s(key, L"Place%zu", i);
+        std::wstring val;
+        wchar_t num[64];
+        swprintf_s(num, L"%.8f|%.8f|", mp.lat, mp.lon);
+        val = num;
+        val += Widen(mp.label);
+        ok &= WriteStr(L"Places", key, val.c_str(), tmp);
+        wchar_t akey[28]; swprintf_s(akey, L"Place%zuAlt", i);
+        wchar_t anum[48]; swprintf_s(anum, L"%.3f", mp.alt);
+        ok &= WriteStr(L"Places", akey, anum, tmp);
+    }
 
     // Flush WPP's internal cache so the tmp file is fully on disk before
     // the rename.

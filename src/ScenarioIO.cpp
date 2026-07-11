@@ -313,6 +313,48 @@ ScenarioIO::Result ScenarioIO::Save(const Scenario& scenario,
     WriteDouble(L"Origin", L"LongitudeDeg",   scenario.originLonDeg, path);
     WriteDouble(L"Origin", L"AltitudeMeters", scenario.originAltM, path);
 
+    // ---- [Level] terrain overlay (optional; consumed by the Preview tab) ----
+    // Only emitted when enabled so vanilla scenarios stay free of the section.
+    if (scenario.level.enabled)
+    {
+        WriteInt   (L"Level", L"Enabled",        1, path);
+        WriteStr   (L"Level", L"Name",           Widen(scenario.level.name), path);
+        WriteDouble(L"Level", L"SeaLevelMeters", scenario.level.seaLevelMeters, path);
+
+        auto writeRect = [&](const wchar_t* sec, const LevelRect& r)
+        {
+            WriteInt   (sec, L"Enabled",        r.enabled ? 1 : 0, path);
+            WriteDouble(sec, L"EastMinMeters",  r.eastMinM,  path);
+            WriteDouble(sec, L"EastMaxMeters",  r.eastMaxM,  path);
+            WriteDouble(sec, L"NorthMinMeters", r.northMinM, path);
+            WriteDouble(sec, L"NorthMaxMeters", r.northMaxM, path);
+        };
+        writeRect(L"Level.Land",  scenario.level.land);
+        writeRect(L"Level.Ocean", scenario.level.ocean);
+
+        // Named sub-regions as indexed [Level.Zone<i>] sections.
+        WriteInt(L"Level", L"ZoneCount",
+                 static_cast<long long>(scenario.level.zones.size()), path);
+        for (size_t i = 0; i < scenario.level.zones.size(); ++i)
+        {
+            const LevelZone& z = scenario.level.zones[i];
+            wchar_t sec[32];
+            swprintf_s(sec, L"Level.Zone%u", static_cast<unsigned>(i));
+            wchar_t color[16];
+            swprintf_s(color, L"0x%06X", z.colorRgb & 0xFFFFFFu);
+
+            WriteInt   (sec, L"Enabled",         z.enabled ? 1 : 0,  path);
+            WriteStr   (sec, L"Name",            Widen(z.name),      path);
+            WriteDouble(sec, L"EastMinMeters",   z.eastMinM,         path);
+            WriteDouble(sec, L"EastMaxMeters",   z.eastMaxM,         path);
+            WriteDouble(sec, L"NorthMinMeters",  z.northMinM,        path);
+            WriteDouble(sec, L"NorthMaxMeters",  z.northMaxM,        path);
+            WriteDouble(sec, L"HeightMinMeters", z.heightMinMeters,  path);
+            WriteDouble(sec, L"HeightMaxMeters", z.heightMaxMeters,  path);
+            WriteStr   (sec, L"ColorRGB",        color,              path);
+        }
+    }
+
     for (const Entity& e : scenario.entities)
     {
         const std::wstring sec = EntitySection(e.entityId);
@@ -431,6 +473,7 @@ ScenarioIO::Result ScenarioIO::Save(const Scenario& scenario,
             WriteDouble(M, L"StartBearingDeg",      m.startBearingDeg, path);
             WriteDouble(M, L"SpeedMetersPerSecond", m.speedMps, path);
             WriteStr   (M, L"Direction",            DirectionName(m.direction), path);
+            WriteInt   (M, L"FollowTargetEntityID", m.followEntityId, path);
 
             WriteStr   (M, L"Description",     Widen(m.description), path);
         }
@@ -501,6 +544,49 @@ ScenarioIO::Result ScenarioIO::Load(Scenario& s, const std::wstring& path)
     s.originLatDeg = ReadDouble(L"Origin", L"LatitudeDeg",    s.originLatDeg, path);
     s.originLonDeg = ReadDouble(L"Origin", L"LongitudeDeg",   s.originLonDeg, path);
     s.originAltM   = ReadDouble(L"Origin", L"AltitudeMeters", s.originAltM,   path);
+
+    // ---- [Level] terrain overlay (absent in vanilla scenarios → stays off) ----
+    s.level.enabled = ReadInt(L"Level", L"Enabled", s.level.enabled ? 1 : 0, path) != 0;
+    s.level.name    = Narrow(ReadStr(L"Level", L"Name", Widen(s.level.name).c_str(), path));
+    s.level.seaLevelMeters =
+        ReadDouble(L"Level", L"SeaLevelMeters", s.level.seaLevelMeters, path);
+
+    auto readRect = [&](const wchar_t* sec, LevelRect& r)
+    {
+        r.enabled   = ReadInt(sec, L"Enabled", r.enabled ? 1 : 0, path) != 0;
+        r.eastMinM  = ReadDouble(sec, L"EastMinMeters",  r.eastMinM,  path);
+        r.eastMaxM  = ReadDouble(sec, L"EastMaxMeters",  r.eastMaxM,  path);
+        r.northMinM = ReadDouble(sec, L"NorthMinMeters", r.northMinM, path);
+        r.northMaxM = ReadDouble(sec, L"NorthMaxMeters", r.northMaxM, path);
+    };
+    readRect(L"Level.Land",  s.level.land);
+    readRect(L"Level.Ocean", s.level.ocean);
+
+    // Named sub-regions ([Level.Zone<i>]); ZoneCount in [Level] bounds the scan.
+    s.level.zones.clear();
+    const long long zoneCount = ReadInt(L"Level", L"ZoneCount", 0, path);
+    for (long long i = 0; i < zoneCount; ++i)
+    {
+        wchar_t sec[32];
+        swprintf_s(sec, L"Level.Zone%u", static_cast<unsigned>(i));
+
+        LevelZone z;
+        z.enabled         = ReadInt(sec, L"Enabled", 1, path) != 0;
+        z.name            = Narrow(ReadStr(sec, L"Name", L"", path));
+        z.eastMinM        = ReadDouble(sec, L"EastMinMeters",   z.eastMinM,        path);
+        z.eastMaxM        = ReadDouble(sec, L"EastMaxMeters",   z.eastMaxM,        path);
+        z.northMinM       = ReadDouble(sec, L"NorthMinMeters",  z.northMinM,       path);
+        z.northMaxM       = ReadDouble(sec, L"NorthMaxMeters",  z.northMaxM,       path);
+        z.heightMinMeters = ReadDouble(sec, L"HeightMinMeters", z.heightMinMeters, path);
+        z.heightMaxMeters = ReadDouble(sec, L"HeightMaxMeters", z.heightMaxMeters, path);
+        // ColorRGB is "0xRRGGBB"; wcstoul with base 16 accepts the 0x prefix.
+        const std::wstring colorStr = ReadStr(sec, L"ColorRGB", L"", path);
+        if (!colorStr.empty())
+            z.colorRgb = static_cast<uint32_t>(
+                std::wcstoul(colorStr.c_str(), nullptr, 16)) & 0xFFFFFFu;
+
+        s.level.zones.push_back(std::move(z));
+    }
 
     // Discover Entity.* sections. GetPrivateProfileSectionNames returns a
     // double-null-terminated list of names.
@@ -669,6 +755,7 @@ ScenarioIO::Result ScenarioIO::Load(Scenario& s, const std::wstring& path)
             m.speedMps       = ReadDouble(M, L"SpeedMetersPerSecond", 0.0, path);
             m.direction      = ParseDirection(ReadStr(M, L"Direction", L"Clockwise", path),
                                               EllipseDirection::Clockwise);
+            m.followEntityId = static_cast<int>(ReadInt(M, L"FollowTargetEntityID", -1, path));
 
             m.description    = Narrow(ReadStr(M, L"Description", L"", path));
 

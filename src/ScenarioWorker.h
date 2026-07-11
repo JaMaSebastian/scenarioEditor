@@ -19,10 +19,14 @@
 //   PROGRESS: wParam = scenarioTimeMs, lParam = total PDUs sent
 //   ERROR:    wParam = error code (per-source)
 //   MARK_DIRTY: posted by child pages after a scenario-mutating action
+//   REFRESH_UI: like MARK_DIRTY, but also reloads every page's controls from
+//               the shared Scenario (e.g. the Preview tab dragged an entity's
+//               start location and the Asset/Motion tabs must re-read it).
 #define WM_APP_PLAYBACK_STATUS   (WM_APP + 100)
 #define WM_APP_PLAYBACK_PROGRESS (WM_APP + 101)
 #define WM_APP_PLAYBACK_ERROR    (WM_APP + 102)
 #define WM_APP_MARK_DIRTY        (WM_APP + 110)
+#define WM_APP_REFRESH_UI        (WM_APP + 111)
 
 // Spec §19.5
 enum class PlaybackState : int

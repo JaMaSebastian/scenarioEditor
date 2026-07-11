@@ -93,6 +93,8 @@ namespace
             }
             const bool eligible =
                 (enabledCount == 1 && onlyEll != nullptr &&
+                 onlyEll->followEntityId < 0 &&   // Entity Ellipse: center moves;
+                                                  // needs per-tick SamplePose
                  onlyEll->startSecond <= tr.windowStart + 1e-9 &&
                  onlyEll->endSecond   >= tr.windowEnd   - 1e-9);
 

@@ -21,9 +21,14 @@
 #define IDD_OUTPUT_PLAYBACK_PAGE        204
 #define AFX_IDC_PRINT_PAGENUM           204
 #define IDD_PREVIEW_PAGE                205
+#define IDD_ATTRIBUTES_DIALOG           206
+#define IDD_PLAYS_PAGE                  207
+#define IDD_DEPLOY_PAGE                 208
 #define IDD_CATALOG_EDITOR              210
 #define IDD_CATALOG_ADD                 211
 #define IDD_PROMPT_NAME                 212
+#define IDD_ENTITY_PICKER               213
+#define IDD_ADD_PLACE                   214
 #define IDS_APP_TITLE                   300
 #define IDS_STATE_IDLE                  301
 #define IDS_TIME_DEFAULT                302
@@ -171,6 +176,8 @@
 #define IDC_BTN_RECORDING_BROWSE        1425
 #define IDC_EDIT_REPLAY_PATH            1426
 #define IDC_BTN_REPLAY_BROWSE           1427
+#define IDC_STATIC_GROUP_DIS            1428
+#define IDC_BTN_ATTRIBUTES              1429
 #define IDC_STATIC_PREVIEW_CANVAS       1500
 #define IDC_BTN_PREVIEW_START           1501
 #define IDC_BTN_PREVIEW_PAUSE           1502
@@ -185,6 +192,11 @@
 #define IDC_CHK_PREVIEW_PATHS           1511
 #define IDC_CHK_PREVIEW_ORIENTATION     1512
 #define IDC_BTN_PREVIEW_SET_START       1513
+#define IDC_CHK_PREVIEW_TERRAIN         1514
+#define IDC_CHK_PREVIEW_LEGEND          1515
+#define IDC_COMBO_PREVIEW_SPEED         1516
+#define IDC_CHK_PREVIEW_DESTTIME        1517
+#define IDC_LIST_PREVIEW_DESTTIME       1518
 
 // Motion Path Editor — Ellipse fields (two-foci + length + speed +
 // start-bearing form).
@@ -288,6 +300,22 @@
 #define IDC_BTN_DELETE_ATTRIBUTE        1822
 #define IDC_LBL_CATALOG_HINT            1823
 
+// Attributes notebook (IDD_ATTRIBUTES_DIALOG) — hosts the Scenario Setup,
+// Asset/Entity Editor, and Motion Path Editor pages in their own modal window.
+#define IDC_ATTR_TABCTRL               1601
+
+// Plays tab — accordion of collapsible category panels. Header (category)
+// buttons live in the HEADER id range, subcategory buttons in the ITEM range;
+// both ranges are contiguous so CPlaysPage can catch them with ON_COMMAND_RANGE.
+#define IDC_PLAYS_HEADER_FIRST         1700
+#define IDC_PLAYS_HEADER_LAST          1709
+#define IDC_PLAYS_ITEM_FIRST           1710
+#define IDC_PLAYS_ITEM_LAST            1749
+#define IDC_PLAYS_SCROLLBAR            1750
+
+// Deploy tab — owner-drawn report list of deployable resources.
+#define IDC_LIST_DEPLOY                1751
+
 // Secondary "Add Catalog Node" dialog (IDD_CATALOG_ADD).
 #define IDC_COMBO_ADD_TYPE              1860
 #define IDC_LBL_ADD_ID                  1861
@@ -297,6 +325,17 @@
 #define IDC_LBL_ADD_BREADCRUMB          1865
 #define IDC_LBL_PROMPT                  1866
 #define IDC_EDIT_PROMPT                 1867
+#define IDC_COMBO_TARGET_ENTITY         1868
+#define IDC_COMBO_MAP_LAYER             1869
+#define IDC_COMBO_MAP_PLACE             1870
+#define IDC_BTN_MAP_ADDPLACE            1871
+#define IDC_BTN_MAP_DELPLACE            1872
+#define IDC_EDIT_PLACE_LABEL            1873
+#define IDC_EDIT_PLACE_LAT              1874
+#define IDC_EDIT_PLACE_LON              1875
+#define IDC_CHK_MAP_MOVE_ENTITIES       1876
+#define IDC_BTN_MAP_CAPTURE             1877
+#define IDC_EDIT_PLACE_ALT              1878
 
 #define AFX_IDC_TAB_CONTROL             0x3020
 #define ID_APPLY_NOW                    0x3021
@@ -379,6 +418,7 @@
 #define ID_TOOLS_RECORD                 32070
 #define ID_TOOLS_REPLAY_FILE            32071
 #define ID_TOOLS_SEND_LIVE              32072
+#define ID_TOOLS_OPEN_ATTRIBUTES        32090
 #define ID_TB_LOOP_HOST                 32073
 #define ID_TB_SPEED_HOST                32074
 #define ID_TB_HELP_TOGGLE               32075
@@ -833,7 +873,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        310
 #define _APS_NEXT_COMMAND_VALUE         32100
-#define _APS_NEXT_CONTROL_VALUE         1601
+#define _APS_NEXT_CONTROL_VALUE         1879
 #define _APS_NEXT_SYMED_VALUE           34000
 #endif
 #endif

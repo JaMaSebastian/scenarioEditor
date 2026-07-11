@@ -36,6 +36,9 @@
     <ClInclude Include="src\AssetEntityEditorPage.h"><Filter>Header Files\Pages</Filter></ClInclude>
     <ClInclude Include="src\MotionPathEditorPage.h"><Filter>Header Files\Pages</Filter></ClInclude>
     <ClInclude Include="src\OutputPlaybackPage.h"><Filter>Header Files\Pages</Filter></ClInclude>
+    <ClInclude Include="src\AttributesDialog.h"><Filter>Header Files\Pages</Filter></ClInclude>
+    <ClInclude Include="src\PlaysPage.h"><Filter>Header Files\Pages</Filter></ClInclude>
+    <ClInclude Include="src\DeployPage.h"><Filter>Header Files\Pages</Filter></ClInclude>
     <ClInclude Include="src\PreviewPage.h"><Filter>Header Files\Pages</Filter></ClInclude>
     <ClInclude Include="src\Scenario.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\PduBuilder.h"><Filter>Header Files</Filter></ClInclude>
@@ -61,6 +64,9 @@
     <ClCompile Include="src\AssetEntityEditorPage.cpp"><Filter>Source Files\Pages</Filter></ClCompile>
     <ClCompile Include="src\MotionPathEditorPage.cpp"><Filter>Source Files\Pages</Filter></ClCompile>
     <ClCompile Include="src\OutputPlaybackPage.cpp"><Filter>Source Files\Pages</Filter></ClCompile>
+    <ClCompile Include="src\AttributesDialog.cpp"><Filter>Source Files\Pages</Filter></ClCompile>
+    <ClCompile Include="src\PlaysPage.cpp"><Filter>Source Files\Pages</Filter></ClCompile>
+    <ClCompile Include="src\DeployPage.cpp"><Filter>Source Files\Pages</Filter></ClCompile>
     <ClCompile Include="src\PreviewPage.cpp"><Filter>Source Files\Pages</Filter></ClCompile>
     <ClCompile Include="src\PduBuilder.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\UdpSender.cpp"><Filter>Source Files</Filter></ClCompile>

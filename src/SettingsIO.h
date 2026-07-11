@@ -1,10 +1,21 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 // settings.ini — per-user UI state next to the executable (spec §11.5).
 // Loaded once at app startup, saved once at clean shutdown. Atomic write
 // (tmp file + rename) prevents corruption on a mid-write crash.
+
+// A named map location the user can pick from the Preview tab's Location
+// drop-down. Persisted in settings.ini so add/delete survive across sessions.
+struct MapPlace
+{
+    std::string label;
+    double      lat = 0.0;
+    double      lon = 0.0;
+    double      alt = 0.0;   // eye/viewing altitude in metres (globe camera height)
+};
 
 struct Settings
 {
@@ -17,6 +28,14 @@ struct Settings
 
     // [Paths]
     std::string lastScenarioPath;
+
+    // [Deploy] — persisted Deploy-tab list column widths (px), one per column.
+    // Empty until the user first sets them; the Deploy page then hand-applies
+    // and re-saves these instead of any hardcoded default layout.
+    std::vector<int> deployColumnWidths;
+
+    // [Places] — named map locations for the Preview tab's Location drop-down.
+    std::vector<MapPlace> mapPlaces;
 };
 
 namespace SettingsIO

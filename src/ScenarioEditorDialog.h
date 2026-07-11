@@ -5,10 +5,9 @@
 #include "Scenario.h"
 #include "ScenarioWorker.h"
 #include "UdpSender.h"
-#include "ScenarioSetupPage.h"
-#include "AssetEntityEditorPage.h"
-#include "MotionPathEditorPage.h"
 #include "OutputPlaybackPage.h"
+#include "PlaysPage.h"
+#include "DeployPage.h"
 #include "PreviewPage.h"
 
 class CScenarioEditorDialog : public CDialogEx
@@ -48,6 +47,7 @@ protected:
     afx_msg void OnFileSaveAs();
     afx_msg void OnScenarioValidate();
     afx_msg LRESULT OnMarkDirtyMessage(WPARAM wParam, LPARAM lParam);
+    afx_msg LRESULT OnRefreshUiMessage(WPARAM wParam, LPARAM lParam);
     afx_msg void OnClose();
     afx_msg void OnTimer(UINT_PTR nIDEvent);
     afx_msg void OnKbAddAsset();
@@ -57,12 +57,17 @@ protected:
     afx_msg void OnKbAddSegment();
     afx_msg void OnKbDeleteSegment();
     afx_msg void OnKbDuplicateSegment();
+    afx_msg void OnOpenAttributes();
     void OnCancel() override;
 
     DECLARE_MESSAGE_MAP()
 
 private:
     void CreatePages();
+    // Open the modal Attributes notebook (Scenario Setup / Assets / Motion)
+    // on the given tab; on close, refresh Preview + validation and mark dirty
+    // if anything was edited.
+    void OpenAttributes(int startTab);
     void CreateToolBar();
     void LayoutChildren();
     void ShowPage(int index);
@@ -99,10 +104,12 @@ private:
     CString                 m_currentScenarioPath; // empty until first Save/Open
     ScenarioWorker          m_worker;
 
-    CScenarioSetupPage      m_pageSetup;
-    CAssetEntityEditorPage  m_pageAssets;
-    CMotionPathEditorPage   m_pageMotion;
+    // The Scenario Setup / Asset-Entity / Motion Path pages moved to the
+    // modal CAttributesDialog notebook — the main window keeps only the
+    // Output/Playback and Preview tabs.
     COutputPlaybackPage     m_pageOutput;
+    CPlaysPage              m_pagePlays;
+    CDeployPage             m_pageDeploy;
     CPreviewPage            m_pagePreview;
-    CDialogEx*              m_pages[5] = { nullptr };
+    CDialogEx*              m_pages[4] = { nullptr };
 };

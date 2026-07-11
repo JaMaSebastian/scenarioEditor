@@ -106,9 +106,37 @@ namespace
     }
 }
 
+// Mutually-recursive with the Entity-Ellipse follow-center resolution below.
+static SampledPose EvaluateSegmentImpl(const MotionSegment& s, double u,
+                                       const Scenario* scenario, bool geometricMode,
+                                       bool allowFollow);
+static SampledPose SamplePoseImpl(const Entity& entity, const Scenario& scenario,
+                                  double scenarioTimeSec, bool allowFollow);
+
+// Resolve the moving orbit center for an Entity-Ellipse segment: the follow
+// target's ECEF position at `timeSec`. Returns false (callers fall back to the
+// static foci) when the segment has no follow target, the scenario is null,
+// `allowFollow` is off (one-level recursion guard), or the target isn't found.
+static bool ResolveFollowCenterEcef(const MotionSegment& s, const Scenario* scenario,
+                                    double timeSec, bool allowFollow, double out[3])
+{
+    if (!allowFollow || !scenario || s.followEntityId < 0) return false;
+    for (const Entity& t : scenario->entities)
+    {
+        if (static_cast<int>(t.entityId) != s.followEntityId) continue;
+        // Sample the target with follow disabled, so a target that itself
+        // follows something resolves only one level (treated as static here).
+        const SampledPose tp = SamplePoseImpl(t, *scenario, timeSec, /*allowFollow*/false);
+        out[0] = tp.ecefX; out[1] = tp.ecefY; out[2] = tp.ecefZ;
+        return true;
+    }
+    return false;
+}
+
 MotionSampler::EllipseFrame MotionSampler::BuildEllipseFrame(const MotionSegment& s,
                                                              const Scenario* scenario,
-                                                             bool withArcTable)
+                                                             bool withArcTable,
+                                                             const double* overrideCenterEcef)
 {
     constexpr double kTau = 6.28318530717958647692;
     constexpr double kPi  = 3.14159265358979323846;
@@ -159,6 +187,19 @@ MotionSampler::EllipseFrame MotionSampler::BuildEllipseFrame(const MotionSegment
     f.centerE = 0.5 * (e1 + e2);
     f.centerN = 0.5 * (n1 + n2);
     f.meanU   = 0.5 * (u1 + u2);
+
+    // Entity Ellipse: translate the orbit center onto the follow target's
+    // position (expressed in this frame's ENU), keeping the configured altitude.
+    // Shape, orientation, and semi-axes are untouched.
+    if (overrideCenterEcef)
+    {
+        double te, tn, tu;
+        CoordTransforms::EcefToLocalEnuDeg(
+            overrideCenterEcef[0], overrideCenterEcef[1], overrideCenterEcef[2],
+            f.midLat, f.midLon, f.midAlt, te, tn, tu);
+        f.centerE = te;
+        f.centerN = tn;
+    }
 
     // Start parametric angle from the compass bearing (see EvaluateSegment).
     const double bearingMath = (90.0 - s.startBearingDeg) * (kTau / 360.0);
@@ -237,6 +278,13 @@ SampledPose MotionSampler::EvaluateSegment(const MotionSegment& s, double u,
                                            const Scenario* scenario,
                                            bool geometricMode)
 {
+    return EvaluateSegmentImpl(s, u, scenario, geometricMode, /*allowFollow*/true);
+}
+
+static SampledPose EvaluateSegmentImpl(const MotionSegment& s, double u,
+                                       const Scenario* scenario, bool geometricMode,
+                                       bool allowFollow)
+{
     if (u < 0.0) u = 0.0;
     if (u > 1.0) u = 1.0;
 
@@ -305,16 +353,26 @@ SampledPose MotionSampler::EvaluateSegment(const MotionSegment& s, double u,
             // preview path trace uses geometricMode for one even revolution).
             constexpr double kTau = 6.28318530717958647692;
 
-            const EllipseFrame f = BuildEllipseFrame(s, scenario);   // Ramanujan perimeter
+            const double segDuration = s.endSecond - s.startSecond;
+
+            // Entity Ellipse: re-center the orbit on the follow target at the
+            // real time this u maps to (start + u * window). Non-follow orbits
+            // pass a null override and behave exactly as before.
+            const double absTime = s.startSecond + u * segDuration;
+            double ov[3];
+            const double* povr = ResolveFollowCenterEcef(s, scenario, absTime, allowFollow, ov)
+                                 ? ov : nullptr;
+
+            const MotionSampler::EllipseFrame f =
+                MotionSampler::BuildEllipseFrame(s, scenario, false, povr);   // Ramanujan perimeter
             const double speed  = (s.speedMps > 0.0) ? s.speedMps : 100.0;
             const double period = (f.perimeter > 0.0) ? (f.perimeter / speed) : 1.0;
-            const double segDuration = s.endSecond - s.startSecond;
 
             const double theta = geometricMode
                 ? (f.theta0 + f.sign * kTau * u)
                 : (f.theta0 + f.sign * kTau * (u * segDuration / period));
 
-            const EllipsePoint p = EvalEllipseAtTheta(f, theta);
+            const MotionSampler::EllipsePoint p = MotionSampler::EvalEllipseAtTheta(f, theta);
             out.ecefX = p.ecefX; out.ecefY = p.ecefY; out.ecefZ = p.ecefZ;
             out.headingDeg = p.headingDeg;
             out.pitchDeg   = s.startPitchDeg;
@@ -327,6 +385,12 @@ SampledPose MotionSampler::EvaluateSegment(const MotionSegment& s, double u,
 
 SampledPose MotionSampler::SamplePose(const Entity& entity, const Scenario& scenario,
                                       double scenarioTimeSec)
+{
+    return SamplePoseImpl(entity, scenario, scenarioTimeSec, /*allowFollow*/true);
+}
+
+static SampledPose SamplePoseImpl(const Entity& entity, const Scenario& scenario,
+                                  double scenarioTimeSec, bool allowFollow)
 {
     const Scenario* const scn = &scenario;
     SampledPose out{};
@@ -374,10 +438,51 @@ SampledPose MotionSampler::SamplePose(const Entity& entity, const Scenario& scen
 
     if (!active)
     {
-        // Time falls before first segment or after last — clamp.
+        // Time falls before the first segment, in a GAP between two segments, or
+        // after the last one. Before the first -> hold at its start. Otherwise
+        // hold at the END pose of the most recently COMPLETED segment. Using the
+        // latest finished segment (rather than always the last one) keeps an
+        // entity frozen where the prior leg left it during an inter-segment gap,
+        // instead of teleporting it across to the final segment's end pose.
         if (scenarioTimeSec < first->startSecond)
-            return EvaluateSegment(*first, 0.0, scn);
-        return EvaluateSegment(*last, 1.0, scn);
+            return EvaluateSegmentImpl(*first, 0.0, scn, false, allowFollow);
+
+        const MotionSegment* prevDone = first;
+        for (const MotionSegment& s : entity.motionSegments)
+        {
+            if (!s.enabled) continue;
+            if (s.endSecond <= scenarioTimeSec) prevDone = &s; else break;
+        }
+
+        // A TERMINAL ellipse circles endlessly: once the entity reaches the
+        // final orbit it keeps going around for the rest of the timeline rather
+        // than freezing at the segment's end-of-window pose. We advance the
+        // parametric angle by the real elapsed time since the orbit began, so
+        // the motion is seamless with the active-window sampling below.
+        if (prevDone == last && last->type == MotionType::Ellipse)
+        {
+            constexpr double kTau = 6.28318530717958647692;
+            // Entity Ellipse: keep circling the target's CURRENT position after
+            // the segment window ends (center resolved at scenarioTimeSec).
+            double ov[3];
+            const double* povr = ResolveFollowCenterEcef(*last, scn, scenarioTimeSec,
+                                                          allowFollow, ov) ? ov : nullptr;
+            const MotionSampler::EllipseFrame f =
+                MotionSampler::BuildEllipseFrame(*last, scn, false, povr);
+            const double speed  = (last->speedMps > 0.0) ? last->speedMps : 100.0;
+            const double period = (f.perimeter > 0.0) ? (f.perimeter / speed) : 1.0;
+            const double elapsed = scenarioTimeSec - last->startSecond;
+            const MotionSampler::EllipsePoint p =
+                MotionSampler::EvalEllipseAtTheta(f, f.theta0 + f.sign * kTau * (elapsed / period));
+            SampledPose ep{};
+            ep.ecefX = p.ecefX; ep.ecefY = p.ecefY; ep.ecefZ = p.ecefZ;
+            ep.headingDeg = p.headingDeg;
+            ep.pitchDeg   = last->startPitchDeg;
+            ep.rollDeg    = last->startRollDeg;
+            return ep;
+        }
+
+        return EvaluateSegmentImpl(*prevDone, 1.0, scn, false, allowFollow);
     }
 
     const double duration = active->endSecond - active->startSecond;
@@ -431,9 +536,9 @@ SampledPose MotionSampler::SamplePose(const Entity& entity, const Scenario& scen
             prev = &s;
         }
         if (prev)
-            return EvaluateSegment(*prev, 1.0, scn);
-        return EvaluateSegment(*active, 0.0, scn);
+            return EvaluateSegmentImpl(*prev, 1.0, scn, false, allowFollow);
+        return EvaluateSegmentImpl(*active, 0.0, scn, false, allowFollow);
     }
 
-    return EvaluateSegment(*active, u, scn);
+    return EvaluateSegmentImpl(*active, u, scn, false, allowFollow);
 }

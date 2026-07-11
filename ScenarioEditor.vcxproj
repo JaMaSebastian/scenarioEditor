@@ -10,7 +10,6 @@
       <Platform>x64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
-
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <ProjectGuid>{C7D9B7A8-1F62-4D1A-9F47-2A1B9A2E5C30}</ProjectGuid>
@@ -18,9 +17,7 @@
     <RootNamespace>ScenarioEditor</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
-
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
-
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
@@ -28,7 +25,6 @@
     <CharacterSet>Unicode</CharacterSet>
     <UseOfMfc>Dynamic</UseOfMfc>
   </PropertyGroup>
-
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
@@ -37,7 +33,6 @@
     <CharacterSet>Unicode</CharacterSet>
     <UseOfMfc>Dynamic</UseOfMfc>
   </PropertyGroup>
-
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings" />
   <ImportGroup Label="Shared" />
@@ -47,28 +42,24 @@
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
-
   <PropertyGroup Label="UserMacros" />
-
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
     <OutDir>$(SolutionDir)build\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)build\$(Platform)\$(Configuration)\obj\</IntDir>
   </PropertyGroup>
-
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
     <OutDir>$(SolutionDir)build\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)build\$(Platform)\$(Configuration)\obj\</IntDir>
   </PropertyGroup>
-
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_WINDOWS;_DEBUG;_AFXDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;_WINDOWS;_DEBUG;_AFXDLL;HAVE_WEBVIEW2;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalIncludeDirectories>$(ProjectDir)src;$(ProjectDir);$(ProjectDir)..\open-dis-cpp-master\src;$(ProjectDir)..\open-dis-cpp-master\build\src</AdditionalIncludeDirectories>
@@ -91,14 +82,13 @@
       <Message>Copying EntityTypeCatalog.ini next to the exe</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
-
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_WINDOWS;NDEBUG;_AFXDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;_WINDOWS;NDEBUG;_AFXDLL;HAVE_WEBVIEW2;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalIncludeDirectories>$(ProjectDir)src;$(ProjectDir);$(ProjectDir)..\open-dis-cpp-master\src;$(ProjectDir)..\open-dis-cpp-master\build\src</AdditionalIncludeDirectories>
@@ -124,7 +114,6 @@
       <Message>Copying EntityTypeCatalog.ini next to the exe</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
-
   <ItemGroup>
     <ClInclude Include="src\framework.h" />
     <ClInclude Include="src\targetver.h" />
@@ -137,8 +126,13 @@
     <ClInclude Include="src\AssetEntityEditorPage.h" />
     <ClInclude Include="src\MotionPathEditorPage.h" />
     <ClInclude Include="src\OutputPlaybackPage.h" />
+    <ClInclude Include="src\AttributesDialog.h" />
+    <ClInclude Include="src\PlaysPage.h" />
+    <ClInclude Include="src\DeployPage.h" />
     <ClInclude Include="src\PreviewPage.h" />
     <ClInclude Include="src\PreviewCanvas.h" />
+    <ClInclude Include="src\MapTileService.h" />
+    <ClInclude Include="src\CesiumView.h" />
     <ClInclude Include="src\Direct2DContext.h" />
     <ClInclude Include="src\Scenario.h" />
     <ClInclude Include="src\PduBuilder.h" />
@@ -158,7 +152,6 @@
     <ClInclude Include="src\CatalogAddDialog.h" />
     <ClInclude Include="log.h" />
   </ItemGroup>
-
   <ItemGroup>
     <ClCompile Include="src\pch.cpp">
       <PrecompiledHeader>Create</PrecompiledHeader>
@@ -170,8 +163,13 @@
     <ClCompile Include="src\AssetEntityEditorPage.cpp" />
     <ClCompile Include="src\MotionPathEditorPage.cpp" />
     <ClCompile Include="src\OutputPlaybackPage.cpp" />
+    <ClCompile Include="src\AttributesDialog.cpp" />
+    <ClCompile Include="src\PlaysPage.cpp" />
+    <ClCompile Include="src\DeployPage.cpp" />
     <ClCompile Include="src\PreviewPage.cpp" />
     <ClCompile Include="src\PreviewCanvas.cpp" />
+    <ClCompile Include="src\MapTileService.cpp" />
+    <ClCompile Include="src\CesiumView.cpp" />
     <ClCompile Include="src\CatalogEditorDialog.cpp" />
     <ClCompile Include="src\CatalogAddDialog.cpp" />
     <ClCompile Include="src\Direct2DContext.cpp" />
@@ -206,19 +204,31 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
   </ItemGroup>
-
   <ItemGroup>
     <ResourceCompile Include="src\ScenarioEditor.rc" />
   </ItemGroup>
-
   <ItemGroup>
+    <None Include="packages.config" />
     <None Include="README.md" />
     <None Include="spec.mk" />
     <None Include="EntityTypeCatalog.ini" />
     <None Include="src\toolbar.bmp" />
     <None Include="src\make_toolbar_bmp.py" />
   </ItemGroup>
-
+  <!-- Cesium 3D globe host (Phase 2) needs the "Microsoft.Web.WebView2" NuGet
+       package. Install it via  Project > Manage NuGet Packages  (it adds a
+       packages.config + the package targets that set the WebView2 include/lib
+       paths). The HAVE_WEBVIEW2 define (set per-config above) then activates the
+       real WebView2 code in CesiumView.cpp; the CMake build omits it and uses a
+       placeholder. -->
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
-  <ImportGroup Label="ExtensionTargets" />
+  <ImportGroup Label="ExtensionTargets">
+    <Import Project="packages\Microsoft.Web.WebView2.1.0.4078.44\build\native\Microsoft.Web.WebView2.targets" Condition="Exists('packages\Microsoft.Web.WebView2.1.0.4078.44\build\native\Microsoft.Web.WebView2.targets')" />
+  </ImportGroup>
+  <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">
+    <PropertyGroup>
+      <ErrorText>This project references NuGet package(s) that are missing on this computer. Use NuGet Package Restore to download them.  For more information, see http://go.microsoft.com/fwlink/?LinkID=322105. The missing file is {0}.</ErrorText>
+    </PropertyGroup>
+    <Error Condition="!Exists('packages\Microsoft.Web.WebView2.1.0.4078.44\build\native\Microsoft.Web.WebView2.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.Web.WebView2.1.0.4078.44\build\native\Microsoft.Web.WebView2.targets'))" />
+  </Target>
 </Project>

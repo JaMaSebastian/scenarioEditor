@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "ScenarioEditorDialog.h"
+#include "AttributesDialog.h"
 #include "PduBuilder.h"
 #include "ScenarioEditor.h"   // for theApp.Catalog()/Settings()
 #include "ScenarioIO.h"
@@ -70,6 +71,7 @@ BEGIN_MESSAGE_MAP(CScenarioEditorDialog, CDialogEx)
     ON_COMMAND(ID_TOOLS_REPLAY_FILE,     &CScenarioEditorDialog::OnReplayFile)
     ON_COMMAND(ID_SCENARIO_VALIDATE,         &CScenarioEditorDialog::OnScenarioValidate)
     ON_MESSAGE(WM_APP_MARK_DIRTY,            &CScenarioEditorDialog::OnMarkDirtyMessage)
+    ON_MESSAGE(WM_APP_REFRESH_UI,            &CScenarioEditorDialog::OnRefreshUiMessage)
     // Keyboard shortcuts that synthesize BN_CLICKED to the appropriate page,
     // so users can drive the app entirely from the keyboard if mouse clicks
     // on push-buttons aren't being delivered by their input setup.
@@ -80,6 +82,7 @@ BEGIN_MESSAGE_MAP(CScenarioEditorDialog, CDialogEx)
     ON_COMMAND(ID_KB_ADD_SEGMENT,      &CScenarioEditorDialog::OnKbAddSegment)
     ON_COMMAND(ID_KB_DELETE_SEGMENT,   &CScenarioEditorDialog::OnKbDeleteSegment)
     ON_COMMAND(ID_KB_DUPLICATE_SEGMENT,&CScenarioEditorDialog::OnKbDuplicateSegment)
+    ON_COMMAND(ID_TOOLS_OPEN_ATTRIBUTES,&CScenarioEditorDialog::OnOpenAttributes)
     ON_COMMAND_RANGE(ID_SCENARIO_GENERATE_RECORDING, ID_SCENARIO_RESET_CLOCK, &CScenarioEditorDialog::OnPlaceholderCommand)
     ON_COMMAND_RANGE(ID_PLAYBACK_LOOP,        ID_PLAYBACK_SPEED_10,      &CScenarioEditorDialog::OnPlaceholderCommand)
     ON_COMMAND_RANGE(ID_NETWORK_OPEN_OUTPUT,  ID_NETWORK_TEST_TCP,       &CScenarioEditorDialog::OnPlaceholderCommand)
@@ -101,12 +104,13 @@ BOOL CScenarioEditorDialog::OnInitDialog()
 
     m_hAccel = ::LoadAccelerators(AfxGetResourceHandle(), MAKEINTRESOURCE(IDR_MAIN_ACCEL));
 
-    // Tab control labels (§5.2)
-    m_tabCtrl.InsertItem(0, _T("Scenario Setup"));
-    m_tabCtrl.InsertItem(1, _T("Asset / Entity Editor"));
-    m_tabCtrl.InsertItem(2, _T("Motion Path Editor"));
-    m_tabCtrl.InsertItem(3, _T("Output / Playback"));
-    m_tabCtrl.InsertItem(4, _T("Preview"));
+    // Tab control labels (§5.2). The Scenario Setup / Asset-Entity / Motion
+    // Path authoring tabs moved to the modal Attributes notebook, opened from
+    // the Output/Playback page's "Attributes..." button.
+    m_tabCtrl.InsertItem(0, _T("Run"));
+    m_tabCtrl.InsertItem(1, _T("Plays"));
+    m_tabCtrl.InsertItem(2, _T("Deploy"));
+    m_tabCtrl.InsertItem(3, _T("Preview"));
 
     // Status bar (§5.4). The status bar is created at runtime — not from
     // a dialog template — so it doesn't pick up the dialog's 12pt font.
@@ -290,37 +294,45 @@ void CScenarioEditorDialog::CreatePages()
         return nullptr;
     };
 
-    // Hand the Entity Type catalog (§7.5) to the Asset page before
-    // Create() so its OnInitDialog can populate combos in one pass.
-    m_pageAssets.SetCatalog(&theApp.Catalog());
-
-    // Setup page needs the editable scenario so the Default Coord Mode
-    // combo can live-commit (other pages read defaultCoordMode when
-    // they add new entities / segments).
-    m_pageSetup.SetScenario(&m_scenario);
-
-    // Asset page needs the editable scenario to drive the asset tree.
-    m_pageAssets.SetScenario(&m_scenario);
-
-    // Motion page reads the same scenario for the segment list view.
-    m_pageMotion.SetScenario(&m_scenario);
-
     // Output page edits Scenario::output.
     m_pageOutput.SetScenario(&m_scenario);
 
     // Preview page renders the scenario independently of the worker.
     m_pagePreview.SetScenario(&m_scenario);
 
-    m_pages[0] = create(m_pageSetup,   IDD_SCENARIO_SETUP_PAGE);
-    m_pages[1] = create(m_pageAssets,  IDD_ASSET_ENTITY_EDITOR_PAGE);
-    m_pages[2] = create(m_pageMotion,  IDD_MOTION_PATH_EDITOR_PAGE);
-    m_pages[3] = create(m_pageOutput,  IDD_OUTPUT_PLAYBACK_PAGE);
-    m_pages[4] = create(m_pagePreview, IDD_PREVIEW_PAGE);
+    // Setup / Asset / Motion pages are created inside CAttributesDialog when
+    // the user opens the Attributes notebook. Plays / Deploy are placeholder
+    // scaffolds for now.
+    m_pages[0] = create(m_pageOutput,  IDD_OUTPUT_PLAYBACK_PAGE);
+    m_pages[1] = create(m_pagePlays,   IDD_PLAYS_PAGE);
+    m_pages[2] = create(m_pageDeploy,  IDD_DEPLOY_PAGE);
+    m_pages[3] = create(m_pagePreview, IDD_PREVIEW_PAGE);
+}
+
+void CScenarioEditorDialog::OpenAttributes(int startTab)
+{
+    // The Attributes notebook edits the shared Scenario in place. Hand it the
+    // live model + catalog + current field-help state; on close, pull the
+    // edits back into the Preview/validation surfaces and flag dirty if the
+    // user changed anything.
+    CAttributesDialog dlg(&m_scenario, &theApp.Catalog(), m_helpChecked, startTab, this);
+    dlg.DoModal();
+    // The notebook edits the shared scenario in place and flushes pending edits
+    // on close (both Close and Escape), so refresh regardless of how it was
+    // dismissed; mark dirty if any page reported an edit.
+    RefreshUiFromScenario();
+    if (dlg.WasModified())
+        MarkDirty();
+}
+
+void CScenarioEditorDialog::OnOpenAttributes()
+{
+    OpenAttributes(0);
 }
 
 void CScenarioEditorDialog::ShowPage(int index)
 {
-    if (index < 0 || index >= 5) return;
+    if (index < 0 || index >= 4) return;
     if (m_activePage == index) return;
 
     if (m_activePage >= 0 && m_pages[m_activePage])
@@ -760,6 +772,17 @@ LRESULT CScenarioEditorDialog::OnMarkDirtyMessage(WPARAM /*w*/, LPARAM /*l*/)
     return 0;
 }
 
+// A child page (today: the Preview tab's drag-to-set-start) mutated the shared
+// Scenario directly. Reload every page's controls from the model so the other
+// tabs reflect it, then flag the scenario modified. RefreshUiFromScenario gates
+// the dirty handler off internally, so we MarkDirty afterwards.
+LRESULT CScenarioEditorDialog::OnRefreshUiMessage(WPARAM /*w*/, LPARAM /*l*/)
+{
+    RefreshUiFromScenario();
+    MarkDirty();
+    return 0;
+}
+
 bool CScenarioEditorDialog::MaybePromptSaveOnDiscard()
 {
     if (!m_isDirty) return true;
@@ -782,17 +805,10 @@ void CScenarioEditorDialog::RefreshUiFromScenario()
     // ReadFrom() helpers SetWindowText on every edit control, which fires
     // EN_CHANGE — gate the dirty handler off so a fresh load doesn't
     // immediately flip us to "modified".
+    // The Setup / Asset / Motion pages live in the modal Attributes notebook
+    // and refresh themselves from the shared scenario when opened; here we
+    // only refresh the Output page (Preview reads the model live on paint).
     m_suppressDirty = true;
-    m_pageSetup.ReadFrom(m_scenario);
-    m_pageAssets.RefreshAssetTree();
-    if (!m_scenario.entities.empty())
-    {
-        const int idx = m_pageAssets.SelectedIndex();
-        const size_t ix = (idx >= 0 && idx < (int)m_scenario.entities.size())
-                          ? static_cast<size_t>(idx) : 0;
-        m_pageAssets.ReadFrom(m_scenario.entities[ix]);
-    }
-    m_pageMotion.Refresh();
     m_pageOutput.ReadFrom(m_scenario.output);
     m_suppressDirty = false;
     UpdateTitle();
@@ -801,17 +817,10 @@ void CScenarioEditorDialog::RefreshUiFromScenario()
 
 void CScenarioEditorDialog::CaptureUiIntoScenario()
 {
-    m_pageSetup.WriteTo(m_scenario);
-    const int idx = m_pageAssets.SelectedIndex();
-    if (idx >= 0 && idx < (int)m_scenario.entities.size())
-    {
-        m_pageAssets.WriteTo(m_scenario.entities[idx],
-                             m_scenario.originLatDeg,
-                             m_scenario.originLonDeg,
-                             m_scenario.originAltM);
-    }
+    // The Setup / Asset / Motion pages flush their own edits into the shared
+    // scenario when the modal Attributes notebook closes, so here we only pull
+    // the Output tab's controls.
     m_pageOutput.WriteTo(m_scenario.output);
-    m_pageMotion.CommitPendingEdits();
 
     // Toolbar speed combo overrides the Output-tab speed if a value is
     // selected. The CMFCToolBarComboBoxButton lives on m_toolBar; its
@@ -849,28 +858,17 @@ void CScenarioEditorDialog::Revalidate()
     buf.Format(_T("BW: %.2f Mbps"), rep.mbpsAvg);     m_statusBar.SetPaneText(7, buf);
 }
 
-namespace
-{
-    // Synthesize a BN_CLICKED to a specific control on a child page. We use
-    // this for keyboard shortcuts that drive the same action handlers the
-    // mouse would normally fire.
-    void FireBnClicked(CWnd* page, UINT controlId)
-    {
-        if (!page || !::IsWindow(page->GetSafeHwnd())) return;
-        if (CWnd* ctrl = page->GetDlgItem(controlId))
-            page->SendMessage(WM_COMMAND,
-                              MAKEWPARAM(controlId, BN_CLICKED),
-                              reinterpret_cast<LPARAM>(ctrl->GetSafeHwnd()));
-    }
-}
-
-void CScenarioEditorDialog::OnKbAddAsset()        { ShowPage(1); FireBnClicked(m_pages[1], IDC_BTN_ADD_ASSET); }
-void CScenarioEditorDialog::OnKbDeleteAsset()     { ShowPage(1); FireBnClicked(m_pages[1], IDC_BTN_DELETE_ASSET); }
-void CScenarioEditorDialog::OnKbDuplicateAsset()  { ShowPage(1); FireBnClicked(m_pages[1], IDC_BTN_DUPLICATE_ASSET); }
-void CScenarioEditorDialog::OnKbMoveAsset()       { ShowPage(1); FireBnClicked(m_pages[1], IDC_BTN_MOVE_ASSET); }
-void CScenarioEditorDialog::OnKbAddSegment()      { ShowPage(2); FireBnClicked(m_pages[2], IDC_BTN_ADD_SEGMENT); }
-void CScenarioEditorDialog::OnKbDeleteSegment()   { ShowPage(2); FireBnClicked(m_pages[2], IDC_BTN_DELETE_SEGMENT); }
-void CScenarioEditorDialog::OnKbDuplicateSegment(){ ShowPage(2); FireBnClicked(m_pages[2], IDC_BTN_DUPLICATE_SEGMENT); }
+// The asset/segment editing controls moved to the Attributes notebook, which
+// owns an accelerator table that fires these same shortcuts against its own
+// pages. From the main window the shortcuts just open the notebook on the
+// relevant tab (1 = Asset/Entity Editor, 2 = Motion Path Editor).
+void CScenarioEditorDialog::OnKbAddAsset()        { OpenAttributes(1); }
+void CScenarioEditorDialog::OnKbDeleteAsset()     { OpenAttributes(1); }
+void CScenarioEditorDialog::OnKbDuplicateAsset()  { OpenAttributes(1); }
+void CScenarioEditorDialog::OnKbMoveAsset()       { OpenAttributes(1); }
+void CScenarioEditorDialog::OnKbAddSegment()      { OpenAttributes(2); }
+void CScenarioEditorDialog::OnKbDeleteSegment()   { OpenAttributes(2); }
+void CScenarioEditorDialog::OnKbDuplicateSegment(){ OpenAttributes(2); }
 
 void CScenarioEditorDialog::OnScenarioValidate()
 {
@@ -936,7 +934,8 @@ void CScenarioEditorDialog::OnFileNew()
     if (!MaybePromptSaveOnDiscard()) return;
     m_scenario = Scenario{};
     m_currentScenarioPath.Empty();
-    m_pageAssets.RefreshAssetTree();
+    // The asset tree lives in the Attributes notebook now and rebuilds from
+    // the model each time it opens.
     RefreshUiFromScenario();
     ClearDirty();
 }

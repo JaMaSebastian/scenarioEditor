@@ -13,7 +13,8 @@ public:
 
     BOOL InitInstance() override;
 
-    // Loaded once at startup from EntityTypeCatalog.ini next to the exe.
+    // Loaded once at startup from the canonical source EntityTypeCatalog.ini
+    // (the first ancestor of the exe dir that contains it; see InitInstance).
     // Lifetime equals the application; passed by const-pointer into the
     // Asset / Entity Editor page (§7.5).
     const EntityTypeCatalog& Catalog() const { return m_catalog; }
@@ -27,7 +28,8 @@ public:
 
     // Absolute path to settings.ini next to the executable.
     const std::wstring& SettingsPath() const { return m_settingsPath; }
-    // Absolute path to EntityTypeCatalog.ini next to the executable.
+    // Absolute path to the canonical EntityTypeCatalog.ini (resolved to the
+    // source copy in InitInstance). The Catalog Editor reads/writes this path.
     const std::wstring& CatalogPath() const { return m_catalogPath; }
 
 private:

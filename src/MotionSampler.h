@@ -83,8 +83,14 @@ namespace MotionSampler
     // sampler). Pass withArcTable=true to also build the numerically-integrated
     // cumulative arc-length table (perimeter becomes the exact integral) — used
     // by the playback equidistant-waypoint precompute.
+    //
+    // overrideCenterEcef (Entity Ellipse): when non-null, the orbit is re-centered
+    // on this ECEF point (the follow-target's position at sample time) instead of
+    // the stored foci midpoint. The foci still define the shape/orientation; only
+    // the center translates, keeping the configured altitude.
     EllipseFrame BuildEllipseFrame(const MotionSegment& segment, const Scenario* scenario,
-                                   bool withArcTable = false);
+                                   bool withArcTable = false,
+                                   const double* overrideCenterEcef = nullptr);
 
     // Evaluate the ellipse at parametric angle theta (radians, math convention
     // in the ellipse-local frame).

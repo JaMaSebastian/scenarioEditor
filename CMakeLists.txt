@@ -26,8 +26,13 @@ add_executable(ScenarioEditor WIN32
     src/AssetEntityEditorPage.cpp
     src/MotionPathEditorPage.cpp
     src/OutputPlaybackPage.cpp
+    src/AttributesDialog.cpp
+    src/PlaysPage.cpp
+    src/DeployPage.cpp
     src/PreviewPage.cpp
     src/PreviewCanvas.cpp
+    src/MapTileService.cpp
+    src/CesiumView.cpp
     src/CatalogEditorDialog.cpp
     src/CatalogAddDialog.cpp
     src/Direct2DContext.cpp

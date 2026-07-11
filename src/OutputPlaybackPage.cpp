@@ -3,6 +3,8 @@
 #include "Scenario.h"
 
 #include <cstdlib>
+#include <uxtheme.h>          // SetWindowTheme — declassic checkboxes/radios/groupboxes
+#pragma comment(lib, "uxtheme.lib")
 
 namespace
 {
@@ -32,6 +34,8 @@ namespace
         { IDC_BTN_PLAYBACK_STOP,        _T("Stop playback and reset the scenario clock."), false },
         { IDC_CHK_PLAYBACK_LOOP,        _T("When the scenario or recording ends, restart from the beginning."), false },
         { IDC_COMBO_PLAYBACK_SPEED,     _T("Playback speed multiplier."), false },
+
+        { IDC_BTN_ATTRIBUTES,           _T("Open the Attributes notebook to edit the scenario setup, assets/entities, and motion paths."), false },
     };
 }
 
@@ -42,6 +46,8 @@ BEGIN_MESSAGE_MAP(COutputPlaybackPage, CHelpAwarePage)
     ON_BN_CLICKED(IDC_BTN_PLAYBACK_PAUSE,   &COutputPlaybackPage::OnLocalPlaybackPause)
     ON_BN_CLICKED(IDC_BTN_PLAYBACK_RESUME,  &COutputPlaybackPage::OnLocalPlaybackResume)
     ON_BN_CLICKED(IDC_BTN_PLAYBACK_STOP,    &COutputPlaybackPage::OnLocalPlaybackStop)
+    ON_BN_CLICKED(IDC_BTN_ATTRIBUTES,       &COutputPlaybackPage::OnAttributes)
+    ON_WM_CTLCOLOR()
 END_MESSAGE_MAP()
 
 void COutputPlaybackPage::GetFieldHelpTable(const FFieldHelp*& outArray, size_t& outCount) const
@@ -53,6 +59,31 @@ void COutputPlaybackPage::GetFieldHelpTable(const FFieldHelp*& outArray, size_t&
 BOOL COutputPlaybackPage::OnInitDialog()
 {
     CHelpAwarePage::OnInitDialog();
+
+    // Dark theme for the Run tab. Paint the page background black (used when
+    // erasing) and prepare the brushes OnCtlColor hands back per control.
+    m_blackBrush.CreateSolidBrush(RGB(0, 0, 0));
+    m_whiteBrush.CreateSolidBrush(RGB(255, 255, 255));
+    SetBackgroundColor(RGB(0, 0, 0));
+
+    // Themed checkboxes / radios / group boxes ignore the text color set in
+    // OnCtlColor, so their labels would stay dark (invisible on black). Drop
+    // their visual style to classic drawing so the white text takes effect.
+    for (CWnd* c = GetWindow(GW_CHILD); c; c = c->GetNextWindow(GW_HWNDNEXT))
+    {
+        TCHAR cls[32] = { 0 };
+        ::GetClassName(c->GetSafeHwnd(), cls, _countof(cls));
+        if (_tcsicmp(cls, _T("Button")) == 0)
+        {
+            const DWORD t = c->GetStyle() & BS_TYPEMASK;
+            if (t == BS_CHECKBOX || t == BS_AUTOCHECKBOX ||
+                t == BS_RADIOBUTTON || t == BS_AUTORADIOBUTTON ||
+                t == BS_3STATE || t == BS_AUTO3STATE || t == BS_GROUPBOX)
+            {
+                ::SetWindowTheme(c->GetSafeHwnd(), L"", L"");
+            }
+        }
+    }
 
     CheckDlgButton(IDC_RADIO_MODE_UDP_UNICAST, BST_CHECKED);
 
@@ -68,6 +99,38 @@ BOOL COutputPlaybackPage::OnInitDialog()
     OutputConfig defaults;
     ReadFrom(defaults);
     return TRUE;
+}
+
+HBRUSH COutputPlaybackPage::OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor)
+{
+    // WM_CTLCOLOR can arrive while the controls are being created, before
+    // OnInitDialog builds the brushes — fall back to the default until ready.
+    if (!m_blackBrush.GetSafeHandle() || !m_whiteBrush.GetSafeHandle())
+        return CHelpAwarePage::OnCtlColor(pDC, pWnd, nCtlColor);
+
+    switch (nCtlColor)
+    {
+        case CTLCOLOR_DLG:
+            return static_cast<HBRUSH>(m_blackBrush);
+
+        // Static text, group-box captions, and the (declassic'd) checkbox /
+        // radio labels: white text on a black background.
+        case CTLCOLOR_STATIC:
+            pDC->SetBkMode(TRANSPARENT);
+            pDC->SetTextColor(RGB(255, 255, 255));
+            pDC->SetBkColor(RGB(0, 0, 0));
+            return static_cast<HBRUSH>(m_blackBrush);
+
+        // Edit boxes (and the combo drop-down list) stay white with black text.
+        case CTLCOLOR_EDIT:
+        case CTLCOLOR_LISTBOX:
+            pDC->SetTextColor(RGB(0, 0, 0));
+            pDC->SetBkColor(RGB(255, 255, 255));
+            return static_cast<HBRUSH>(m_whiteBrush);
+
+        default:
+            return CHelpAwarePage::OnCtlColor(pDC, pWnd, nCtlColor);
+    }
 }
 
 void COutputPlaybackPage::ReadFrom(const OutputConfig& o)
@@ -159,6 +222,11 @@ void COutputPlaybackPage::OnLocalPlaybackStart()  { RelayToMain(this, ID_PLAYBAC
 void COutputPlaybackPage::OnLocalPlaybackPause()  { RelayToMain(this, ID_PLAYBACK_PAUSE); }
 void COutputPlaybackPage::OnLocalPlaybackResume() { RelayToMain(this, ID_PLAYBACK_RESUME); }
 void COutputPlaybackPage::OnLocalPlaybackStop()   { RelayToMain(this, ID_PLAYBACK_STOP); }
+
+// The Attributes notebook is owned by the main dialog (it holds the live
+// Scenario + catalog), so relay the open request up rather than launching it
+// from the page.
+void COutputPlaybackPage::OnAttributes()          { RelayToMain(this, ID_TOOLS_OPEN_ATTRIBUTES); }
 
 void COutputPlaybackPage::OnBrowseRecording()
 {

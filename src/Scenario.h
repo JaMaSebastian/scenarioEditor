@@ -127,6 +127,12 @@ struct MotionSegment
     double      speedMps       = 0.0;     // tangential m/s (0 means seed from airframe cruise)
     EllipseDirection direction = EllipseDirection::Clockwise;
 
+    // Entity Ellipse: if >= 0, the orbit center follows this target's EntityID
+    // as it moves through the scenario (the stored foci define only the orbit's
+    // shape/orientation; their midpoint is re-centered on the target at sample
+    // time). -1 = static ellipse (normal behavior).
+    int         followEntityId = -1;
+
     std::string description;
 };
 
@@ -237,6 +243,51 @@ struct OutputConfig
     bool        loopEnabled     = false;
 };
 
+// Axis-aligned background footprint (e.g. a sim level's land or water body)
+// drawn under the entities on the Preview tab. Bounds are in ENU metres
+// relative to the scenario origin: East = local X, North = local Y.
+struct LevelRect
+{
+    bool   enabled   = false;
+    double eastMinM  = 0.0;
+    double eastMaxM  = 0.0;
+    double northMinM = 0.0;
+    double northMaxM = 0.0;
+};
+
+// A named sub-region inside the level overlay (forest, minefield, no-fly box,
+// …) painted as a labelled, tinted rectangle on the Preview tab. Bounds share
+// LevelRect's ENU-metre convention (East = X, North = Y, relative to origin).
+// The optional height range records vertical extent (e.g. tree-canopy heights)
+// for round-trip fidelity even though the top-down preview only paints the
+// footprint.
+struct LevelZone
+{
+    bool        enabled         = true;
+    std::string name;
+    double      eastMinM        = 0.0;
+    double      eastMaxM        = 0.0;
+    double      northMinM       = 0.0;
+    double      northMaxM       = 0.0;
+    double      heightMinMeters = 0.0;
+    double      heightMaxMeters = 0.0;
+    uint32_t    colorRgb        = 0x2E7D32;  // 0xRRGGBB fill tint; forest green default
+};
+
+// Optional terrain overlay imported from an external simulation level so the
+// Preview canvas can show where the land and ocean sit relative to entities.
+// Disabled by default; populated only when the scenario .ini carries a
+// [Level] section (see ScenarioIO).
+struct LevelOverlay
+{
+    bool                   enabled        = false;
+    std::string            name;
+    double                 seaLevelMeters = 0.0;
+    LevelRect              land;
+    LevelRect              ocean;
+    std::vector<LevelZone> zones;   // named sub-regions ([Level.Zone0], …)
+};
+
 struct Scenario
 {
     // ----- Identity / metadata -----
@@ -258,6 +309,9 @@ struct Scenario
     double      originLatDeg   = 0.0;
     double      originLonDeg   = 0.0;
     double      originAltM     = 0.0;
+
+    // ----- Optional terrain overlay for the Preview tab ([Level] section) -----
+    LevelOverlay level;
 
     // ----- Entities (asset tree). UI edits entities[selectedIdx]; the
     //       sample worker fans out per-tick across all enabled entries. -----

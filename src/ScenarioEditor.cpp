@@ -47,8 +47,12 @@ BOOL CScenarioEditorApp::InitInstance()
 
     LOG("ScenarioEditor V1 starting");
 
-    // Compute the exe directory once; both EntityTypeCatalog.ini and
-    // settings.ini live next to the exe (spec §7.5, §11.5).
+    // Compute the exe directory once; settings.ini lives next to the exe
+    // (spec §11.5). The catalog is different: the in-app Catalog Editor reads
+    // AND writes it, so it must live in a stable, source-controlled location
+    // that the build/deploy step never overwrites. Otherwise every rebuild
+    // copies the source catalog over the exe-dir copy and silently clobbers
+    // any edits made through the editor.
     wchar_t exePath[MAX_PATH] = {};
     ::GetModuleFileNameW(nullptr, exePath, MAX_PATH);
     std::wstring exeDir = exePath;
@@ -56,7 +60,41 @@ BOOL CScenarioEditorApp::InitInstance()
     if (slash != std::wstring::npos)
         exeDir.resize(slash + 1);
 
-    m_catalogPath = exeDir + L"EntityTypeCatalog.ini";
+    // Resolve the catalog to the canonical source copy: the first ANCESTOR of
+    // the exe dir that contains EntityTypeCatalog.ini (the repo root,
+    // ...\ScenarioEditor\EntityTypeCatalog.ini — the same file the DISBrowser
+    // UE project reads via Hanger.ini's EntityCatalog path). We start one level
+    // ABOVE the exe dir so the build-output copy sitting next to the exe is
+    // skipped, not matched. Falls back to the exe-dir copy for a shipped
+    // standalone where no such ancestor exists.
+    auto fileExists = [](const std::wstring& p) -> bool {
+        const DWORD attrs = ::GetFileAttributesW(p.c_str());
+        return attrs != INVALID_FILE_ATTRIBUTES &&
+               !(attrs & FILE_ATTRIBUTE_DIRECTORY);
+    };
+
+    m_catalogPath = exeDir + L"EntityTypeCatalog.ini";   // standalone fallback
+    std::wstring dir = exeDir;
+    for (int up = 0; up < 8; ++up)
+    {
+        // Strip the trailing separator, then ascend one path component.
+        if (!dir.empty() && (dir.back() == L'\\' || dir.back() == L'/'))
+            dir.pop_back();
+        const size_t upSlash = dir.find_last_of(L"\\/");
+        if (upSlash == std::wstring::npos)
+            break;
+        dir.resize(upSlash + 1);
+
+        const std::wstring candidate = dir + L"EntityTypeCatalog.ini";
+        if (fileExists(candidate))
+        {
+            m_catalogPath = candidate;
+            break;
+        }
+    }
+
+    sprintf_s(szError, sizeof(szError), "Catalog path: %S", m_catalogPath.c_str());
+    LOG(szError);
     m_catalog.LoadFromIni(m_catalogPath);
 
     m_settingsPath = exeDir + L"settings.ini";

@@ -57,6 +57,26 @@ int main()
     s.originLonDeg     = -76.6413;
     s.originAltM       = 12.5;
 
+    // ---- Level terrain overlay (land + ocean footprints) ----
+    s.level.enabled        = true;
+    s.level.name           = "Test Beach";
+    s.level.seaLevelMeters = 0.0;
+    s.level.land  = { true, -10000.0, 10000.0,     0.0, 10000.0 };
+    s.level.ocean = { true, -10000.0, 10000.0, -5000.0,  5000.0 };
+    {
+        LevelZone z;
+        z.enabled         = true;
+        z.name            = "Palm Forest";
+        z.eastMinM        = 1.5;
+        z.eastMaxM        = 761.5;
+        z.northMinM       = -209.75;
+        z.northMaxM       = 210.25;
+        z.heightMinMeters = 19.6;
+        z.heightMaxMeters = 40.14;
+        z.colorRgb        = 0x2E7D32;
+        s.level.zones.push_back(z);
+    }
+
     // Multi-entity fixture so we exercise the per-entity Motion section
     // discovery path. Entity 101 carries four mixed motion segments; entity
     // 7 has none (validates the empty-vector branch).
@@ -169,6 +189,41 @@ int main()
     EXPECT_NEAR(loaded.originLatDeg, s.originLatDeg, 1e-9, "Origin.Lat");
     EXPECT_NEAR(loaded.originLonDeg, s.originLonDeg, 1e-9, "Origin.Lon");
     EXPECT_NEAR(loaded.originAltM,   s.originAltM,   1e-9, "Origin.Alt");
+
+    // ---- Level overlay ----
+    EXPECT_EQ(loaded.level.enabled, s.level.enabled, "Level.Enabled");
+    EXPECT_EQ(loaded.level.name,    s.level.name,    "Level.Name");
+    EXPECT_NEAR(loaded.level.seaLevelMeters, s.level.seaLevelMeters, 1e-9, "Level.SeaLevel");
+    EXPECT_EQ(loaded.level.land.enabled,  s.level.land.enabled,  "Level.Land.Enabled");
+    EXPECT_NEAR(loaded.level.land.eastMinM,  s.level.land.eastMinM,  1e-9, "Level.Land.EastMin");
+    EXPECT_NEAR(loaded.level.land.eastMaxM,  s.level.land.eastMaxM,  1e-9, "Level.Land.EastMax");
+    EXPECT_NEAR(loaded.level.land.northMinM, s.level.land.northMinM, 1e-9, "Level.Land.NorthMin");
+    EXPECT_NEAR(loaded.level.land.northMaxM, s.level.land.northMaxM, 1e-9, "Level.Land.NorthMax");
+    EXPECT_EQ(loaded.level.ocean.enabled, s.level.ocean.enabled, "Level.Ocean.Enabled");
+    EXPECT_NEAR(loaded.level.ocean.eastMinM,  s.level.ocean.eastMinM,  1e-9, "Level.Ocean.EastMin");
+    EXPECT_NEAR(loaded.level.ocean.eastMaxM,  s.level.ocean.eastMaxM,  1e-9, "Level.Ocean.EastMax");
+    EXPECT_NEAR(loaded.level.ocean.northMinM, s.level.ocean.northMinM, 1e-9, "Level.Ocean.NorthMin");
+    EXPECT_NEAR(loaded.level.ocean.northMaxM, s.level.ocean.northMaxM, 1e-9, "Level.Ocean.NorthMax");
+
+    // ---- Level named zones ----
+    EXPECT_EQ(loaded.level.zones.size(), s.level.zones.size(), "Level.ZoneCount");
+    if (loaded.level.zones.size() == s.level.zones.size())
+    {
+        for (size_t i = 0; i < s.level.zones.size(); ++i)
+        {
+            const LevelZone& a = s.level.zones[i];
+            const LevelZone& b = loaded.level.zones[i];
+            EXPECT_EQ(b.enabled, a.enabled, "Zone.Enabled");
+            EXPECT_EQ(b.name,    a.name,    "Zone.Name");
+            EXPECT_NEAR(b.eastMinM,        a.eastMinM,        1e-9, "Zone.EastMin");
+            EXPECT_NEAR(b.eastMaxM,        a.eastMaxM,        1e-9, "Zone.EastMax");
+            EXPECT_NEAR(b.northMinM,       a.northMinM,       1e-9, "Zone.NorthMin");
+            EXPECT_NEAR(b.northMaxM,       a.northMaxM,       1e-9, "Zone.NorthMax");
+            EXPECT_NEAR(b.heightMinMeters, a.heightMinMeters, 1e-9, "Zone.HeightMin");
+            EXPECT_NEAR(b.heightMaxMeters, a.heightMaxMeters, 1e-9, "Zone.HeightMax");
+            EXPECT_EQ(b.colorRgb, a.colorRgb, "Zone.ColorRGB");
+        }
+    }
 
     // ---- Entity ----
     if (loaded.entities.size() != 2) {
