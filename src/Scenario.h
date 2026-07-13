@@ -225,11 +225,11 @@ struct OutputConfig
 
     // UDP unicast
     std::string unicastIp       = "127.0.0.1";
-    uint16_t    unicastPort     = 3000;
+    uint16_t    unicastPort     = 3001;   // match DISBrowser Config/DISBrowser.ini [DIS] ListenPort
 
     // UDP multicast
     std::string multicastGroup  = "239.1.2.3";
-    uint16_t    multicastPort   = 3000;
+    uint16_t    multicastPort   = 3001;   // keep aligned with DISBrowser's DIS listen port
     std::string multicastInterface = "0.0.0.0"; // 0.0.0.0 = OS default IF
     int         multicastTtl    = 1;
     bool        multicastLoopback = true;
