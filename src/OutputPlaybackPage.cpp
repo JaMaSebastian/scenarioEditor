@@ -1,8 +1,12 @@
 #include "pch.h"
 #include "OutputPlaybackPage.h"
 #include "Scenario.h"
+#include "ScenarioEditor.h"   // theApp.Settings()
+#include "SettingsIO.h"
+#include "StartupIniWriter.h"
 
 #include <cstdlib>
+#include <shlobj.h>           // SHBrowseForFolder — pick the DISBrowser project folder
 #include <uxtheme.h>          // SetWindowTheme — declassic checkboxes/radios/groupboxes
 #pragma comment(lib, "uxtheme.lib")
 
@@ -36,7 +40,29 @@ namespace
         { IDC_COMBO_PLAYBACK_SPEED,     _T("Playback speed multiplier."), false },
 
         { IDC_BTN_ATTRIBUTES,           _T("Open the Attributes notebook to edit the scenario setup, assets/entities, and motion paths."), false },
+
+        { IDC_UNREAL_LEVEL_COMBO,       _T("Which DISBrowser Unreal level to load at startup. Only 'Generic' uses the origin/basemap below."), false },
+        { IDC_UNREAL_BASEMAP_COMBO,     _T("Ground for the Generic level: ESRI Satellite, OpenTopoMap Topographic, self-hosted Cesium 3D terrain (needs Scripts\\serve_terrain.cmd running), or none."), false },
+        { IDC_EDIT_UNREAL_PROJECT,      _T("Root folder of the DISBrowser Unreal project (the one containing Config\\)."), false },
+        { IDC_BTN_UNREAL_PROJECT_BROWSE,_T("Pick the DISBrowser project folder."), false },
+        { IDC_BTN_CONFIGURE_UNREAL,     _T("Write Config\\Startup.ini so DISBrowser loads this level, origin, and basemap next time it starts."), false },
+        { IDC_CHK_UNREAL_DYNAMIC_TILES, _T("Generic level only: stream basemap tiles in around the camera as you fly (no void past the initial grid) and cache them for future sessions."), false },
     };
+
+    const TCHAR* const kUnrealLevels[]  = { _T("Generic"), _T("Beach"), _T("Forest"), _T("Main"), _T("Hanger"), _T("GodView") };
+    const TCHAR* const kUnrealBasemaps[] = { _T("Satellite"), _T("Topographic"), _T("Cesium 3D (self-hosted)"), _T("None") };
+
+    // Select the combo item whose text equals `want` (case-insensitive); else index 0.
+    void SelectByText(CComboBox* cb, const CString& want)
+    {
+        if (!cb) return;
+        for (int i = 0; i < cb->GetCount(); ++i)
+        {
+            CString item; cb->GetLBText(i, item);
+            if (item.CompareNoCase(want) == 0) { cb->SetCurSel(i); return; }
+        }
+        cb->SetCurSel(0);
+    }
 }
 
 BEGIN_MESSAGE_MAP(COutputPlaybackPage, CHelpAwarePage)
@@ -47,6 +73,8 @@ BEGIN_MESSAGE_MAP(COutputPlaybackPage, CHelpAwarePage)
     ON_BN_CLICKED(IDC_BTN_PLAYBACK_RESUME,  &COutputPlaybackPage::OnLocalPlaybackResume)
     ON_BN_CLICKED(IDC_BTN_PLAYBACK_STOP,    &COutputPlaybackPage::OnLocalPlaybackStop)
     ON_BN_CLICKED(IDC_BTN_ATTRIBUTES,       &COutputPlaybackPage::OnAttributes)
+    ON_BN_CLICKED(IDC_BTN_CONFIGURE_UNREAL, &COutputPlaybackPage::OnConfigureUnreal)
+    ON_BN_CLICKED(IDC_BTN_UNREAL_PROJECT_BROWSE, &COutputPlaybackPage::OnBrowseUnrealProject)
     ON_WM_CTLCOLOR()
 END_MESSAGE_MAP()
 
@@ -95,10 +123,41 @@ BOOL COutputPlaybackPage::OnInitDialog()
         cb->SetCurSel(2);
     }
 
+    // Populate the DISBrowser (Unreal) configuration controls from saved settings.
+    const ::Settings& st = theApp.Settings();
+    if (CComboBox* cb = (CComboBox*)GetDlgItem(IDC_UNREAL_LEVEL_COMBO))
+    {
+        for (const auto* s : kUnrealLevels) cb->AddString(s);
+        SelectByText(cb, CString(st.unrealTargetLevel.c_str()));
+    }
+    if (CComboBox* cb = (CComboBox*)GetDlgItem(IDC_UNREAL_BASEMAP_COMBO))
+    {
+        for (const auto* s : kUnrealBasemaps) cb->AddString(s);
+        SelectByText(cb, CString(st.unrealBasemap.c_str()));
+    }
+    SetDlgItemText(IDC_EDIT_UNREAL_PROJECT, ResolveProjectDir());
+    CheckDlgButton(IDC_CHK_UNREAL_DYNAMIC_TILES, st.unrealDynamicTiles ? BST_CHECKED : BST_UNCHECKED);
+
     // Seed defaults from a fresh OutputConfig.
     OutputConfig defaults;
     ReadFrom(defaults);
     return TRUE;
+}
+
+CString COutputPlaybackPage::ResolveProjectDir() const
+{
+    const ::Settings& st = theApp.Settings();
+    if (!st.disBrowserProjectDir.empty())
+        return CString(st.disBrowserProjectDir.c_str());
+
+    // Default: sibling "DISBrowser" folder next to the ScenarioEditor exe's grandparent.
+    TCHAR exe[MAX_PATH] = { 0 };
+    ::GetModuleFileName(nullptr, exe, _countof(exe));
+    CString path(exe);
+    int slash = path.ReverseFind(_T('\\'));
+    if (slash > 0) path = path.Left(slash);            // strip exe name
+    // exe typically lives in ScenarioEditor\build*\<cfg>\ — hop up to the common parent, then DISBrowser.
+    return path + _T("\\..\\..\\..\\DISBrowser");
 }
 
 HBRUSH COutputPlaybackPage::OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor)
@@ -246,4 +305,105 @@ void COutputPlaybackPage::OnBrowseReplay()
                     this);
     if (dlg.DoModal() == IDOK)
         SetDlgItemText(IDC_EDIT_REPLAY_PATH, dlg.GetPathName());
+}
+
+namespace
+{
+    // BrowseCallbackProc: preselect the folder passed via lpData.
+    int CALLBACK BrowseInitProc(HWND hwnd, UINT msg, LPARAM /*lp*/, LPARAM data)
+    {
+        if (msg == BFFM_INITIALIZED && data)
+            ::SendMessage(hwnd, BFFM_SETSELECTION, TRUE, data);
+        return 0;
+    }
+}
+
+void COutputPlaybackPage::OnBrowseUnrealProject()
+{
+    CString initial;
+    GetDlgItemText(IDC_EDIT_UNREAL_PROJECT, initial);
+
+    TCHAR display[MAX_PATH] = { 0 };
+    BROWSEINFO bi = { 0 };
+    bi.hwndOwner = GetSafeHwnd();
+    bi.pszDisplayName = display;
+    bi.lpszTitle = _T("Select the DISBrowser Unreal project folder (contains Config\\)");
+    bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    bi.lpfn = BrowseInitProc;
+    bi.lParam = (LPARAM)(LPCTSTR)initial;
+
+    LPITEMIDLIST pidl = ::SHBrowseForFolder(&bi);
+    if (!pidl) return;
+
+    TCHAR path[MAX_PATH] = { 0 };
+    if (::SHGetPathFromIDList(pidl, path))
+        SetDlgItemText(IDC_EDIT_UNREAL_PROJECT, path);
+    ::CoTaskMemFree(pidl);
+}
+
+void COutputPlaybackPage::OnConfigureUnreal()
+{
+    // Gather the picks.
+    CString level, basemap, projectDir;
+    if (CComboBox* cb = (CComboBox*)GetDlgItem(IDC_UNREAL_LEVEL_COMBO))
+        cb->GetLBText(cb->GetCurSel() < 0 ? 0 : cb->GetCurSel(), level);
+    if (CComboBox* cb = (CComboBox*)GetDlgItem(IDC_UNREAL_BASEMAP_COMBO))
+        cb->GetLBText(cb->GetCurSel() < 0 ? 0 : cb->GetCurSel(), basemap);
+    GetDlgItemText(IDC_EDIT_UNREAL_PROJECT, projectDir);
+    projectDir.Trim();
+    const bool dynamicTiles = IsDlgButtonChecked(IDC_CHK_UNREAL_DYNAMIC_TILES) == BST_CHECKED;
+
+    if (projectDir.IsEmpty())
+    {
+        AfxMessageBox(_T("Set the DISBrowser project folder first."), MB_ICONWARNING);
+        return;
+    }
+
+    // Persist the choices so they survive across sessions (dialog saves settings on exit).
+    ::Settings& st = theApp.Settings();
+    { CT2A a(level);      st.unrealTargetLevel   = a.m_psz; }
+    { CT2A a(basemap);    st.unrealBasemap       = a.m_psz; }
+    { CT2A a(projectDir); st.disBrowserProjectDir = a.m_psz; }
+    st.unrealDynamicTiles = dynamicTiles;
+
+    double lat = 0.0, lon = 0.0, alt = 0.0;
+    bool   boundsValid = false;
+    double latMin = 0.0, latMax = 0.0, lonMin = 0.0, lonMax = 0.0;
+    if (m_scenario)
+    {
+        lat = m_scenario->originLatDeg;
+        lon = m_scenario->originLonDeg;
+        alt = m_scenario->originAltM;
+        boundsValid = m_scenario->terrainBoundsValid;
+        latMin = m_scenario->terrainLatMinDeg;
+        latMax = m_scenario->terrainLatMaxDeg;
+        lonMin = m_scenario->terrainLonMinDeg;
+        lonMax = m_scenario->terrainLonMaxDeg;
+    }
+
+    std::wstring result;
+    const bool ok = StartupIniWriter::Write(
+        std::wstring(CT2W(projectDir)),
+        st.unrealTargetLevel, st.unrealBasemap, dynamicTiles,
+        lat, lon, alt,
+        boundsValid, latMin, latMax, lonMin, lonMax, result);
+
+    if (ok)
+    {
+        CString msg;
+        if (level.CompareNoCase(_T("Generic")) == 0)
+            msg.Format(_T("Wrote:\n%s\n\nDISBrowser will load the Generic level with origin ")
+                       _T("(%.6f, %.6f, %.1f m) and the %s basemap at startup.\nDynamic tile streaming: %s."),
+                       result.c_str(), lat, lon, alt, (LPCTSTR)basemap,
+                       dynamicTiles ? _T("ON") : _T("off"));
+        else
+            msg.Format(_T("Wrote:\n%s\n\nDISBrowser will load the %s level at startup ")
+                       _T("(origin/basemap unchanged for non-Generic levels)."),
+                       result.c_str(), (LPCTSTR)level);
+        AfxMessageBox(msg, MB_ICONINFORMATION);
+    }
+    else
+    {
+        AfxMessageBox((_T("Could not write Startup.ini:\n") + CString(result.c_str())), MB_ICONERROR);
+    }
 }

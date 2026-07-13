@@ -26,6 +26,7 @@ add_executable(ScenarioEditor WIN32
     src/AssetEntityEditorPage.cpp
     src/MotionPathEditorPage.cpp
     src/OutputPlaybackPage.cpp
+    src/StartupIniWriter.cpp
     src/AttributesDialog.cpp
     src/PlaysPage.cpp
     src/DeployPage.cpp

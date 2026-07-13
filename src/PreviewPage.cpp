@@ -13,9 +13,59 @@
 #include <cmath>
 #include <uxtheme.h>          // SetWindowTheme — declassic checkboxes for white labels
 #pragma comment(lib, "uxtheme.lib")
+#include <shellapi.h>         // ShellExecute — launch the DISBrowser re-tile script
+#include <utility>            // std::swap
+#include <winsock2.h>         // probe localhost:8088 to detect the terrain tile server
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
 
 namespace
 {
+    // True if something is listening on 127.0.0.1:<port> (WSL2 forwards localhost),
+    // used to detect the self-hosted Cesium terrain server (python3 serve.py :8088).
+    // Non-blocking connect with a short timeout so the UI poll never stalls.
+    bool ProbeTcpPort(const char* host, unsigned short port, int timeoutMs)
+    {
+        static bool wsaUp = false;
+        if (!wsaUp)
+        {
+            WSADATA wsa{};
+            if (::WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return false;
+            wsaUp = true;   // process-lifetime; cleaned up at exit
+        }
+
+        SOCKET s = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (s == INVALID_SOCKET) return false;
+
+        u_long nonBlocking = 1;
+        ::ioctlsocket(s, FIONBIO, &nonBlocking);
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port   = ::htons(port);
+        ::InetPtonA(AF_INET, host, &addr.sin_addr);
+
+        bool ok = false;
+        if (::connect(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0)
+            ok = true;
+        else if (::WSAGetLastError() == WSAEWOULDBLOCK)
+        {
+            fd_set wf; FD_ZERO(&wf); FD_SET(s, &wf);
+            timeval tv{};
+            tv.tv_sec  = timeoutMs / 1000;
+            tv.tv_usec = (timeoutMs % 1000) * 1000;
+            if (::select(0, nullptr, &wf, nullptr, &tv) > 0 && FD_ISSET(s, &wf))
+            {
+                int err = 0; int len = sizeof(err);
+                if (::getsockopt(s, SOL_SOCKET, SO_ERROR,
+                                 reinterpret_cast<char*>(&err), &len) == 0 && err == 0)
+                    ok = true;
+            }
+        }
+
+        ::closesocket(s);
+        return ok;
+    }
     const FFieldHelp kFields[] = {
         { IDC_BTN_PREVIEW_START,       _T("Start the preview animation."), false },
         { IDC_BTN_PREVIEW_PAUSE,       _T("Pause the preview animation."), false },
@@ -338,6 +388,10 @@ BEGIN_MESSAGE_MAP(CPreviewPage, CHelpAwarePage)
     ON_BN_CLICKED(IDC_CHK_PREVIEW_TERRAIN,     &CPreviewPage::OnTerrainToggle)
     ON_BN_CLICKED(IDC_CHK_PREVIEW_LEGEND,      &CPreviewPage::OnLegendToggle)
     ON_BN_CLICKED(IDC_BTN_PREVIEW_SET_START,   &CPreviewPage::OnSetStart)
+    ON_BN_CLICKED(IDC_BTN_PREVIEW_BOUNDARY,    &CPreviewPage::OnBoundary)
+    ON_BN_CLICKED(IDC_BTN_PREVIEW_BUILD_TERRAIN, &CPreviewPage::OnBuildTerrain)
+    ON_BN_CLICKED(IDC_BTN_PREVIEW_TERRAIN_START, &CPreviewPage::OnStartTerrainServer)
+    ON_BN_CLICKED(IDC_BTN_PREVIEW_TERRAIN_STOP,  &CPreviewPage::OnStopTerrainServer)
     ON_CBN_SELCHANGE(IDC_COMBO_PREVIEW_SPEED,  &CPreviewPage::OnSpeedChange)
     ON_BN_CLICKED(IDC_CHK_PREVIEW_DESTTIME,    &CPreviewPage::OnDestTimeToggle)
     ON_CBN_SELCHANGE(IDC_COMBO_MAP_LAYER,      &CPreviewPage::OnMapLayerChange)
@@ -501,12 +555,21 @@ BOOL CPreviewPage::OnInitDialog()
     FitScenario();
     RebuildRenderState();
 
+    // Detect whether the self-hosted terrain server is already running (it may have
+    // been left up from a previous run — we never kill it on our own exit), then poll
+    // periodically so the Start check + Boundary/Build gating track it live.
+    RefreshTerrainServerUi();
+    SetTimer(kServerPollTimerId, 1500, nullptr);
+
     return TRUE;
 }
 
 void CPreviewPage::OnDestroy()
 {
     StopTimer();
+    KillTimer(kServerPollTimerId);
+    // NOTE: intentionally do NOT stop the terrain server here — closing the editor
+    // leaves the tile server running (per design), so a live DISBrowser keeps its terrain.
     CHelpAwarePage::OnDestroy();
 }
 
@@ -564,6 +627,14 @@ void CPreviewPage::ActivateCesium(bool on)
         else                         m_cesium.SetBounds(wr);
         m_cesium.ShowView(true);
         if (m_canvas.GetSafeHwnd()) m_canvas.ShowWindow(SW_HIDE);
+
+        // Route a globe-painted boundary box back into the same handler the 2D canvas uses.
+        m_cesium.SetBoundsCallback([this](double laMn, double laMx, double loMn, double loMx)
+        {
+            OnBoundaryPainted(laMn, laMx, loMn, loMx);
+        });
+        // Carry the current armed state onto the globe so the gesture is identical either way.
+        m_cesium.SetBoundaryMode(m_boundaryArmed);
 
         FlyCesiumToOrigin();
         PushCesiumEntities();
@@ -918,6 +989,7 @@ void CPreviewPage::OnSpeedChange()
 
 void CPreviewPage::OnTimer(UINT_PTR id)
 {
+    if (id == kServerPollTimerId) { RefreshTerrainServerUi(); return; }
     if (id != kAnimTimerId) { CHelpAwarePage::OnTimer(id); return; }
     if (!m_scenario || m_runState != PreviewState::Playing) return;
 
@@ -1078,9 +1150,216 @@ void CPreviewPage::OnSetStart()
         ::SetCursor(::LoadCursor(nullptr, IDC_CROSS));
 }
 
+void CPreviewPage::OnBoundary()
+{
+    // Toggle boundary-paint mode. While armed the button shows a bold green check and the
+    // canvas turns a left-drag into a yellow terrain-boundary rectangle (see PreviewCanvas).
+    m_boundaryArmed = !m_boundaryArmed;
+    if (m_boundaryArmed) m_startPickArmed = false;   // the two paint modes are mutually exclusive
+    if (CWnd* b = GetDlgItem(IDC_BTN_PREVIEW_BOUNDARY))  b->Invalidate();
+    if (CWnd* s = GetDlgItem(IDC_BTN_PREVIEW_SET_START)) s->Invalidate();
+    if (m_canvas.GetSafeHwnd())
+    {
+        m_canvas.Invalidate(FALSE);
+        if (m_boundaryArmed) ::SetCursor(::LoadCursor(nullptr, IDC_CROSS));
+    }
+    // Same gesture works on the 3D globe: arm/disarm right-drag rectangle paint there too.
+    if (m_mapLayer == MapLayer::Cesium && m_cesium.GetSafeHwnd())
+        m_cesium.SetBoundaryMode(m_boundaryArmed);
+}
+
+void CPreviewPage::OnBoundaryPainted(double latMinDeg, double latMaxDeg,
+                                     double lonMinDeg, double lonMaxDeg)
+{
+    if (!m_scenario) return;
+
+    // Normalize so min < max regardless of drag direction.
+    if (latMinDeg > latMaxDeg) std::swap(latMinDeg, latMaxDeg);
+    if (lonMinDeg > lonMaxDeg) std::swap(lonMinDeg, lonMaxDeg);
+
+    m_scenario->terrainBoundsValid = true;
+    m_scenario->terrainLatMinDeg   = latMinDeg;
+    m_scenario->terrainLatMaxDeg   = latMaxDeg;
+    m_scenario->terrainLonMinDeg   = lonMinDeg;
+    m_scenario->terrainLonMaxDeg   = lonMaxDeg;
+
+    {
+        char buf[220];
+        sprintf_s(buf, sizeof(buf),
+                  "PreviewPage::OnBoundaryPainted: terrain box lat[%.5f..%.5f] lon[%.5f..%.5f]",
+                  latMinDeg, latMaxDeg, lonMinDeg, lonMaxDeg);
+        LOG(buf);
+    }
+
+    // Recording complete: leave boundary mode (the transient yellow rectangle disappears) and
+    // flag the scenario dirty so the box persists into the .ini on Save.
+    m_boundaryArmed = false;
+    if (CWnd* b = GetDlgItem(IDC_BTN_PREVIEW_BOUNDARY)) b->Invalidate();
+    if (m_mapLayer == MapLayer::Cesium && m_cesium.GetSafeHwnd())
+        m_cesium.SetBoundaryMode(false);   // restore the globe's right-drag zoom
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+}
+
+void CPreviewPage::OnBuildTerrain()
+{
+    if (!m_scenario || !m_scenario->terrainBoundsValid)
+    {
+        MessageBox(_T("Paint a terrain boundary first:\n\nClick \"Boundary\", then drag a rectangle on ")
+                   _T("the map to mark the area you want as solid 3D terrain."),
+                   _T("Build 3D Terrain"), MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    // Resolve DISBrowser\Scripts\retile_terrain.cmd (same project-dir logic as the Run tab).
+    CString projDir;
+    const ::Settings& st = theApp.Settings();
+    if (!st.disBrowserProjectDir.empty())
+        projDir = CString(st.disBrowserProjectDir.c_str());
+    else
+    {
+        TCHAR exe[MAX_PATH] = { 0 };
+        ::GetModuleFileName(nullptr, exe, _countof(exe));
+        CString p(exe);
+        int slash = p.ReverseFind(_T('\\'));
+        if (slash > 0) p = p.Left(slash);
+        projDir = p + _T("\\..\\..\\..\\DISBrowser");
+    }
+    CString cmdPath = projDir + _T("\\Scripts\\retile_terrain.cmd");
+
+    if (::GetFileAttributes(cmdPath) == INVALID_FILE_ATTRIBUTES)
+    {
+        CString msg;
+        msg.Format(_T("Cannot find the re-tile script:\n%s\n\nSet the DISBrowser project folder on the Run tab."),
+                   (LPCTSTR)cmdPath);
+        MessageBox(msg, _T("Build 3D Terrain"), MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    CString confirm;
+    confirm.Format(_T("Download DEM + build 3D terrain for:\n\n")
+                   _T("  lat  %.4f .. %.4f\n  lon  %.4f .. %.4f\n\n")
+                   _T("This runs the WSL/Docker tiling pipeline and can take several minutes. Continue?"),
+                   m_scenario->terrainLatMinDeg, m_scenario->terrainLatMaxDeg,
+                   m_scenario->terrainLonMinDeg, m_scenario->terrainLonMaxDeg);
+    if (MessageBox(confirm, _T("Build 3D Terrain"), MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
+        return;
+
+    // retile_terrain.cmd latMin latMax lonMin lonMax
+    CString args;
+    args.Format(_T("%.6f %.6f %.6f %.6f"),
+                m_scenario->terrainLatMinDeg, m_scenario->terrainLatMaxDeg,
+                m_scenario->terrainLonMinDeg, m_scenario->terrainLonMaxDeg);
+
+    HINSTANCE h = ::ShellExecute(GetSafeHwnd(), _T("open"), cmdPath, args, projDir, SW_SHOWNORMAL);
+    if ((INT_PTR)h <= 32)
+    {
+        CString msg;
+        msg.Format(_T("Failed to launch the re-tile script (error %Id)."), (INT_PTR)h);
+        MessageBox(msg, _T("Build 3D Terrain"), MB_OK | MB_ICONERROR);
+    }
+}
+
+CString CPreviewPage::ResolveDisBrowserScript(const CString& fileName) const
+{
+    // Same project-dir logic the Run tab / OnBuildTerrain use.
+    CString projDir;
+    const ::Settings& st = theApp.Settings();
+    if (!st.disBrowserProjectDir.empty())
+        projDir = CString(st.disBrowserProjectDir.c_str());
+    else
+    {
+        TCHAR exe[MAX_PATH] = { 0 };
+        ::GetModuleFileName(nullptr, exe, _countof(exe));
+        CString p(exe);
+        int slash = p.ReverseFind(_T('\\'));
+        if (slash > 0) p = p.Left(slash);
+        projDir = p + _T("\\..\\..\\..\\DISBrowser");
+    }
+    return projDir + _T("\\Scripts\\") + fileName;
+}
+
+void CPreviewPage::RefreshTerrainServerUi()
+{
+    const bool up = ProbeTcpPort("127.0.0.1", 8088, 250);
+    const bool changed = (up != m_terrainServerUp);
+    m_terrainServerUp = up;
+
+    // Painting a boundary or building tiles only makes sense once the server serves
+    // them, so gate those behind the server being up. Stop is only useful when up;
+    // Start stays enabled (it repaints its own green "running" check).
+    if (CWnd* b = GetDlgItem(IDC_BTN_PREVIEW_BOUNDARY))      b->EnableWindow(up);
+    if (CWnd* b = GetDlgItem(IDC_BTN_PREVIEW_BUILD_TERRAIN)) b->EnableWindow(up);
+    if (CWnd* b = GetDlgItem(IDC_BTN_PREVIEW_TERRAIN_STOP))  b->EnableWindow(up);
+    if (CWnd* b = GetDlgItem(IDC_BTN_PREVIEW_TERRAIN_START)) b->Invalidate();
+
+    // If the server dropped while boundary paint was armed, disarm it so the canvas
+    // doesn't keep a live paint gesture against a disabled button.
+    if (!up && m_boundaryArmed)
+    {
+        m_boundaryArmed = false;
+        if (CWnd* bb = GetDlgItem(IDC_BTN_PREVIEW_BOUNDARY)) bb->Invalidate();
+        if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+        if (m_mapLayer == MapLayer::Cesium && m_cesium.GetSafeHwnd())
+            m_cesium.SetBoundaryMode(false);
+    }
+
+    if (changed)
+        LOG(up ? "PreviewPage: terrain server UP (localhost:8088)"
+               : "PreviewPage: terrain server DOWN");
+}
+
+void CPreviewPage::OnStartTerrainServer()
+{
+    if (m_terrainServerUp || ProbeTcpPort("127.0.0.1", 8088, 250))
+    {
+        RefreshTerrainServerUi();   // already running — just sync the UI
+        return;
+    }
+
+    CString cmdPath = ResolveDisBrowserScript(_T("serve_terrain.cmd"));
+    if (::GetFileAttributes(cmdPath) == INVALID_FILE_ATTRIBUTES)
+    {
+        CString msg;
+        msg.Format(_T("Cannot find the terrain server script:\n%s\n\nSet the DISBrowser project folder on the Run tab."),
+                   (LPCTSTR)cmdPath);
+        MessageBox(msg, _T("Start Terrain Server"), MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    // Launch the server in its own console (it stays up independently of this editor).
+    HINSTANCE h = ::ShellExecute(GetSafeHwnd(), _T("open"), cmdPath, nullptr, nullptr, SW_SHOWNORMAL);
+    if ((INT_PTR)h <= 32)
+    {
+        CString msg;
+        msg.Format(_T("Failed to launch the terrain server (error %Id)."), (INT_PTR)h);
+        MessageBox(msg, _T("Start Terrain Server"), MB_OK | MB_ICONERROR);
+        return;
+    }
+    // The server needs a moment to bind :8088; the poll timer flips the UI to
+    // "running" (green check + enables Boundary/Build) as soon as the port answers.
+    RefreshTerrainServerUi();
+}
+
+void CPreviewPage::OnStopTerrainServer()
+{
+    // Kill the WSL-side server process; its console window then closes on its own.
+    ::ShellExecute(GetSafeHwnd(), _T("open"), _T("wsl.exe"),
+                   _T("-d Ubuntu -u root -- pkill -f serve.py"), nullptr, SW_HIDE);
+    // The port may take a beat to drop; the poll timer will settle the final state.
+    RefreshTerrainServerUi();
+}
+
 void CPreviewPage::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT lpDIS)
 {
-    if (nIDCtl != IDC_BTN_PREVIEW_SET_START || !lpDIS)
+    // Three owner-draw buttons share this painter: "Set Start" (green "?" while armed),
+    // "Boundary" (bold green check while armed), and "Start Terrain Server" (bold green
+    // check while the tile server is running). Everything else defers to the base class.
+    const bool isSetStart = (nIDCtl == IDC_BTN_PREVIEW_SET_START);
+    const bool isBoundary = (nIDCtl == IDC_BTN_PREVIEW_BOUNDARY);
+    const bool isSrvStart = (nIDCtl == IDC_BTN_PREVIEW_TERRAIN_START);
+    if ((!isSetStart && !isBoundary && !isSrvStart) || !lpDIS)
     {
         CHelpAwarePage::OnDrawItem(nIDCtl, lpDIS);
         return;
@@ -1094,17 +1373,40 @@ void CPreviewPage::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT lpDIS)
     dc->DrawFrameControl(&rc, DFC_BUTTON,
                          DFCS_BUTTONPUSH | (pressed ? DFCS_PUSHED : 0));
 
-    // Label: "Set Start" in the normal button color, plus a trailing green "?"
-    // while a start has not yet been picked (or pick mode is armed).
     HFONT hf = (HFONT)::SendMessage(lpDIS->hwndItem, WM_GETFONT, 0, 0);
     CFont* oldFont = hf ? dc->SelectObject(CFont::FromHandle(hf)) : nullptr;
     const int oldBk = dc->SetBkMode(TRANSPARENT);
 
-    const bool showHint = m_startPickArmed;   // green "?" only while pick mode is active
-    CString base  = _T("Set Start");
-    CString hint  = _T(" ?");
+    // Label + a trailing green hint glyph while the mode is armed / server is up.
+    const bool  showHint = isSetStart ? m_startPickArmed
+                         : isBoundary ? m_boundaryArmed
+                                      : m_terrainServerUp;
+    CString base = isSetStart ? _T("Set Start")
+                 : isBoundary ? _T("Boundary")
+                 : (m_terrainServerUp ? _T("Terrain Server") : _T("Start Terrain Server"));
+    CString hint = isSetStart ? _T(" ?") : _T(" \x2713");   // U+2713 check for Boundary/Server
+
+    // The Boundary / Server check is drawn in a bold font so it reads clearly.
+    CFont  boldFont;
+    CFont* boldPtr = nullptr;
+    if ((isBoundary || isSrvStart) && showHint && hf)
+    {
+        LOGFONT lf; ::ZeroMemory(&lf, sizeof(lf));
+        if (::GetObject(hf, sizeof(lf), &lf))
+        {
+            lf.lfWeight = FW_BOLD;
+            if (boldFont.CreateFontIndirect(&lf)) boldPtr = &boldFont;
+        }
+    }
+
     const CSize baseSz = dc->GetTextExtent(base);
-    const CSize hintSz = showHint ? dc->GetTextExtent(hint) : CSize(0, 0);
+    CSize hintSz(0, 0);
+    if (showHint)
+    {
+        CFont* prev = boldPtr ? dc->SelectObject(boldPtr) : nullptr;
+        hintSz = dc->GetTextExtent(hint);
+        if (prev) dc->SelectObject(prev);
+    }
     const int totalW = baseSz.cx + hintSz.cx;
 
     if (pressed) rc.OffsetRect(1, 1);   // classic pressed nudge
@@ -1117,7 +1419,9 @@ void CPreviewPage::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT lpDIS)
     if (showHint)
     {
         dc->SetTextColor(RGB(0, 160, 0));
+        CFont* prev = boldPtr ? dc->SelectObject(boldPtr) : nullptr;
         dc->TextOut(x, y, hint);
+        if (prev) dc->SelectObject(prev);
     }
 
     dc->SetTextColor(oldColor);

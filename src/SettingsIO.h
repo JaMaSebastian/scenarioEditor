@@ -28,6 +28,15 @@ struct Settings
 
     // [Paths]
     std::string lastScenarioPath;
+    // Root of the DISBrowser Unreal project (the folder that contains Config\). The
+    // "Configure Unreal" action on the Output tab writes <this>\Config\Startup.ini there.
+    // Empty => resolved at use time to "..\DISBrowser" relative to the ScenarioEditor exe.
+    std::string disBrowserProjectDir;
+
+    // [Unreal] — target level + basemap pushed to DISBrowser via Config\Startup.ini.
+    std::string unrealTargetLevel = "Generic";   // Generic|Beach|Forest|Main|Hanger|GodView
+    std::string unrealBasemap     = "Satellite";  // Satellite|Topographic|None (used when level=Generic)
+    bool        unrealDynamicTiles = false;       // stream/cache tiles around the camera in the generic level
 
     // [Deploy] — persisted Deploy-tab list column widths (px), one per column.
     // Empty until the user first sets them; the Deploy page then hand-applies

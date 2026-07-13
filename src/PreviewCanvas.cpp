@@ -202,6 +202,13 @@ void CPreviewCanvas::OnLButtonUp(UINT nFlags, CPoint pt)
 
 void CPreviewCanvas::OnMouseMove(UINT nFlags, CPoint pt)
 {
+    if (m_boundaryDragActive)
+    {
+        m_boundaryCur = pt;
+        Invalidate(FALSE);
+        CWnd::OnMouseMove(nFlags, pt);
+        return;
+    }
     if (m_rbActive)
     {
         m_rbCur = pt;
@@ -274,6 +281,20 @@ BOOL CPreviewCanvas::OnMouseWheel(UINT /*nFlags*/, short zDelta, CPoint screenPt
 void CPreviewCanvas::OnRButtonDown(UINT nFlags, CPoint pt)
 {
     SetFocus();
+
+    // "Boundary" paint mode: the SAME right-drag gesture that mass-selects entities instead marks
+    // the 3D-terrain box (no entity selection, no context menu). Armed via the Preview Boundary button.
+    if (m_owner && m_owner->IsBoundaryArmed())
+    {
+        m_boundaryDragActive = true;
+        m_boundaryStart = pt;
+        m_boundaryCur   = pt;
+        SetCapture();
+        ::SetCursor(::LoadCursor(nullptr, IDC_CROSS));
+        CWnd::OnRButtonDown(nFlags, pt);
+        return;
+    }
+
     // Right-press on empty space begins a rubber-band group selection. On an
     // entity dot or a course line, do nothing here -- OnRButtonUp shows the menu.
     const bool onObject = (HitTestEntity(pt) >= 0) || (HitTestLineSegment(pt) >= 0);
@@ -290,6 +311,44 @@ void CPreviewCanvas::OnRButtonDown(UINT nFlags, CPoint pt)
 
 void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
 {
+    // Finish a "Boundary" paint drag: convert the box → ENU → lat/lon corners → the page (which
+    // records it + disarms so the yellow rectangle disappears). No context menu, no entity selection.
+    if (m_boundaryDragActive)
+    {
+        m_boundaryDragActive = false;
+        ReleaseCapture();
+        double e0 = 0, n0 = 0, e1 = 0, n1 = 0;
+        if (m_owner && UnprojectToEnu(m_boundaryStart, e0, n0) && UnprojectToEnu(m_boundaryCur, e1, n1))
+        {
+            const double eMin = (e0 < e1) ? e0 : e1, eMax = (e0 < e1) ? e1 : e0;
+            const double nMin = (n0 < n1) ? n0 : n1, nMax = (n0 < n1) ? n1 : n0;
+            // Ignore a click / hairline box (< 1 m on a side).
+            if ((eMax - eMin) > 1.0 && (nMax - nMin) > 1.0)
+            {
+                const PreviewRenderState& s = m_owner->GetRenderState();
+                auto enuToLatLon = [&](double e, double n, double& lat, double& lon)
+                {
+                    double X, Y, Z, alt;
+                    CoordTransforms::LocalEnuToEcefDeg(e, n, 0.0,
+                        s.originLatDeg, s.originLonDeg, s.originAltM, X, Y, Z);
+                    CoordTransforms::EcefToGeodeticDeg(X, Y, Z, lat, lon, alt);
+                };
+                // Take the lat/lon bounding box over all 4 ENU corners (robust to any origin skew).
+                const double corners[4][2] = { {eMin, nMin}, {eMin, nMax}, {eMax, nMin}, {eMax, nMax} };
+                double latMin = 1e18, latMax = -1e18, lonMin = 1e18, lonMax = -1e18;
+                for (int i = 0; i < 4; ++i)
+                {
+                    double la = 0, lo = 0;
+                    enuToLatLon(corners[i][0], corners[i][1], la, lo);
+                    if (la < latMin) latMin = la;  if (la > latMax) latMax = la;
+                    if (lo < lonMin) lonMin = lo;  if (lo > lonMax) lonMax = lo;
+                }
+                m_owner->OnBoundaryPainted(latMin, latMax, lonMin, lonMax);
+            }
+        }
+        return;
+    }
+
     // Finish a rubber-band group selection (drag = select dots inside the box; a
     // plain empty right-click with no drag = clear the current group).
     if (m_rbActive)
@@ -1438,6 +1497,17 @@ void CPreviewCanvas::Render(const PreviewRenderState& state)
         const D2D1_RECT_F box = D2D1::RectF((a.x < b.x ? a.x : b.x), (a.y < b.y ? a.y : b.y),
                                             (a.x < b.x ? b.x : a.x), (a.y < b.y ? b.y : a.y));
         m_rt->DrawRectangle(box, m_brushSelect.Get(), 1.0f, m_dashedStroke.Get());
+    }
+
+    // "Boundary" paint box (left-drag while armed): the yellow 3D-terrain boundary rectangle.
+    // Drawn thicker than the selection box so it reads as the terrain footprint being marked.
+    if (m_boundaryDragActive && m_brushSelect)
+    {
+        const D2D1_POINT_2F a = ClientToDip(m_boundaryStart);
+        const D2D1_POINT_2F b = ClientToDip(m_boundaryCur);
+        const D2D1_RECT_F box = D2D1::RectF((a.x < b.x ? a.x : b.x), (a.y < b.y ? a.y : b.y),
+                                            (a.x < b.x ? b.x : a.x), (a.y < b.y ? b.y : a.y));
+        m_rt->DrawRectangle(box, m_brushSelect.Get(), 2.5f, m_dashedStroke.Get());
     }
 
     HRESULT hr = m_rt->EndDraw();

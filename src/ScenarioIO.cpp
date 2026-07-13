@@ -313,6 +313,16 @@ ScenarioIO::Result ScenarioIO::Save(const Scenario& scenario,
     WriteDouble(L"Origin", L"LongitudeDeg",   scenario.originLonDeg, path);
     WriteDouble(L"Origin", L"AltitudeMeters", scenario.originAltM, path);
 
+    // ---- [TerrainBounds] painted 3D-terrain box (Preview tab). Only emitted once painted. ----
+    if (scenario.terrainBoundsValid)
+    {
+        WriteInt   (L"TerrainBounds", L"Valid",     1, path);
+        WriteDouble(L"TerrainBounds", L"LatMinDeg", scenario.terrainLatMinDeg, path);
+        WriteDouble(L"TerrainBounds", L"LatMaxDeg", scenario.terrainLatMaxDeg, path);
+        WriteDouble(L"TerrainBounds", L"LonMinDeg", scenario.terrainLonMinDeg, path);
+        WriteDouble(L"TerrainBounds", L"LonMaxDeg", scenario.terrainLonMaxDeg, path);
+    }
+
     // ---- [Level] terrain overlay (optional; consumed by the Preview tab) ----
     // Only emitted when enabled so vanilla scenarios stay free of the section.
     if (scenario.level.enabled)
@@ -544,6 +554,13 @@ ScenarioIO::Result ScenarioIO::Load(Scenario& s, const std::wstring& path)
     s.originLatDeg = ReadDouble(L"Origin", L"LatitudeDeg",    s.originLatDeg, path);
     s.originLonDeg = ReadDouble(L"Origin", L"LongitudeDeg",   s.originLonDeg, path);
     s.originAltM   = ReadDouble(L"Origin", L"AltitudeMeters", s.originAltM,   path);
+
+    // ---- [TerrainBounds] painted 3D-terrain box (absent in vanilla scenarios → stays invalid) ----
+    s.terrainBoundsValid = ReadInt(L"TerrainBounds", L"Valid", s.terrainBoundsValid ? 1 : 0, path) != 0;
+    s.terrainLatMinDeg   = ReadDouble(L"TerrainBounds", L"LatMinDeg", s.terrainLatMinDeg, path);
+    s.terrainLatMaxDeg   = ReadDouble(L"TerrainBounds", L"LatMaxDeg", s.terrainLatMaxDeg, path);
+    s.terrainLonMinDeg   = ReadDouble(L"TerrainBounds", L"LonMinDeg", s.terrainLonMinDeg, path);
+    s.terrainLonMaxDeg   = ReadDouble(L"TerrainBounds", L"LonMaxDeg", s.terrainLonMaxDeg, path);
 
     // ---- [Level] terrain overlay (absent in vanilla scenarios → stays off) ----
     s.level.enabled = ReadInt(L"Level", L"Enabled", s.level.enabled ? 1 : 0, path) != 0;

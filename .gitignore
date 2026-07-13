@@ -2,6 +2,7 @@
 
 # Build outputs (MSBuild + CMake) — keep build/*.py (E2E tests), drop the rest
 build-cmake/
+build-claude/
 build/x64/
 build/Release/
 build/Debug/
@@ -26,6 +27,13 @@ build/disrec_roundtrip.*
 build/motion_sampler_test.*
 build/scenario_io_roundtrip.*
 build/validator_test.*
+
+# NuGet packages (restored from packages.config, not source)
+packages/
+
+# Ad-hoc build logs + file backups
+build_*.log
+*.bak
 
 # Generic build artifacts
 [Bb]in/

@@ -4,6 +4,7 @@
 
 #include <string>
 #include <vector>
+#include <functional>
 
 // A 3D Cesium globe hosted in a WebView2 control, shown over the Preview area
 // when the "Cesium (3D)" map layer is selected.
@@ -47,6 +48,12 @@ public:
     // returns false until the first report arrives.
     bool GetLookAt(double& latDeg, double& lonDeg, double& altM) const;
 
+    // Arm/disarm "Boundary" paint mode on the globe. While armed a right-drag draws a
+    // yellow rectangle and, on release, reports the lat/lon box via the bounds callback.
+    void SetBoundaryMode(bool on);
+    // Called (UI thread) with the painted box (degrees) when the user finishes a right-drag.
+    void SetBoundsCallback(std::function<void(double,double,double,double)> cb) { m_onBounds = std::move(cb); }
+
 protected:
     afx_msg void OnSize(UINT nType, int cx, int cy);
     afx_msg void OnDestroy();
@@ -60,6 +67,9 @@ private:
 
     bool                       m_ready = false;
     std::vector<std::wstring>  m_pending;       // messages queued pre-ready
+
+    // Invoked with a painted terrain box (latMin,latMax,lonMin,lonMax in degrees).
+    std::function<void(double,double,double,double)> m_onBounds;
 
     // Latest camera look-at point reported by the globe (UI-thread only).
     bool                       m_haveLookAt = false;

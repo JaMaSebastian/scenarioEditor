@@ -146,6 +146,7 @@
     <ClInclude Include="src\DisrecWriter.h" />
     <ClInclude Include="src\DisrecReader.h" />
     <ClInclude Include="src\SettingsIO.h" />
+    <ClInclude Include="src\StartupIniWriter.h" />
     <ClInclude Include="src\Validator.h" />
     <ClInclude Include="src\FormatUtil.h" />
     <ClInclude Include="src\CatalogEditorDialog.h" />
@@ -197,6 +198,7 @@
     <ClCompile Include="src\SettingsIO.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="src\StartupIniWriter.cpp" />
     <ClCompile Include="src\Validator.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>

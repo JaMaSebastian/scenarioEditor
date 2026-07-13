@@ -310,6 +310,16 @@ struct Scenario
     double      originLonDeg   = 0.0;
     double      originAltM     = 0.0;
 
+    // ----- 3D terrain boundary (Preview tab "Boundary" paint tool) -----
+    // A geographic box the operator paints on the Preview map; it defines the DEM footprint that gets
+    // tiled into Cesium 3D terrain for the DISBrowser generic level (via Scripts/retile_terrain.cmd) and
+    // is written to Config/Startup.ini [Generic]. Invalid until painted.
+    bool        terrainBoundsValid  = false;
+    double      terrainLatMinDeg    = 0.0;
+    double      terrainLatMaxDeg    = 0.0;
+    double      terrainLonMinDeg    = 0.0;
+    double      terrainLonMaxDeg    = 0.0;
+
     // ----- Optional terrain overlay for the Preview tab ([Level] section) -----
     LevelOverlay level;
 

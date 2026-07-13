@@ -92,6 +92,11 @@ bool SettingsIO::Load(Settings& out, const std::wstring& path)
     out.windowMaximized = ReadInt(L"Window", L"Maximized", 0, path) != 0;
 
     out.lastScenarioPath = Narrow(ReadStr(L"Paths", L"LastScenario", L"", path));
+    out.disBrowserProjectDir = Narrow(ReadStr(L"Paths", L"DisBrowserProjectDir", L"", path));
+
+    out.unrealTargetLevel = Narrow(ReadStr(L"Unreal", L"TargetLevel", L"Generic",   path));
+    out.unrealBasemap     = Narrow(ReadStr(L"Unreal", L"Basemap",     L"Satellite", path));
+    out.unrealDynamicTiles = ReadInt(L"Unreal", L"DynamicTiles", 0, path) != 0;
 
     // [Deploy] ColumnWidths — comma-separated pixel widths.
     out.deployColumnWidths.clear();
@@ -159,6 +164,10 @@ bool SettingsIO::Save(const Settings& s, const std::wstring& path)
     ok &= WriteInt(L"Window", L"Height",        s.windowHeight,       tmp);
     ok &= WriteInt(L"Window", L"Maximized",     s.windowMaximized ? 1 : 0, tmp);
     ok &= WriteStr(L"Paths",  L"LastScenario",  Widen(s.lastScenarioPath).c_str(), tmp);
+    ok &= WriteStr(L"Paths",  L"DisBrowserProjectDir", Widen(s.disBrowserProjectDir).c_str(), tmp);
+    ok &= WriteStr(L"Unreal", L"TargetLevel",   Widen(s.unrealTargetLevel).c_str(), tmp);
+    ok &= WriteStr(L"Unreal", L"Basemap",       Widen(s.unrealBasemap).c_str(),     tmp);
+    ok &= WriteInt(L"Unreal", L"DynamicTiles",  s.unrealDynamicTiles ? 1 : 0,       tmp);
 
     if (!s.deployColumnWidths.empty())
     {

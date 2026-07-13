@@ -55,6 +55,81 @@ function boot(){
   function flyTo(lat,lon,h){
     viewer.camera.flyTo({destination:Cesium.Cartesian3.fromDegrees(lon,lat,h||30000.0),duration:1.0});
   }
+  // ----- "Boundary" paint: right-drag a yellow rectangle to mark the 3D-terrain box.
+  // Mirrors the 2D canvas gesture. While armed we free RIGHT_DRAG from the camera's zoom
+  // (wheel zoom still works) and use it to draw + pick a lat/lon rectangle on the ellipsoid.
+  var scene=viewer.scene;
+  viewer.canvas.oncontextmenu=function(ev){ev.preventDefault();return false;};
+  var bnd={on:false,active:false,startCarto:null,curCarto:null,rectEnt:null,handler:null,savedZoom:null,savedTilt:null};
+  function pickCarto(x,y){
+    var cc=viewer.camera.pickEllipsoid(new Cesium.Cartesian2(x,y),scene.globe.ellipsoid);
+    return cc?scene.globe.ellipsoid.cartesianToCartographic(cc):null;
+  }
+  function bndRect(){
+    if(!bnd.startCarto||!bnd.curCarto)return Cesium.Rectangle.fromDegrees(0,0,0,0);
+    return new Cesium.Rectangle(
+      Math.min(bnd.startCarto.longitude,bnd.curCarto.longitude),
+      Math.min(bnd.startCarto.latitude,bnd.curCarto.latitude),
+      Math.max(bnd.startCarto.longitude,bnd.curCarto.longitude),
+      Math.max(bnd.startCarto.latitude,bnd.curCarto.latitude));
+  }
+  // Snap to a straight-down (nadir) view over the current center so a geographic
+  // lat/lon rectangle draws as a real rectangle (square corners) instead of an
+  // oblique-perspective trapezoid. Keeps the current eye height.
+  function lookDownNadir(){
+    var eye=viewer.camera.positionCartographic; var h=eye?eye.height:30000;
+    var ray=viewer.camera.getPickRay(new Cesium.Cartesian2(
+      Math.round(viewer.canvas.clientWidth/2),Math.round(viewer.canvas.clientHeight/2)));
+    var pos=ray?scene.globe.pick(ray,scene):null;
+    var carto=pos?scene.globe.ellipsoid.cartesianToCartographic(pos):eye;
+    if(!carto)return;
+    viewer.camera.flyTo({
+      destination:Cesium.Cartesian3.fromRadians(carto.longitude,carto.latitude,h),
+      orientation:{heading:0.0,pitch:-Cesium.Math.PI_OVER_TWO,roll:0.0},
+      duration:0.5});
+  }
+  function bndCleanup(){
+    bnd.active=false;bnd.startCarto=null;bnd.curCarto=null;
+    if(bnd.rectEnt){viewer.entities.remove(bnd.rectEnt);bnd.rectEnt=null;}
+    if(bnd.savedZoom){scene.screenSpaceCameraController.zoomEventTypes=bnd.savedZoom;bnd.savedZoom=null;}
+    if(bnd.savedTilt){scene.screenSpaceCameraController.tiltEventTypes=bnd.savedTilt;bnd.savedTilt=null;}
+    if(bnd.handler){bnd.handler.destroy();bnd.handler=null;}
+    bnd.on=false;
+  }
+  function setBoundaryMode(on){
+    if(!on){bndCleanup();return;}
+    bnd.on=true;
+    var ctrl=scene.screenSpaceCameraController;
+    bnd.savedZoom=ctrl.zoomEventTypes;
+    ctrl.zoomEventTypes=[Cesium.CameraEventType.WHEEL,Cesium.CameraEventType.PINCH];
+    bnd.savedTilt=ctrl.tiltEventTypes;
+    ctrl.tiltEventTypes=[];   // stay top-down while painting (no re-tilt)
+    lookDownNadir();   // top-down so the rectangle draws with square corners
+    if(!bnd.handler){
+      bnd.handler=new Cesium.ScreenSpaceEventHandler(viewer.canvas);
+      bnd.handler.setInputAction(function(m){
+        var c=pickCarto(m.position.x,m.position.y);if(!c)return;
+        bnd.active=true;bnd.startCarto=c;bnd.curCarto=c;
+        if(!bnd.rectEnt)bnd.rectEnt=viewer.entities.add({rectangle:{
+          coordinates:new Cesium.CallbackProperty(bndRect,false),
+          material:Cesium.Color.YELLOW.withAlpha(0.25),
+          outline:true,outlineColor:Cesium.Color.YELLOW,height:0}});
+      },Cesium.ScreenSpaceEventType.RIGHT_DOWN);
+      bnd.handler.setInputAction(function(m){
+        if(!bnd.active)return;var c=pickCarto(m.endPosition.x,m.endPosition.y);if(c)bnd.curCarto=c;
+      },Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+      bnd.handler.setInputAction(function(m){
+        if(!bnd.active)return;var c=pickCarto(m.position.x,m.position.y);if(c)bnd.curCarto=c;
+        var laMn=Cesium.Math.toDegrees(Math.min(bnd.startCarto.latitude,bnd.curCarto.latitude));
+        var laMx=Cesium.Math.toDegrees(Math.max(bnd.startCarto.latitude,bnd.curCarto.latitude));
+        var loMn=Cesium.Math.toDegrees(Math.min(bnd.startCarto.longitude,bnd.curCarto.longitude));
+        var loMx=Cesium.Math.toDegrees(Math.max(bnd.startCarto.longitude,bnd.curCarto.longitude));
+        bndCleanup();
+        if(Math.abs(laMx-laMn)>1e-6&&Math.abs(loMx-loMn)>1e-6)
+          window.chrome.webview.postMessage({t:'bnds',latMin:laMn,latMax:laMx,lonMin:loMn,lonMax:loMx});
+      },Cesium.ScreenSpaceEventType.RIGHT_UP);
+    }
+  }
   function reportCam(){
     try{
       var scene=viewer.scene, carto=null;
@@ -75,6 +150,7 @@ function boot(){
     var m=e.data; if(!m)return;
     if(m.t==='fly') flyTo(m.lat,m.lon,m.h);
     else if(m.t==='ents') setEnts(m.items);
+    else if(m.t==='boundary') setBoundaryMode(!!m.on);
   });
   viewer.camera.percentageChanged=0.02;                 // report small camera moves
   viewer.camera.changed.addEventListener(reportCam);    // during drag/zoom
@@ -218,6 +294,24 @@ bool CesiumView::Create(CWnd* parent, const CRect& rc)
                                                         m_haveLookAt = true;
                                                     }
                                                 }
+                                                else if (s.find(L"\"bnds\"") != std::wstring::npos)
+                                                {
+                                                    // Painted terrain box from the globe → the page.
+                                                    auto num = [&](const wchar_t* key, double& out) -> bool
+                                                    {
+                                                        size_t p = s.find(key);
+                                                        if (p == std::wstring::npos) return false;
+                                                        p = s.find(L':', p);
+                                                        if (p == std::wstring::npos) return false;
+                                                        out = _wtof(s.c_str() + p + 1);
+                                                        return true;
+                                                    };
+                                                    double laMn = 0, laMx = 0, loMn = 0, loMx = 0;
+                                                    if (num(L"\"latMin\"", laMn) && num(L"\"latMax\"", laMx) &&
+                                                        num(L"\"lonMin\"", loMn) && num(L"\"lonMax\"", loMx) &&
+                                                        m_onBounds)
+                                                        m_onBounds(laMn, laMx, loMn, loMx);
+                                                }
                                                 else if (s.find(L"ready") != std::wstring::npos)
                                                     OnWebViewReady();
                                             }
@@ -293,6 +387,12 @@ void CesiumView::FlyTo(double lat, double lon, double heightM)
     swprintf_s(buf, L"{\"t\":\"fly\",\"lat\":%.8f,\"lon\":%.8f,\"h\":%.1f}",
                lat, lon, heightM);
     PostJson(buf);
+}
+
+void CesiumView::SetBoundaryMode(bool on)
+{
+    PostJson(on ? L"{\"t\":\"boundary\",\"on\":true}"
+                : L"{\"t\":\"boundary\",\"on\":false}");
 }
 
 void CesiumView::SetEntities(const std::vector<CesiumEntityPt>& pts)

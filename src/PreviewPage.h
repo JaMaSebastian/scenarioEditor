@@ -28,6 +28,12 @@ public:
     bool IsStartPickArmed() const { return m_startPickArmed; }
     void ApplyStartPick(size_t entityIdx, size_t segIdx, double enuE, double enuN);
 
+    // "Boundary" paint mode. While armed the canvas draws a yellow drag-rectangle;
+    // on release it converts the box corners to lat/lon and calls OnBoundaryPainted,
+    // which records the 3D-terrain box on the scenario and disarms (the rectangle vanishes).
+    bool IsBoundaryArmed() const { return m_boundaryArmed; }
+    void OnBoundaryPainted(double latMinDeg, double latMaxDeg, double lonMinDeg, double lonMaxDeg);
+
     // Drag-to-set-start. Entities are only draggable while the preview sits
     // stopped at t=0 (where the dot genuinely is the start location).
     bool IsEntityDragAllowed() const
@@ -135,6 +141,10 @@ protected:
     afx_msg void OnTerrainToggle();
     afx_msg void OnLegendToggle();
     afx_msg void OnSetStart();
+    afx_msg void OnBoundary();
+    afx_msg void OnBuildTerrain();
+    afx_msg void OnStartTerrainServer();
+    afx_msg void OnStopTerrainServer();
     afx_msg void OnSpeedChange();
     afx_msg void OnDestTimeToggle();
     afx_msg void OnMapLayerChange();
@@ -197,6 +207,13 @@ private:
     void SetEllipseStartBearing(size_t entityIdx, size_t segIdx,
                                 MotionSegment& s, double east, double north) const;
     void FitScenario();
+    // Self-hosted Cesium terrain server (WSL python3 serve.py on :8088) controls.
+    // Resolve DISBrowser\Scripts\<fileName> from the configured project dir (Run tab).
+    CString ResolveDisBrowserScript(const CString& fileName) const;
+    // Probe/refresh whether the terrain tile server is answering on localhost:8088,
+    // then enable/disable the Boundary + Build 3D Terrain + Stop buttons and repaint
+    // the Start button's green "running" check accordingly.
+    void RefreshTerrainServerUi();
     // Pickable ellipse orbits, rebuilt with the paths cache; copied into the
     // render state so the canvas can hit-test them. Defined in PreviewCanvas.h.
     void UpdateSliderFromTime();
@@ -239,6 +256,8 @@ private:
                                                           // selection notification
 
     bool                 m_startPickArmed  = false;  // armed by Set Start; shows green "?"
+    bool                 m_boundaryArmed   = false;  // armed by Boundary; shows green check, paints box
+    bool                 m_terrainServerUp = false;  // localhost:8088 answering; drives the Start check + gating
     std::vector<PreviewEllipse> m_ellipseTargets;
     std::set<size_t>            m_selected;       // group-selected entity indices
     std::set<size_t>            m_refreshFailed;  // selected entities w/ no catalog cruise (red ring)
@@ -249,5 +268,6 @@ private:
     double                                            m_lastTrailTime = -1.0;
 
     static constexpr UINT_PTR kAnimTimerId    = 0x101;
+    static constexpr UINT_PTR kServerPollTimerId = 0x102;   // polls localhost:8088 for the terrain server
     static constexpr size_t   kTrailMaxPoints = 180;
 };

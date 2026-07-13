@@ -215,6 +215,12 @@ private:
     CPoint  m_rbStart;
     CPoint  m_rbCur;
 
+    // Left-drag "Boundary" paint (armed via the Preview tab Boundary button): a yellow
+    // rectangle marking the 3D-terrain box; on release its corners → lat/lon → the page.
+    bool    m_boundaryDragActive = false;
+    CPoint  m_boundaryStart;
+    CPoint  m_boundaryCur;
+
     // Ellipse focus-handle drag.
     bool    m_draggingFocus   = false;
     int     m_dragFocusEntity = -1;
