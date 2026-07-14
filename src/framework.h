@@ -1,3 +1,14 @@
+//=============================================================================
+//  framework.h
+//-----------------------------------------------------------------------------
+//  Central MFC framework include header. Pulls in the core MFC libraries
+//  (afxwin, afxext, OLE/ODBC, common controls, control bars, dialogex) plus
+//  the Direct2D/DirectWrite headers used by the Preview tab's animated canvas,
+//  and sets the Windows lean-and-mean / NOMINMAX build switches.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #pragma once
 
 #ifndef VC_EXTRALEAN

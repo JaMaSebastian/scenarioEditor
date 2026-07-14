@@ -1,3 +1,15 @@
+//=============================================================================
+//  ScenarioWorker.cpp
+//-----------------------------------------------------------------------------
+//  Implements the playback thread. Precomputes per-entity motion tracks (an
+//  arc-length-equidistant ring for single-ellipse orbits, time-sampling
+//  otherwise), then either replays a recorded stream against the wall clock or
+//  generates and emits Entity State PDUs at each track's exact interval, with
+//  pause/stop handling and OS timer-resolution control for accurate timing.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 // ScenarioWorker.h pulls in <windows.h>; suppress its min/max macros so they
 // don't clobber std::min/std::max (this TU doesn't include pch.h/framework.h).
 #ifndef NOMINMAX
@@ -154,12 +166,19 @@ namespace
     }
 }
 
+//
+// ~ScenarioWorker — requests a stop and joins the thread so nothing outlives it.
+//
 ScenarioWorker::~ScenarioWorker()
 {
     RequestStop();
     Join();
 }
 
+//
+// Start — validates state/snapshot, then spawns the worker thread running Run().
+//   Returns false if a worker is already running or the snapshot is null.
+//
 bool ScenarioWorker::Start(HWND uiHwnd, SnapshotPtr snapshot)
 {
     if (m_thread.joinable())
@@ -180,6 +199,9 @@ bool ScenarioWorker::Start(HWND uiHwnd, SnapshotPtr snapshot)
     return true;
 }
 
+//
+// Pause — sets the pause flag and posts a Paused status to the UI.
+//
 void ScenarioWorker::Pause()
 {
     if (!m_thread.joinable()) return;
@@ -187,6 +209,9 @@ void ScenarioWorker::Pause()
     PostStatus(m_uiHwnd, PlaybackState::Paused);
 }
 
+//
+// Resume — clears the pause flag and posts a Running status to the UI.
+//
 void ScenarioWorker::Resume()
 {
     if (!m_thread.joinable()) return;
@@ -194,17 +219,27 @@ void ScenarioWorker::Resume()
     PostStatus(m_uiHwnd, PlaybackState::Running);
 }
 
+//
+// RequestStop — sets the stop flag; the worker loop exits at its next check.
+//
 void ScenarioWorker::RequestStop()
 {
     m_stop.store(true);
 }
 
+//
+// Join — blocks until the worker thread finishes (no-op if not running).
+//
 void ScenarioWorker::Join()
 {
     if (m_thread.joinable())
         m_thread.join();
 }
 
+//
+// Run — thread entry point; posts Running, then dispatches to replay or
+//   generation based on the snapshot's replay flag.
+//
 void ScenarioWorker::Run()
 {
     PostStatus(m_uiHwnd, PlaybackState::Running);
@@ -215,6 +250,11 @@ void ScenarioWorker::Run()
     }
 }
 
+//
+// RunReplay — opens the recorded stream and forwards each record over UDP,
+//   scheduling by record timestamp scaled by playbackSpeed, honoring
+//   pause/stop and optional looping; posts progress and a final Stopped status.
+//
 void ScenarioWorker::RunReplay()
 {
     const Scenario& scn = m_snapshot->scenario;
@@ -292,6 +332,13 @@ void ScenarioWorker::RunReplay()
     LOG(szError);
 }
 
+//
+// RunGeneration — resolves the output sink (UDP uni/multicast, file recording,
+//   or preview), builds per-entity tracks, then runs the emission loop: samples
+//   each due track, builds/serializes an Entity State PDU, sends or records it,
+//   and handles pause, looping, duration limits, and timing. The nested
+//   emitTrack lambda emits one entity's PDU (ring lookup or time-sample).
+//
 void ScenarioWorker::RunGeneration()
 {
     const Scenario& scn = m_snapshot->scenario;

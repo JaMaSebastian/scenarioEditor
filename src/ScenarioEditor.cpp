@@ -1,3 +1,13 @@
+//=============================================================================
+//  ScenarioEditor.cpp
+//-----------------------------------------------------------------------------
+//  Implements CScenarioEditorApp. Defines the theApp singleton and its
+//  InitInstance: enables high-DPI awareness, locates and loads the entity
+//  catalog / settings / plays files, and shows the main editor dialog.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #include "pch.h"
 #include "ScenarioEditor.h"
 #include "ScenarioEditorDialog.h"
@@ -15,6 +25,14 @@ CScenarioEditorApp theApp;
 
 CScenarioEditorApp::CScenarioEditorApp() = default;
 
+//
+// InitInstance — one-time app startup. Declares per-monitor-v2 DPI awareness
+// before any window exists, initializes common controls, resolves the canonical
+// EntityTypeCatalog.ini (nearest ancestor of the exe dir, so editor writes hit
+// the source-controlled copy), loads settings.ini and plays.ini (seeding plays
+// on first run), then runs the main dialog modally. Returns FALSE so MFC exits
+// after the modal dialog closes.
+//
 BOOL CScenarioEditorApp::InitInstance()
 {
     // DPI awareness: declare per-monitor v2 BEFORE any window is created.
@@ -99,6 +117,16 @@ BOOL CScenarioEditorApp::InitInstance()
 
     m_settingsPath = exeDir + L"settings.ini";
     SettingsIO::Load(m_settings, m_settingsPath);
+
+    // Plays catalog lives next to the exe, like settings.ini. On first run (or
+    // a missing/foreign file) seed it from the historical hard-coded plays and
+    // write it out so the accordion looks unchanged and the file is editable.
+    m_playsPath = exeDir + L"plays.ini";
+    if (!m_plays.LoadFromIni(m_playsPath))
+    {
+        m_plays.SeedDefaults();
+        m_plays.SaveToIni(m_playsPath);
+    }
 
     CScenarioEditorDialog dlg;
     m_pMainWnd = &dlg;

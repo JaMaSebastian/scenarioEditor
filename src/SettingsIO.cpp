@@ -1,3 +1,14 @@
+//=============================================================================
+//  SettingsIO.cpp
+//-----------------------------------------------------------------------------
+//  Implements loading and atomic saving of settings.ini using the Win32
+//  private-profile (INI) API. Values are stored as UTF-8 narrowed <-> wide,
+//  and Save writes a sibling .tmp then ReplaceFile/MoveFileEx's it into place
+//  so a mid-write crash cannot corrupt the live file.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #include "SettingsIO.h"
 #include "../log.h"
 
@@ -10,6 +21,9 @@
 
 namespace
 {
+    //
+    // Widen — UTF-8 std::string to std::wstring via MultiByteToWideChar.
+    //
     std::wstring Widen(const std::string& s)
     {
         if (s.empty()) return {};
@@ -20,6 +34,9 @@ namespace
                               static_cast<int>(s.size()), out.data(), n);
         return out;
     }
+    //
+    // Narrow — std::wstring to UTF-8 std::string via WideCharToMultiByte.
+    //
     std::string Narrow(const std::wstring& s)
     {
         if (s.empty()) return {};
@@ -33,11 +50,17 @@ namespace
         return out;
     }
 
+    //
+    // WriteStr — write one string key/value under [sec] in the INI at path.
+    //
     bool WriteStr(const wchar_t* sec, const wchar_t* key, const wchar_t* val,
                   const std::wstring& path)
     {
         return ::WritePrivateProfileStringW(sec, key, val, path.c_str()) != 0;
     }
+    //
+    // WriteInt — write an integer key by formatting it as decimal text.
+    //
     bool WriteInt(const wchar_t* sec, const wchar_t* key, long long val,
                   const std::wstring& path)
     {
@@ -45,6 +68,9 @@ namespace
         return WriteStr(sec, key, buf, path);
     }
 
+    //
+    // ReadStr — read a string key under [sec], returning def when absent.
+    //
     std::wstring ReadStr(const wchar_t* sec, const wchar_t* key,
                          const wchar_t* def, const std::wstring& path)
     {
@@ -53,6 +79,10 @@ namespace
                                                    _countof(buf), path.c_str());
         return std::wstring(buf, n);
     }
+    //
+    // ReadInt — read a key and parse it as a base-10 integer; returns def when
+    // the key is absent or not numeric.
+    //
     long long ReadInt(const wchar_t* sec, const wchar_t* key,
                       long long def, const std::wstring& path)
     {
@@ -64,6 +94,11 @@ namespace
     }
 }
 
+//
+// SettingsIO::Load — read settings.ini into `out`. Missing file, unknown
+// (future) format version, or missing keys leave struct defaults in place;
+// returns false when the file is absent or too new, true on a successful read.
+//
 bool SettingsIO::Load(Settings& out, const std::wstring& path)
 {
     if (::GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES)
@@ -149,6 +184,11 @@ bool SettingsIO::Load(Settings& out, const std::wstring& path)
     return true;
 }
 
+//
+// SettingsIO::Save — atomically persist `s` to settings.ini: write all sections
+// to <path>.tmp, flush, then ReplaceFile/MoveFileEx over the target. Returns
+// false (and cleans up the .tmp) on any I/O failure.
+//
 bool SettingsIO::Save(const Settings& s, const std::wstring& path)
 {
     // Atomic write: emit a sibling .tmp file then ReplaceFile() over the

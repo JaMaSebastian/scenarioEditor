@@ -1,3 +1,15 @@
+//=============================================================================
+//  CesiumView.cpp
+//-----------------------------------------------------------------------------
+//  Implements CesiumView: creates the WebView2 environment/controller, hosts an
+//  embedded CesiumJS page (served from a virtual https origin), and bridges JSON
+//  messages both ways — fly-to, entity dots, boundary right-drag painting, and
+//  camera look-at reporting. All WebView2 SDK usage is guarded by HAVE_WEBVIEW2;
+//  without it the class draws a placeholder so the CMake build still compiles.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-07-10
+//=============================================================================
 #include "pch.h"
 #include "CesiumView.h"
 #include "ScenarioEditor.h"   // theApp.SettingsPath() -> WebView2 user-data folder
@@ -212,12 +224,21 @@ END_MESSAGE_MAP()
 
 CesiumView::CesiumView() = default;
 
+//
+// ~CesiumView — destroys the pImpl (releasing the held WebView2 COM objects).
+//
 CesiumView::~CesiumView()
 {
     delete m_impl;
     m_impl = nullptr;
 }
 
+//
+// Create — register a black CWnd child of `parent` at `rc`, then asynchronously
+//   spin up the WebView2 environment/controller, wire the web-message handler
+//   (cam/bnds/ready), and navigate to the embedded Cesium page. Returns true
+//   once the host window exists; WebView2 init completes later on callbacks.
+//
 bool CesiumView::Create(CWnd* parent, const CRect& rc)
 {
     if (GetSafeHwnd()) return true;
@@ -353,12 +374,20 @@ bool CesiumView::Create(CWnd* parent, const CRect& rc)
     return true;
 }
 
+//
+// OnWebViewReady — marks the globe ready (page posted {t:'ready'}) and flushes
+//   any messages that were queued before initialization completed.
+//
 void CesiumView::OnWebViewReady()
 {
     m_ready = true;
     FlushPending();
 }
 
+//
+// PostJson — post a JSON message to the page if ready; otherwise queue it in
+//   m_pending to be sent by FlushPending once the globe reports ready.
+//
 void CesiumView::PostJson(const std::wstring& json)
 {
 #ifdef HAVE_WEBVIEW2
@@ -371,6 +400,9 @@ void CesiumView::PostJson(const std::wstring& json)
     m_pending.push_back(json);
 }
 
+//
+// FlushPending — send every queued message to the page, then clear the queue.
+//
 void CesiumView::FlushPending()
 {
 #ifdef HAVE_WEBVIEW2
@@ -381,6 +413,10 @@ void CesiumView::FlushPending()
     m_pending.clear();
 }
 
+//
+// FlyTo — send a fly-to command; the globe animates its camera to look down on
+//   (lat,lon) from heightM metres.
+//
 void CesiumView::FlyTo(double lat, double lon, double heightM)
 {
     wchar_t buf[160];
@@ -389,12 +425,20 @@ void CesiumView::FlyTo(double lat, double lon, double heightM)
     PostJson(buf);
 }
 
+//
+// SetBoundaryMode — arm/disarm the globe's right-drag boundary paint gesture;
+//   completed boxes come back through the web-message handler as {t:'bnds'}.
+//
 void CesiumView::SetBoundaryMode(bool on)
 {
     PostJson(on ? L"{\"t\":\"boundary\",\"on\":true}"
                 : L"{\"t\":\"boundary\",\"on\":false}");
 }
 
+//
+// SetEntities — serialize the entity points to JSON (names escaped) and post
+//   them, replacing the globe's current dots/labels.
+//
 void CesiumView::SetEntities(const std::vector<CesiumEntityPt>& pts)
 {
     std::wstring json = L"{\"t\":\"ents\",\"items\":[";
@@ -419,6 +463,10 @@ void CesiumView::SetEntities(const std::vector<CesiumEntityPt>& pts)
     PostJson(json);
 }
 
+//
+// GetLookAt — return the last camera look-at point and eye altitude reported by
+//   the globe; returns false until the first {t:'cam'} report has arrived.
+//
 bool CesiumView::GetLookAt(double& latDeg, double& lonDeg, double& altM) const
 {
     if (!m_haveLookAt) return false;
@@ -428,6 +476,10 @@ bool CesiumView::GetLookAt(double& latDeg, double& lonDeg, double& altM) const
     return true;
 }
 
+//
+// SetBounds — move the host window to `rc` and resize the WebView2 controller to
+//   match the new client rect.
+//
 void CesiumView::SetBounds(const CRect& rc)
 {
     if (!GetSafeHwnd()) return;
@@ -441,6 +493,9 @@ void CesiumView::SetBounds(const CRect& rc)
 #endif
 }
 
+//
+// ShowView — show/hide both the host window and the WebView2 controller.
+//
 void CesiumView::ShowView(bool show)
 {
     if (!GetSafeHwnd()) return;
@@ -451,6 +506,9 @@ void CesiumView::ShowView(bool show)
 #endif
 }
 
+//
+// OnSize — WM_SIZE handler; keeps the WebView2 controller filling the client area.
+//
 void CesiumView::OnSize(UINT nType, int cx, int cy)
 {
     CWnd::OnSize(nType, cx, cy);
@@ -463,6 +521,9 @@ void CesiumView::OnSize(UINT nType, int cx, int cy)
 #endif
 }
 
+//
+// OnDestroy — WM_DESTROY handler; closes the WebView2 controller before teardown.
+//
 void CesiumView::OnDestroy()
 {
 #ifdef HAVE_WEBVIEW2
@@ -472,6 +533,10 @@ void CesiumView::OnDestroy()
     CWnd::OnDestroy();
 }
 
+//
+// OnPaint — fills the background black; in the no-WebView2 (CMake) build also
+//   draws the "requires the Visual Studio build" placeholder text.
+//
 void CesiumView::OnPaint()
 {
     CPaintDC dc(this);

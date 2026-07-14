@@ -1,3 +1,14 @@
+//=============================================================================
+//  DisrecFormat.h
+//-----------------------------------------------------------------------------
+//  On-disk framing constants for the ScenarioEditor .disrec DIS recording
+//  format (V2): the "DISRECv1" magic, version, and 12-byte header size shared
+//  by the reader and writer. Documents the little-endian framing layer that
+//  wraps each big-endian DIS PDU payload.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #pragma once
 
 #include <cstdint>

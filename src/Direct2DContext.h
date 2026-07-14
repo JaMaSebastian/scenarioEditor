@@ -1,3 +1,13 @@
+//=============================================================================
+//  Direct2DContext.h
+//-----------------------------------------------------------------------------
+//  Declares the Direct2DContext namespace: process-wide, lazily-created owners
+//  of the shared Direct2D and DirectWrite factories, plus a Shutdown() to
+//  release them. Device-dependent resources stay per-window, not here.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-25
+//=============================================================================
 #pragma once
 
 #include "pch.h"

@@ -1,3 +1,13 @@
+//=============================================================================
+//  ScenarioIO.h
+//-----------------------------------------------------------------------------
+//  Public interface for persisting a Scenario to/from an INI file. Declares
+//  the schema version, the Result status codes, and the Save/Load entry
+//  points used by the editor to round-trip a scenario.ini.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #pragma once
 
 #include <string>

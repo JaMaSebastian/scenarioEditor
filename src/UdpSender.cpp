@@ -1,3 +1,14 @@
+//=============================================================================
+//  UdpSender.cpp
+//-----------------------------------------------------------------------------
+//  Implements UdpSender over Winsock: lazily starts WSA and creates the UDP
+//  socket on first Send, resolves the dotted-quad destination, applies cached
+//  multicast options once when targeting a multicast group, and sends the
+//  datagram. Logs failures via szError/LOG and cleans up in Close.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #include "pch.h"
 #include "UdpSender.h"
 #include "../log.h"
@@ -12,6 +23,9 @@ namespace
     inline SOCKET ToSocket(void* p) { return reinterpret_cast<SOCKET>(p); }
     inline void*  FromSocket(SOCKET s) { return reinterpret_cast<void*>(s); }
 
+    //
+    // IsMulticast — true if the address falls in the 224.0.0.0/4 range.
+    //
     bool IsMulticast(const sockaddr_in& a)
     {
         const unsigned long ip = ::ntohl(a.sin_addr.s_addr);
@@ -21,11 +35,18 @@ namespace
 
 UdpSender::UdpSender() = default;
 
+//
+// ~UdpSender — closes the socket and tears down Winsock.
+//
 UdpSender::~UdpSender()
 {
     Close();
 }
 
+//
+// SetMulticastOptions — stores TTL/interface/loopback and forces them to be
+//   re-applied on the next multicast Send.
+//
 void UdpSender::SetMulticastOptions(int ttl, const std::string& iface, bool loopback)
 {
     m_multicastTtl   = ttl;
@@ -35,6 +56,11 @@ void UdpSender::SetMulticastOptions(int ttl, const std::string& iface, bool loop
     m_multicastApplied = false;
 }
 
+//
+// Send — lazily starts Winsock and opens the socket, resolves host:port,
+//   applies multicast options once for multicast destinations, and sends the
+//   datagram. Returns bytes sent, or 0 on any failure (logged via LOG).
+//
 int UdpSender::Send(const std::string& host, uint16_t port,
                     const void* data, size_t length)
 {
@@ -120,6 +146,9 @@ int UdpSender::Send(const std::string& host, uint16_t port,
     return sent;
 }
 
+//
+// Close — closes the socket (if open) and calls WSACleanup (if started).
+//
 void UdpSender::Close()
 {
     if (m_socket)

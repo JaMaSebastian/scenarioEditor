@@ -1,3 +1,14 @@
+//=============================================================================
+//  MotionSampler.h
+//-----------------------------------------------------------------------------
+//  Declares the MotionSampler API: resolves an entity's pose (ECEF position +
+//  Heading/Pitch/Roll) at any scenario time by selecting and interpolating its
+//  motion segments (Stationary, Line, Ellipse), plus shared ellipse geometry
+//  helpers used by both the time sampler and the playback waypoint precompute.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #pragma once
 
 #include <cstdint>

@@ -1,3 +1,14 @@
+//=============================================================================
+//  DeployPage.cpp
+//-----------------------------------------------------------------------------
+//  Implements CDeployPage: builds the dark-themed owner-drawn resource list,
+//  paints each row (status glyph, data columns, action buttons), runs the
+//  per-row Deploy/Go/Pause/Stop/Release state machine on button clicks, and
+//  persists column widths to settings.ini.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-07-10
+//=============================================================================
 #include "pch.h"
 #include "DeployPage.h"
 #include "ScenarioEditor.h"   // theApp.Settings() / SettingsPath()
@@ -58,12 +69,18 @@ BEGIN_MESSAGE_MAP(CDeployPage, CHelpAwarePage)
     ON_NOTIFY(NM_CLICK, IDC_LIST_DEPLOY, &CDeployPage::OnListClick)
 END_MESSAGE_MAP()
 
+//
+// GetFieldHelpTable — no per-field help on this tab (empty table).
+//
 void CDeployPage::GetFieldHelpTable(const FFieldHelp*& outArray, size_t& outCount) const
 {
     outArray = nullptr;
     outCount = 0;
 }
 
+//
+// StatusWord — display text for a Status value.
+//
 const TCHAR* CDeployPage::StatusWord(Status s)
 {
     switch (s)
@@ -75,6 +92,11 @@ const TCHAR* CDeployPage::StatusWord(Status s)
     return _T("");
 }
 
+//
+// OnInitDialog — sets up the dark theme, subclasses the list, forces the
+// owner-draw row height, inserts columns (persisted widths or a fallback), and
+// seeds the demo rows.
+//
 BOOL CDeployPage::OnInitDialog()
 {
     CHelpAwarePage::OnInitDialog();
@@ -113,6 +135,10 @@ BOOL CDeployPage::OnInitDialog()
     return TRUE;
 }
 
+//
+// SeedRows — fills m_rows with the demo resource list and creates one list item
+// per row (row text is painted in OnDrawItem).
+//
 void CDeployPage::SeedRows()
 {
     auto add = [this](Status s, const TCHAR* name, const TCHAR* contact,
@@ -142,6 +168,9 @@ void CDeployPage::SeedRows()
         m_list.InsertItem(i, _T(""));
 }
 
+//
+// LayoutList — sizes the list to fill the page client area (with a small inset).
+//
 void CDeployPage::LayoutList()
 {
     if (!::IsWindow(GetSafeHwnd()) || !::IsWindow(m_list.GetSafeHwnd())) return;
@@ -150,12 +179,19 @@ void CDeployPage::LayoutList()
     m_list.MoveWindow(rc.left + 4, rc.top + 4, rc.Width() - 8, rc.Height() - 8);
 }
 
+//
+// OnSize — re-lays out the list when the page is resized.
+//
 void CDeployPage::OnSize(UINT nType, int cx, int cy)
 {
     CHelpAwarePage::OnSize(nType, cx, cy);
     LayoutList();
 }
 
+//
+// SaveColumnWidths — snapshots the header column widths into settings.ini,
+// writing only when they actually changed (avoids disk churn).
+//
 void CDeployPage::SaveColumnWidths()
 {
     if (!::IsWindow(m_list.GetSafeHwnd())) return;
@@ -173,6 +209,9 @@ void CDeployPage::SaveColumnWidths()
     SettingsIO::Save(theApp.Settings(), theApp.SettingsPath());
 }
 
+//
+// OnShowWindow — persists column widths when the tab is hidden.
+//
 void CDeployPage::OnShowWindow(BOOL bShow, UINT nStatus)
 {
     CHelpAwarePage::OnShowWindow(bShow, nStatus);
@@ -181,6 +220,9 @@ void CDeployPage::OnShowWindow(BOOL bShow, UINT nStatus)
         SaveColumnWidths();
 }
 
+//
+// OnDestroy — persists column widths on close (user resized then quit).
+//
 void CDeployPage::OnDestroy()
 {
     // Catch the app-close case (user resized then quit without switching tabs).
@@ -188,6 +230,9 @@ void CDeployPage::OnDestroy()
     CHelpAwarePage::OnDestroy();
 }
 
+//
+// OnCtlColor — paints the dialog and static text white-on-black (dark theme).
+//
 HBRUSH CDeployPage::OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor)
 {
     if (!m_blackBrush.GetSafeHandle() || !m_whiteBrush.GetSafeHandle())
@@ -208,6 +253,10 @@ HBRUSH CDeployPage::OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor)
 
 // ---------- per-row state machine ----------
 
+//
+// BtnEnabled — whether action button b is valid given row r's current state
+// (Deploy only when Open; Go/Pause/Stop/Release only when owned by us).
+//
 bool CDeployPage::BtnEnabled(const DeployRow& r, Btn b) const
 {
     switch (b)
@@ -221,6 +270,10 @@ bool CDeployPage::BtnEnabled(const DeployRow& r, Btn b) const
     return false;
 }
 
+//
+// ApplyBtn — transitions row r's state for the pressed action button (Deploy
+// claims it, Go/Pause/Stop toggle run state, Release relinquishes it).
+//
 void CDeployPage::ApplyBtn(DeployRow& r, Btn b)
 {
     switch (b)
@@ -243,6 +296,10 @@ void CDeployPage::ApplyBtn(DeployRow& r, Btn b)
 
 // ---------- owner draw ----------
 
+//
+// DrawStatusIcon — paints the per-status glyph centered in rc: light-blue hollow
+// circle (Open), green check (In use), or red dash (Unavailable).
+//
 void CDeployPage::DrawStatusIcon(CDC& dc, const CRect& rc, Status s) const
 {
     // Bigger, bolder glyphs. Size scales with the (now taller) row. Geometric
@@ -285,6 +342,10 @@ void CDeployPage::DrawStatusIcon(CDC& dc, const CRect& rc, Status s) const
     }
 }
 
+//
+// DrawButton — paints a centered, fixed-height action button in the cell; uses
+// grey fill/text and a light frame when disabled, otherwise `base`/white.
+//
 void CDeployPage::DrawButton(CDC& dc, const CRect& rc, const CString& label,
                              COLORREF base, bool enabled) const
 {
@@ -308,6 +369,11 @@ void CDeployPage::DrawButton(CDC& dc, const CRect& rc, const CString& label,
     dc.DrawText(label, b, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
+//
+// OnDrawItem — owner-draws one list row: fills the (optionally selected)
+// background, then walks columns painting the status icon, data text, and the
+// five action buttons (enabled per the row's state).
+//
 void CDeployPage::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT dis)
 {
     if (nIDCtl != IDC_LIST_DEPLOY || !dis || dis->CtlType != ODT_LISTVIEW)
@@ -371,6 +437,10 @@ void CDeployPage::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT dis)
     dc.Detach();
 }
 
+//
+// ButtonHit — returns which action button (0..kNumBtns-1) the point pt falls on
+// for the given row, or -1 if none.
+//
 int CDeployPage::ButtonHit(int row, CPoint pt) const
 {
     for (int bi = 0; bi < kNumBtns; ++bi)
@@ -383,6 +453,10 @@ int CDeployPage::ButtonHit(int row, CPoint pt) const
     return -1;
 }
 
+//
+// OnListClick — resolves the clicked row + action button, applies it if enabled,
+// and repaints just that row.
+//
 void CDeployPage::OnListClick(NMHDR* pNMHDR, LRESULT* pResult)
 {
     if (pResult) *pResult = 0;

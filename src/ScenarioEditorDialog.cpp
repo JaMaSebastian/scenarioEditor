@@ -1,8 +1,19 @@
+//=============================================================================
+//  ScenarioEditorDialog.cpp
+//-----------------------------------------------------------------------------
+//  Implements CScenarioEditorDialog: dialog init, toolbar/status-bar/page
+//  creation and layout, tab switching, File menu (New/Open/Save/Save As),
+//  playback control and worker status handling, validation, dirty tracking,
+//  and window-placement persistence.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #include "pch.h"
 #include "ScenarioEditorDialog.h"
 #include "AttributesDialog.h"
 #include "PduBuilder.h"
-#include "ScenarioEditor.h"   // for theApp.Catalog()/Settings()
+#include "ScenarioEditor.h"   // for theApp.Catalog()/Settings()/Plays()
 #include "ScenarioIO.h"
 #include "SettingsIO.h"
 #include "Validator.h"
@@ -94,6 +105,12 @@ BEGIN_MESSAGE_MAP(CScenarioEditorDialog, CDialogEx)
     // CaptureUiIntoScenario time; no per-change handler needed.
 END_MESSAGE_MAP()
 
+//
+// OnInitDialog — build the UI: tab labels, status bar (with 12pt font),
+// toolbar, and hosted pages; restore persisted window placement (clamped to
+// the work area); auto-load the last scenario if it still exists; then clear
+// the dirty flag once initial population is done.
+//
 BOOL CScenarioEditorDialog::OnInitDialog()
 {
     CDialogEx::OnInitDialog();
@@ -195,6 +212,10 @@ void CScenarioEditorDialog::OnTimer(UINT_PTR nIDEvent)
     CDialogEx::OnTimer(nIDEvent);
 }
 
+//
+// CreateToolBar — create the flat command toolbar hosted in the dialog, load
+// its bitmap, and swap the Speed placeholder button for a real combo box.
+//
 void CScenarioEditorDialog::CreateToolBar()
 {
     // Toolbar buttons/images sized to match the 54x54 cells emitted by
@@ -239,6 +260,10 @@ void CScenarioEditorDialog::CreateToolBar()
     m_toolBar.SetWindowText(_T("Command Toolbar"));
 }
 
+//
+// PreTranslateMessage — route the accelerator table first so keyboard
+// shortcuts fire before default dialog handling.
+//
 BOOL CScenarioEditorDialog::PreTranslateMessage(MSG* pMsg)
 {
     if (m_hAccel && ::TranslateAccelerator(m_hWnd, m_hAccel, pMsg))
@@ -262,6 +287,10 @@ namespace
     };
 }
 
+//
+// ApplyStatusBarPaneWidths — (re)apply the fixed pane widths from
+// kStatusBarPanes; must be called after any status-bar WM_SIZE resets them.
+//
 void CScenarioEditorDialog::ApplyStatusBarPaneWidths()
 {
     if (!::IsWindow(m_statusBar.GetSafeHwnd())) return;
@@ -269,6 +298,9 @@ void CScenarioEditorDialog::ApplyStatusBarPaneWidths()
         m_statusBar.SetPaneInfo(p.idx, p.id, SBPS_NORMAL, p.widthPx);
 }
 
+//
+// SeedStatusBar — set pane widths and initial placeholder text for each pane.
+//
 void CScenarioEditorDialog::SeedStatusBar()
 {
     if (!::IsWindow(m_statusBar.GetSafeHwnd())) return;
@@ -277,6 +309,11 @@ void CScenarioEditorDialog::SeedStatusBar()
         m_statusBar.SetPaneText(p.idx, p.seedText);
 }
 
+//
+// CreatePages — create the four tab pages as siblings of the tab control
+// (a workaround for broken button-click delivery when pages are children of a
+// CTabCtrl), hidden initially, and wire each page to the shared scenario.
+//
 void CScenarioEditorDialog::CreatePages()
 {
     // Parent the pages directly to the main dialog (NOT to the tab control)
@@ -307,8 +344,17 @@ void CScenarioEditorDialog::CreatePages()
     m_pages[1] = create(m_pagePlays,   IDD_PLAYS_PAGE);
     m_pages[2] = create(m_pageDeploy,  IDD_DEPLOY_PAGE);
     m_pages[3] = create(m_pagePreview, IDD_PREVIEW_PAGE);
+
+    // The Plays page owns its own gear button (top-right of its client area)
+    // and routes subcategory clicks back here to load/run scenarios.
+    m_pagePlays.SetMainDialog(this);
 }
 
+//
+// OpenAttributes — run the modal Attributes notebook on startTab; it edits the
+// shared scenario in place, so on close refresh the UI and mark dirty if the
+// user changed anything.
+//
 void CScenarioEditorDialog::OpenAttributes(int startTab)
 {
     // The Attributes notebook edits the shared Scenario in place. Hand it the
@@ -330,6 +376,53 @@ void CScenarioEditorDialog::OnOpenAttributes()
     OpenAttributes(0);
 }
 
+//
+// LoadScenarioForPlay — load (and optionally start) the scenario associated
+// with a Plays subcategory: prompt on unsaved changes, replace the model,
+// refresh the UI, and report any load error via message box.
+//
+void CScenarioEditorDialog::LoadScenarioForPlay(const CString& iniPath, bool alsoRun)
+{
+    if (iniPath.IsEmpty()) return;
+    if (!MaybePromptSaveOnDiscard()) return;
+
+    Scenario loaded;
+    const ScenarioIO::Result rc =
+        ScenarioIO::Load(loaded, std::wstring(CT2W(iniPath)));
+
+    switch (rc)
+    {
+        case ScenarioIO::Result::Ok:
+            m_scenario = std::move(loaded);
+            m_currentScenarioPath = iniPath;
+            RefreshUiFromScenario();
+            ClearDirty();
+            sprintf_s(szError, sizeof(szError),
+                      "Play loaded scenario from %S (run=%d)",
+                      static_cast<const wchar_t*>(CT2W(iniPath)), alsoRun ? 1 : 0);
+            LOG(szError);
+            if (alsoRun) OnPlaybackStart();
+            break;
+        case ScenarioIO::Result::VersionTooNew:
+            AfxMessageBox(_T("This scenario.ini was written by a newer version of ScenarioEditor."),
+                          MB_OK | MB_ICONWARNING);
+            break;
+        case ScenarioIO::Result::Malformed:
+            AfxMessageBox(_T("The associated scenario .ini is missing or malformed. See error.log."),
+                          MB_OK | MB_ICONERROR);
+            break;
+        case ScenarioIO::Result::IoError:
+        default:
+            AfxMessageBox(_T("Could not open the associated scenario .ini. See error.log."),
+                          MB_OK | MB_ICONERROR);
+            break;
+    }
+}
+
+//
+// ShowPage — make the page at index the visible one: hide the previous page,
+// position the new page over the tab's content rect, and sync the tab selection.
+//
 void CScenarioEditorDialog::ShowPage(int index)
 {
     if (index < 0 || index >= 4) return;
@@ -358,12 +451,21 @@ void CScenarioEditorDialog::ShowPage(int index)
     m_tabCtrl.SetCurSel(index);
 }
 
+//
+// OnTabSelChange — tab-selection notification handler: show the newly
+// selected page.
+//
 void CScenarioEditorDialog::OnTabSelChange(NMHDR*, LRESULT* pResult)
 {
     ShowPage(m_tabCtrl.GetCurSel());
     if (pResult) *pResult = 0;
 }
 
+//
+// LayoutChildren — explicitly position the status bar (bottom), toolbar (top),
+// tab control, and the active page for the current client size. Owns layout
+// itself because MFC's auto-layout mis-sizes the 12pt status bar.
+//
 void CScenarioEditorDialog::LayoutChildren()
 {
     if (!::IsWindow(m_tabCtrl.GetSafeHwnd())) return;
@@ -427,6 +529,10 @@ void CScenarioEditorDialog::LayoutChildren()
     }
 }
 
+//
+// OnSize — re-run LayoutChildren on resize (deliberately not forwarding
+// WM_SIZE to the status bar, which would clobber its custom height).
+//
 void CScenarioEditorDialog::OnSize(UINT nType, int cx, int cy)
 {
     CDialogEx::OnSize(nType, cx, cy);
@@ -437,6 +543,10 @@ void CScenarioEditorDialog::OnSize(UINT nType, int cx, int cy)
     LayoutChildren();
 }
 
+//
+// OnPlaceholderCommand — catch-all handler for not-yet-implemented menu/
+// toolbar commands; just logs the command id and control label.
+//
 void CScenarioEditorDialog::OnPlaceholderCommand(UINT nID)
 {
     CString label;
@@ -448,6 +558,9 @@ void CScenarioEditorDialog::OnPlaceholderCommand(UINT nID)
     LogCommand(nID, ascii.m_psz);
 }
 
+//
+// OnFileExit — File > Exit: prompt to save if dirty, then end the dialog.
+//
 void CScenarioEditorDialog::OnFileExit()
 {
     LOG("File > Exit");
@@ -455,18 +568,27 @@ void CScenarioEditorDialog::OnFileExit()
     EndDialog(IDOK);
 }
 
+//
+// OnCancel — Escape/Cancel: prompt to save if dirty before closing.
+//
 void CScenarioEditorDialog::OnCancel()
 {
     if (!MaybePromptSaveOnDiscard()) return;
     CDialogEx::OnCancel();
 }
 
+//
+// OnClose — window close (X button): prompt to save if dirty before closing.
+//
 void CScenarioEditorDialog::OnClose()
 {
     if (!MaybePromptSaveOnDiscard()) return;
     CDialogEx::OnCancel();
 }
 
+//
+// OnHelpAbout — Help > About: show the version/info message box.
+//
 void CScenarioEditorDialog::OnHelpAbout()
 {
     LOG("Help > About");
@@ -474,6 +596,10 @@ void CScenarioEditorDialog::OnHelpAbout()
                   MB_OK | MB_ICONINFORMATION);
 }
 
+//
+// OnLoopToggle — toggle looped playback, mirror it into the scenario output,
+// mark dirty, and update the toolbar button's checked state.
+//
 void CScenarioEditorDialog::OnLoopToggle()
 {
     m_loopChecked = !m_loopChecked;
@@ -502,6 +628,10 @@ void CScenarioEditorDialog::OnUpdateLoopToggle(CCmdUI* pCmdUI)
     pCmdUI->SetCheck(m_loopChecked ? 1 : 0);
 }
 
+//
+// OnHelpToggle — toggle field-help mode, update the toolbar/menu checked
+// state, and propagate the new state to every page.
+//
 void CScenarioEditorDialog::OnHelpToggle()
 {
     m_helpChecked = !m_helpChecked;
@@ -536,6 +666,9 @@ void CScenarioEditorDialog::OnUpdateHelpToggle(CCmdUI* pCmdUI)
     pCmdUI->SetCheck(m_helpChecked ? 1 : 0);
 }
 
+//
+// PropagateHelpToggle — push the current help-active flag to all hosted pages.
+//
 void CScenarioEditorDialog::PropagateHelpToggle()
 {
     for (CDialogEx* page : m_pages)
@@ -545,6 +678,9 @@ void CScenarioEditorDialog::PropagateHelpToggle()
     }
 }
 
+//
+// UpdateStatusPduCount — refresh the PDUs pane text from m_pduCount.
+//
 void CScenarioEditorDialog::UpdateStatusPduCount()
 {
     if (!::IsWindow(m_statusBar.GetSafeHwnd()))
@@ -554,6 +690,11 @@ void CScenarioEditorDialog::UpdateStatusPduCount()
     m_statusBar.SetPaneText(6 /* ID_INDICATOR_PDUS pane index */, buf);
 }
 
+//
+// OnPlaybackStart — capture UI into the scenario, build an immutable runtime
+// snapshot (filling default ellipse-orbit speeds from airframe cruise), and
+// hand it to the worker thread to begin sending. No-op if already running.
+//
 void CScenarioEditorDialog::OnPlaybackStart()
 {
     LOG("OnPlaybackStart: entered");
@@ -609,18 +750,27 @@ void CScenarioEditorDialog::OnPlaybackStart()
     LOG("Playback > Start: worker spawned, heartbeat begins");
 }
 
+//
+// OnPlaybackPause — pause the worker.
+//
 void CScenarioEditorDialog::OnPlaybackPause()
 {
     LOG("Playback > Pause");
     m_worker.Pause();
 }
 
+//
+// OnPlaybackResume — resume the worker.
+//
 void CScenarioEditorDialog::OnPlaybackResume()
 {
     LOG("Playback > Resume");
     m_worker.Resume();
 }
 
+//
+// OnPlaybackStop — request stop and join the worker synchronously.
+//
 void CScenarioEditorDialog::OnPlaybackStop()
 {
     LOG("Playback > Stop");
@@ -628,6 +778,10 @@ void CScenarioEditorDialog::OnPlaybackStop()
     m_worker.Join();   // synchronous stop — the user clicked Stop
 }
 
+//
+// OnPlaybackStatusMessage — worker-posted state change: map PlaybackState
+// (wParam) to a label and show it in the State status-bar pane.
+//
 LRESULT CScenarioEditorDialog::OnPlaybackStatusMessage(WPARAM wParam, LPARAM /*lParam*/)
 {
     const PlaybackState state = static_cast<PlaybackState>(wParam);
@@ -648,6 +802,10 @@ LRESULT CScenarioEditorDialog::OnPlaybackStatusMessage(WPARAM wParam, LPARAM /*l
     return 0;
 }
 
+//
+// OnPlaybackProgressMessage — worker-posted progress: update the PDU count and
+// the Time / Progress panes from elapsed ms (wParam) and total PDUs (lParam).
+//
 LRESULT CScenarioEditorDialog::OnPlaybackProgressMessage(WPARAM timeMs, LPARAM totalPdus)
 {
     m_pduCount = static_cast<unsigned>(totalPdus);
@@ -678,6 +836,10 @@ LRESULT CScenarioEditorDialog::OnPlaybackProgressMessage(WPARAM timeMs, LPARAM t
     return 0;
 }
 
+//
+// OnPlaybackErrorMessage — worker-posted error: log the code (wParam) and set
+// the State pane to "Error".
+//
 LRESULT CScenarioEditorDialog::OnPlaybackErrorMessage(WPARAM code, LPARAM /*lParam*/)
 {
     sprintf_s(szError, sizeof(szError), "WM_APP_PLAYBACK_ERROR code=%u", static_cast<unsigned>(code));
@@ -687,6 +849,10 @@ LRESULT CScenarioEditorDialog::OnPlaybackErrorMessage(WPARAM code, LPARAM /*lPar
     return 0;
 }
 
+//
+// OnDestroy — persist window placement and last-scenario path to settings,
+// then stop and join the worker before the HWND is destroyed.
+//
 void CScenarioEditorDialog::OnDestroy()
 {
     // Snapshot window placement before we go away (§11.5). Use
@@ -720,6 +886,10 @@ void CScenarioEditorDialog::OnDestroy()
 
 // ---------- File menu ----------
 
+//
+// UpdateTitle — set the window title from the open file name (or the in-INI
+// name, or "Untitled"), appending " *" when there are unsaved changes.
+//
 void CScenarioEditorDialog::UpdateTitle()
 {
     // Title bar shows the FILE NAME (what the user clicked Open on) as
@@ -751,6 +921,10 @@ void CScenarioEditorDialog::UpdateTitle()
     SetWindowText(title);
 }
 
+//
+// MarkDirty — flag the scenario modified (unless suppressed) and refresh the
+// title. No-op if already dirty.
+//
 void CScenarioEditorDialog::MarkDirty()
 {
     if (m_suppressDirty || m_isDirty) return;
@@ -758,6 +932,9 @@ void CScenarioEditorDialog::MarkDirty()
     UpdateTitle();
 }
 
+//
+// ClearDirty — clear the modified flag and refresh the title. No-op if clean.
+//
 void CScenarioEditorDialog::ClearDirty()
 {
     if (!m_isDirty) return;
@@ -766,6 +943,10 @@ void CScenarioEditorDialog::ClearDirty()
 }
 
 
+//
+// OnMarkDirtyMessage — WM_APP_MARK_DIRTY handler; lets a page request a
+// dirty flag via PostMessage.
+//
 LRESULT CScenarioEditorDialog::OnMarkDirtyMessage(WPARAM /*w*/, LPARAM /*l*/)
 {
     MarkDirty();
@@ -783,6 +964,11 @@ LRESULT CScenarioEditorDialog::OnRefreshUiMessage(WPARAM /*w*/, LPARAM /*l*/)
     return 0;
 }
 
+//
+// MaybePromptSaveOnDiscard — if dirty, ask Save/Discard/Cancel. Returns true
+// if the caller may proceed (saved or discarded), false on Cancel or a
+// cancelled Save-As.
+//
 bool CScenarioEditorDialog::MaybePromptSaveOnDiscard()
 {
     if (!m_isDirty) return true;
@@ -800,6 +986,11 @@ bool CScenarioEditorDialog::MaybePromptSaveOnDiscard()
     return true;
 }
 
+//
+// RefreshUiFromScenario — repopulate the Output page from the model (with
+// dirty tracking suppressed), update the title, and revalidate. Other pages
+// live in the Attributes notebook and refresh themselves when opened.
+//
 void CScenarioEditorDialog::RefreshUiFromScenario()
 {
     // ReadFrom() helpers SetWindowText on every edit control, which fires
@@ -815,6 +1006,10 @@ void CScenarioEditorDialog::RefreshUiFromScenario()
     Revalidate();
 }
 
+//
+// CaptureUiIntoScenario — pull the Output page's controls plus the toolbar
+// speed combo and loop toggle into the model, then revalidate.
+//
 void CScenarioEditorDialog::CaptureUiIntoScenario()
 {
     // The Setup / Asset / Motion pages flush their own edits into the shared
@@ -838,6 +1033,10 @@ void CScenarioEditorDialog::CaptureUiIntoScenario()
     Revalidate();
 }
 
+//
+// Revalidate — run the validator + bandwidth estimate and push the
+// error/warning/info/PDU/BW counts into the status-bar panes.
+//
 void CScenarioEditorDialog::Revalidate()
 {
     // §20: run rule set + bandwidth estimate; push counts into the status bar
@@ -870,6 +1069,10 @@ void CScenarioEditorDialog::OnKbAddSegment()      { OpenAttributes(2); }
 void CScenarioEditorDialog::OnKbDeleteSegment()   { OpenAttributes(2); }
 void CScenarioEditorDialog::OnKbDuplicateSegment(){ OpenAttributes(2); }
 
+//
+// OnScenarioValidate — capture the UI, run the validator, and present the
+// full issue list (errors, then warnings, then info) in a message box.
+//
 void CScenarioEditorDialog::OnScenarioValidate()
 {
     CaptureUiIntoScenario();
@@ -911,6 +1114,10 @@ void CScenarioEditorDialog::OnScenarioValidate()
     AfxMessageBox(body, MB_OK | (rep.errorCount > 0 ? MB_ICONWARNING : MB_ICONINFORMATION));
 }
 
+//
+// DoSaveTo — capture the UI and write the scenario to iniPath; on success
+// record it as the current path and clear dirty. Returns false on I/O error.
+//
 bool CScenarioEditorDialog::DoSaveTo(const CString& iniPath)
 {
     CaptureUiIntoScenario();
@@ -928,6 +1135,10 @@ bool CScenarioEditorDialog::DoSaveTo(const CString& iniPath)
     return true;
 }
 
+//
+// OnFileNew — File > New: prompt to save if dirty, then reset to a blank
+// scenario and refresh the UI.
+//
 void CScenarioEditorDialog::OnFileNew()
 {
     LOG("File > New Scenario");
@@ -940,6 +1151,10 @@ void CScenarioEditorDialog::OnFileNew()
     ClearDirty();
 }
 
+//
+// OnFileOpen — File > Open: prompt to save if dirty, pick an .ini, load it,
+// and refresh the UI (reporting any load error via message box).
+//
 void CScenarioEditorDialog::OnFileOpen()
 {
     LOG("File > Open Scenario");
@@ -984,6 +1199,10 @@ void CScenarioEditorDialog::OnFileOpen()
     }
 }
 
+//
+// OnFileSave — File > Save: save to the current path, or fall through to
+// Save As if none is set yet.
+//
 void CScenarioEditorDialog::OnFileSave()
 {
     LOG("File > Save Scenario");
@@ -995,6 +1214,10 @@ void CScenarioEditorDialog::OnFileSave()
     DoSaveTo(m_currentScenarioPath);
 }
 
+//
+// OnReplayFile — Tools > Replay File: capture the UI, resolve the recording
+// path (prompting if unset), and start the worker in replay mode.
+//
 void CScenarioEditorDialog::OnReplayFile()
 {
     LOG("Tools > Replay File");
@@ -1026,6 +1249,10 @@ void CScenarioEditorDialog::OnReplayFile()
     m_worker.Start(GetSafeHwnd(), std::move(snap));
 }
 
+//
+// OnOpenRecording — File > Open Recording: pick a .disrec, store it as the
+// Output tab's replay path, and refresh that page.
+//
 void CScenarioEditorDialog::OnOpenRecording()
 {
     LOG("File > Open Recording");
@@ -1039,6 +1266,9 @@ void CScenarioEditorDialog::OnOpenRecording()
     m_pageOutput.ReadFrom(m_scenario.output);
 }
 
+//
+// OnFileSaveAs — File > Save As: prompt for a target .ini and save to it.
+//
 void CScenarioEditorDialog::OnFileSaveAs()
 {
     LOG("File > Save Scenario As");

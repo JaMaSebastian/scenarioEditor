@@ -1,3 +1,14 @@
+//=============================================================================
+//  ScenarioSetupPage.cpp
+//-----------------------------------------------------------------------------
+//  Implements CScenarioSetupPage: the field-help table, live-commit handlers
+//  for coord mode / physical model / speed multiplier, control seeding in
+//  OnInitDialog, and the WriteTo/ReadFrom marshalling between the page's
+//  controls and the shared Scenario.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #include "pch.h"
 #include "ScenarioSetupPage.h"
 #include "FormatUtil.h"
@@ -44,6 +55,10 @@ BEGIN_MESSAGE_MAP(CScenarioSetupPage, CHelpAwarePage)
     ON_BN_CLICKED(IDC_CHK_SPEED_MULT,      &CScenarioSetupPage::OnSpeedMultiplierToggle)
 END_MESSAGE_MAP()
 
+//
+// OnDefaultCoordModeChanged — live-commit the selected default coord mode into
+// the scenario so other pages read the latest value without waiting for Save.
+//
 void CScenarioSetupPage::OnDefaultCoordModeChanged()
 {
     // Live-commit the default coord mode so Asset.OnAddAsset and
@@ -61,6 +76,10 @@ void CScenarioSetupPage::OnDefaultCoordModeChanged()
     }
 }
 
+//
+// OnPhysModeRadio — live-commit the selected physical-model default
+// (Ignore / Validate / Limit) from the radio group into the scenario.
+//
 void CScenarioSetupPage::OnPhysModeRadio()
 {
     if (!m_scenario) return;
@@ -72,6 +91,10 @@ void CScenarioSetupPage::OnPhysModeRadio()
         m_scenario->defaultPhysicalModel = PhysicalModelMode::Ignore;
 }
 
+//
+// OnSpeedMultiplierToggle — live-commit the scenario-wide speed-multiplier
+// enabled flag from its checkbox.
+//
 void CScenarioSetupPage::OnSpeedMultiplierToggle()
 {
     if (!m_scenario) return;
@@ -79,12 +102,21 @@ void CScenarioSetupPage::OnSpeedMultiplierToggle()
         IsDlgButtonChecked(IDC_CHK_SPEED_MULT) == BST_CHECKED;
 }
 
+//
+// GetFieldHelpTable — return this page's field-help table (kFields) for the
+// CHelpAwarePage base to drive hover/field help.
+//
 void CScenarioSetupPage::GetFieldHelpTable(const FFieldHelp*& outArray, size_t& outCount) const
 {
     outArray = kFields;
     outCount = sizeof(kFields) / sizeof(kFields[0]);
 }
 
+//
+// OnInitDialog — populate the coord-mode combo and seed all controls with
+// sensible defaults (DIS v7, IDs = 1, San Francisco origin, Ignore physical
+// model, multiplier 1.0) so the page never shows empty/invalid fields.
+//
 BOOL CScenarioSetupPage::OnInitDialog()
 {
     CHelpAwarePage::OnInitDialog();
@@ -125,6 +157,10 @@ BOOL CScenarioSetupPage::OnInitDialog()
 
 namespace
 {
+    //
+    // ReadDoubleText — parse the given edit control's text as a double,
+    // returning fallback when it's empty or not a valid number.
+    //
     double ReadDoubleText(const CWnd& wnd, UINT id, double fallback)
     {
         CString text;
@@ -140,6 +176,11 @@ namespace
     }
 }
 
+//
+// WriteTo — read every control on the page and store its value into scenario
+// (IDs, protocol version, origin, coord mode, name/description, duration,
+// update rate, and physical-model defaults).
+//
 void CScenarioSetupPage::WriteTo(Scenario& scenario) const
 {
     if (!::IsWindow(GetSafeHwnd()))
@@ -194,6 +235,10 @@ void CScenarioSetupPage::WriteTo(Scenario& scenario) const
         ReadDoubleText(*this, IDC_EDIT_SPEED_MULT, scenario.speedMultiplier);
 }
 
+//
+// ReadFrom — inverse of WriteTo: populate every control on the page from the
+// given scenario (called when a scenario is loaded).
+//
 void CScenarioSetupPage::ReadFrom(const Scenario& scenario)
 {
     if (!::IsWindow(GetSafeHwnd())) return;

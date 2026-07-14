@@ -1,3 +1,15 @@
+//=============================================================================
+//  PreviewCanvas.cpp
+//-----------------------------------------------------------------------------
+//  Implements CPreviewCanvas: the Direct2D rendering of the scenario preview
+//  (map backdrop, terrain overlay, legend, courses/trails, entity dots and
+//  edit handles) and all mouse handling — pan/zoom, entity and ellipse/line
+//  handle dragging, rubber-band group selection, boundary painting, and the
+//  right-click context menus that drive the owning CPreviewPage.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-25
+//=============================================================================
 #include "pch.h"
 #include "PreviewCanvas.h"
 #include "PreviewPage.h"
@@ -18,6 +30,9 @@ namespace
     constexpr float kOrientationLenPx  = 18.0f;
     constexpr float kLabelOffsetPx     = 9.0f;
 
+    //
+    // MakeRgb — build a Direct2D color from a 0xRRGGBB packed int (+ optional alpha).
+    //
     D2D1_COLOR_F MakeRgb(uint32_t rgb, float a = 1.0f)
     {
         const float r = ((rgb >> 16) & 0xFF) / 255.0f;
@@ -52,6 +67,11 @@ LRESULT CPreviewCanvas::OnNcHitTest(CPoint /*pt*/)
     return HTCLIENT;
 }
 
+//
+// OnLButtonDown — begin the appropriate left-button action for what's under the
+//   cursor, in priority order: "Set Start" pick, line end-anchor drag, ellipse
+//   focus-handle drag, ellipse shape-handle drag, entity drag, else a view pan.
+//
 void CPreviewCanvas::OnLButtonDown(UINT nFlags, CPoint pt)
 {
     SetFocus();           // so the wheel comes to us if the user clicks first
@@ -142,6 +162,11 @@ void CPreviewCanvas::OnLButtonDown(UINT nFlags, CPoint pt)
     CWnd::OnLButtonDown(nFlags, pt);
 }
 
+//
+// OnLButtonUp — finish whichever left-drag is active: commit the final ENU
+//   position to the owner (focus/shape/anchor/entity drag) or just end a pan,
+//   then release capture.
+//
 void CPreviewCanvas::OnLButtonUp(UINT nFlags, CPoint pt)
 {
     if (m_draggingFocus)
@@ -200,6 +225,11 @@ void CPreviewCanvas::OnLButtonUp(UINT nFlags, CPoint pt)
     CWnd::OnLButtonUp(nFlags, pt);
 }
 
+//
+// OnMouseMove — live update of whatever gesture is in progress: boundary/rubber-
+//   band box, focus/shape/anchor/entity drag (report the new ENU to the owner),
+//   or panning the view by the pixel delta.
+//
 void CPreviewCanvas::OnMouseMove(UINT nFlags, CPoint pt)
 {
     if (m_boundaryDragActive)
@@ -259,6 +289,10 @@ void CPreviewCanvas::OnMouseMove(UINT nFlags, CPoint pt)
     CWnd::OnMouseMove(nFlags, pt);
 }
 
+//
+// OnMouseWheel — zoom toward/away from the cursor. Forward = zoom in; 1.25x per
+//   detent, applied about the client-space pixel under the pointer.
+//
 BOOL CPreviewCanvas::OnMouseWheel(UINT /*nFlags*/, short zDelta, CPoint screenPt)
 {
     if (!m_owner) return FALSE;
@@ -278,6 +312,11 @@ BOOL CPreviewCanvas::OnMouseWheel(UINT /*nFlags*/, short zDelta, CPoint screenPt
     return TRUE;
 }
 
+//
+// OnRButtonDown — start a right-drag gesture: boundary paint (if armed), else a
+//   rubber-band group selection when pressing on empty space. On an object the
+//   menu is deferred to OnRButtonUp.
+//
 void CPreviewCanvas::OnRButtonDown(UINT nFlags, CPoint pt)
 {
     SetFocus();
@@ -309,6 +348,12 @@ void CPreviewCanvas::OnRButtonDown(UINT nFlags, CPoint pt)
     CWnd::OnRButtonDown(nFlags, pt);
 }
 
+//
+// OnRButtonUp — resolve the right-button gesture: commit a boundary box (→ lat/lon
+//   corners to the owner), finish/clear a rubber-band selection, or pop the
+//   appropriate context menu (course-line, group, or single-entity) and dispatch
+//   the chosen command to the owner.
+//
 void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
 {
     // Finish a "Boundary" paint drag: convert the box → ENU → lat/lon corners → the page (which
@@ -461,7 +506,8 @@ void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
     // Build the context menu in code (the app has no .rc menu resources). IDs
     // are local; TPM_RETURNCMD hands the chosen id straight back to us.
     enum { kPlotLine = 1, kEllipseCW, kEllipseCCW, kDuplicate, kRename, kDelete,
-           kSetDuration, kRefreshSpeed, kSetDelay, kEntEllipseCW, kEntEllipseCCW };
+           kSetDuration, kRefreshSpeed, kSetDelay, kEntEllipseCW, kEntEllipseCCW,
+           kChangeEntity, kTakeoffLine };
 
     CMenu ell;
     ell.CreatePopupMenu();
@@ -476,6 +522,9 @@ void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
     CMenu plot;
     plot.CreatePopupMenu();
     plot.AppendMenu(MF_STRING, kPlotLine, _T("Line"));
+    // Take-off line (accelerate from a stop to cruise) — fixed-wing aircraft only.
+    if (m_owner && m_owner->CanTakeoff(static_cast<size_t>(idx)))
+        plot.AppendMenu(MF_STRING, kTakeoffLine, _T("Take-off Line"));
     plot.AppendMenu(MF_POPUP, reinterpret_cast<UINT_PTR>(ell.GetSafeHmenu()), _T("Ellipse"));
     plot.AppendMenu(MF_POPUP, reinterpret_cast<UINT_PTR>(entEll.GetSafeHmenu()), _T("Entity Ellipse"));
 
@@ -486,8 +535,9 @@ void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
     menu.AppendMenu(MF_STRING, kSetDelay,     _T("Set Delay..."));
     menu.AppendMenu(MF_STRING, kRefreshSpeed, _T("Refresh Speed"));
     menu.AppendMenu(MF_STRING, kDuplicate, _T("Duplicate"));
-    menu.AppendMenu(MF_STRING, kRename,    _T("Rename"));
-    menu.AppendMenu(MF_STRING, kDelete,    _T("Delete"));
+    menu.AppendMenu(MF_STRING, kRename,       _T("Rename"));
+    menu.AppendMenu(MF_STRING, kChangeEntity, _T("Change Entity..."));
+    menu.AppendMenu(MF_STRING, kDelete,       _T("Delete"));
     ell.Detach();    // owned by `plot` now
     entEll.Detach(); // owned by `plot` now
     plot.Detach();   // owned by `menu` now (avoid double-destroy)
@@ -502,6 +552,9 @@ void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
     {
     case kPlotLine:
         if (m_owner) m_owner->PlotLineCourse(static_cast<size_t>(idx));
+        break;
+    case kTakeoffLine:
+        if (m_owner) m_owner->PlotTakeoffLine(static_cast<size_t>(idx));
         break;
     case kEllipseCW:
         if (m_owner) m_owner->PlotEllipseCourse(static_cast<size_t>(idx), true);
@@ -530,6 +583,9 @@ void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
     case kRename:
         if (m_owner) m_owner->RenameEntity(static_cast<size_t>(idx));
         break;
+    case kChangeEntity:
+        if (m_owner) m_owner->ChangeEntity(static_cast<size_t>(idx));
+        break;
     case kDelete:
         if (m_owner) m_owner->DeleteEntity(static_cast<size_t>(idx));
         break;
@@ -538,12 +594,18 @@ void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
     }
 }
 
+//
+// OnEraseBkgnd — suppress GDI background erase (D2D repaints everything).
+//
 BOOL CPreviewCanvas::OnEraseBkgnd(CDC*)
 {
     // D2D paints the full client area; suppress GDI erase to avoid flicker.
     return TRUE;
 }
 
+//
+// OnSize — resize the Direct2D render target to match the new client area.
+//
 void CPreviewCanvas::OnSize(UINT nType, int cx, int cy)
 {
     CWnd::OnSize(nType, cx, cy);
@@ -551,6 +613,11 @@ void CPreviewCanvas::OnSize(UINT nType, int cx, int cy)
         m_rt->Resize(D2D1::SizeU(static_cast<UINT32>(cx), static_cast<UINT32>(cy)));
 }
 
+//
+// EnsureResources — lazily create the HWND render target, all solid brushes,
+//   the dashed stroke, the two DWrite text formats, and (once) the map tile
+//   service. No-op if already created; returns false on failure.
+//
 bool CPreviewCanvas::EnsureResources()
 {
     if (m_rt) return true;
@@ -643,6 +710,10 @@ bool CPreviewCanvas::EnsureResources()
     return true;
 }
 
+//
+// DiscardDeviceResources — release the render target, brushes and cached tile
+//   bitmaps after a lost/recreated device; next paint rebuilds them.
+//
 void CPreviewCanvas::DiscardDeviceResources()
 {
     m_rt.Reset();
@@ -664,12 +735,21 @@ void CPreviewCanvas::DiscardDeviceResources()
     m_tileBmpOrder.clear();
 }
 
+//
+// BrushForForce — return the palette brush for a force id, clamping unknown ids
+//   to 0 (Other).
+//
 ID2D1SolidColorBrush* CPreviewCanvas::BrushForForce(uint8_t forceId)
 {
     if (forceId >= 4) forceId = 0;
     return m_brushForce[forceId].Get();
 }
 
+//
+// ProjectEnu — map a scenario-origin ENU point (metres) to a DIP screen point
+//   using the state's zoom (metres/px) and center. East→+x, North→−y (screen Y
+//   grows down). The one projection all drawing and hit-testing share.
+//
 D2D1_POINT_2F CPreviewCanvas::ProjectEnu(double e, double n,
                                          const PreviewRenderState& s,
                                          float canvasW, float canvasH) const
@@ -681,12 +761,19 @@ D2D1_POINT_2F CPreviewCanvas::ProjectEnu(double e, double n,
     return D2D1::Point2F(sx, sy);
 }
 
+//
+// OnDestroy — stop the tile worker thread before the HWND is torn down.
+//
 void CPreviewCanvas::OnDestroy()
 {
     m_tiles.Stop();   // join the worker before our HWND goes away
     CWnd::OnDestroy();
 }
 
+//
+// OnTileReady — WM_APP_TILE_READY handler: a tile finished downloading, so
+//   invalidate to repaint and pick it up.
+//
 LRESULT CPreviewCanvas::OnTileReady(WPARAM, LPARAM)
 {
     // A background tile finished loading: repaint so it gets picked up.
@@ -694,6 +781,11 @@ LRESULT CPreviewCanvas::OnTileReady(WPARAM, LPARAM)
     return 0;
 }
 
+//
+// TileBitmap — get (or lazily create) the device bitmap for a map tile from the
+//   tile service's decoded pixels, cached by packed (layer,z,x,y) and FIFO-
+//   evicted. Returns nullptr while the tile is still loading.
+//
 ID2D1Bitmap* CPreviewCanvas::TileBitmap(MapLayer layer, int z, int x, int y)
 {
     if (!m_rt) return nullptr;
@@ -730,6 +822,12 @@ ID2D1Bitmap* CPreviewCanvas::TileBitmap(MapLayer layer, int z, int x, int y)
     return bmp.Get();
 }
 
+//
+// DrawMap — draw the georeferenced raster-tile backdrop under everything. Works
+//   out the visible ENU rectangle, converts it to a lat/lon box through the
+//   scenario origin, picks the Web-Mercator zoom matching the current m/px, then
+//   places each visible tile via ProjectEnu and paints the provider attribution.
+//
 void CPreviewCanvas::DrawMap(const PreviewRenderState& s, float w, float h)
 {
     if (s.mapLayer == MapLayer::None || s.mapLayer == MapLayer::Cesium ||
@@ -830,6 +928,12 @@ void CPreviewCanvas::DrawMap(const PreviewRenderState& s, float w, float h)
     }
 }
 
+//
+// PickStartAt — "Set Start" pick: find the ellipse orbit whose polyline is
+//   closest to a physical-pixel click (within a snap radius), and if found tell
+//   the owner to set that entity/segment's start at the picked ENU point.
+//   Returns true if a pick was applied.
+//
 bool CPreviewCanvas::PickStartAt(CPoint pxPt)
 {
     if (!m_owner || !m_rt) return false;
@@ -887,6 +991,11 @@ bool CPreviewCanvas::PickStartAt(CPoint pxPt)
     return true;
 }
 
+//
+// UnprojectToEnu — inverse of ProjectEnu: convert a physical-pixel client point
+//   to scenario-origin ENU east/north (via DIPs, so it's DPI-correct). Returns
+//   false if there's no render target/owner yet.
+//
 bool CPreviewCanvas::UnprojectToEnu(CPoint pxPt, double& outE, double& outN) const
 {
     if (!m_owner || !m_rt) return false;
@@ -908,6 +1017,10 @@ bool CPreviewCanvas::UnprojectToEnu(CPoint pxPt, double& outE, double& outN) con
     return true;
 }
 
+//
+// HitTestEntity — index of the nearest enabled entity dot to a physical-pixel
+//   point within the pick radius, or -1 if none.
+//
 int CPreviewCanvas::HitTestEntity(CPoint pxPt) const
 {
     if (!m_owner || !m_rt) return -1;
@@ -940,6 +1053,10 @@ int CPreviewCanvas::HitTestEntity(CPoint pxPt) const
     return best;
 }
 
+//
+// HitTestLineAnchor — index into state.lineAnchors of the nearest Line end-anchor
+//   ("pink dot") to a physical-pixel point within the pick radius, or -1.
+//
 int CPreviewCanvas::HitTestLineAnchor(CPoint pxPt) const
 {
     if (!m_owner || !m_rt) return -1;
@@ -968,6 +1085,11 @@ int CPreviewCanvas::HitTestLineAnchor(CPoint pxPt) const
     return best;
 }
 
+//
+// HitTestLineSegment — entity index whose drawn course polyline passes under a
+//   physical-pixel point (point-to-segment distance within slack), or -1. Used
+//   to right-click a course line and extend it.
+//
 int CPreviewCanvas::HitTestLineSegment(CPoint pxPt) const
 {
     if (!m_owner || !m_rt) return -1;
@@ -1005,6 +1127,10 @@ int CPreviewCanvas::HitTestLineSegment(CPoint pxPt) const
     return bestEnt;
 }
 
+//
+// HitTestFocus — index into state.focusHandles of the nearest ellipse focus
+//   handle to a physical-pixel point within the pick radius, or -1.
+//
 int CPreviewCanvas::HitTestFocus(CPoint pxPt) const
 {
     if (!m_owner || !m_rt) return -1;
@@ -1033,6 +1159,11 @@ int CPreviewCanvas::HitTestFocus(CPoint pxPt) const
     return best;
 }
 
+//
+// HitTestEllipseShape — index into state.ellipses of the orbit whose shape
+//   handle (the dot on the curve at the orbit start) is nearest a physical-pixel
+//   point within the pick radius, or -1.
+//
 int CPreviewCanvas::HitTestEllipseShape(CPoint pxPt) const
 {
     if (!m_owner || !m_rt) return -1;
@@ -1063,6 +1194,10 @@ int CPreviewCanvas::HitTestEllipseShape(CPoint pxPt) const
     return best;
 }
 
+//
+// ClientToDip — convert a physical-pixel client point to DIPs (the space
+//   ProjectEnu and the render target draw in), so picking matches on scaled displays.
+//
 D2D1_POINT_2F CPreviewCanvas::ClientToDip(CPoint px) const
 {
     if (!m_rt) return D2D1::Point2F(static_cast<float>(px.x), static_cast<float>(px.y));
@@ -1074,6 +1209,10 @@ D2D1_POINT_2F CPreviewCanvas::ClientToDip(CPoint px) const
                          static_cast<float>(px.y / ((sy > 0.0) ? sy : 1.0)));
 }
 
+//
+// OnPaint — WM_PAINT handler: ensure device resources exist, then Render the
+//   owner's current render state (first few paints are logged for diagnostics).
+//
 void CPreviewCanvas::OnPaint()
 {
     CPaintDC dc(this);   // validates the update region; the HDC itself is unused.
@@ -1099,6 +1238,12 @@ void CPreviewCanvas::OnPaint()
     Render(state);
 }
 
+//
+// Render — draw one full frame in back-to-front order: map backdrop, terrain
+//   overlay + zones, legend, crosshair, courses, trails, orbit markers and edit
+//   handles, entity dots/orientation/labels, HUD, and any active drag box. On a
+//   lost target it discards device resources so the next paint rebuilds them.
+//
 void CPreviewCanvas::Render(const PreviewRenderState& state)
 {
     if (!m_rt) return;

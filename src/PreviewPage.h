@@ -1,3 +1,15 @@
+//=============================================================================
+//  PreviewPage.h
+//-----------------------------------------------------------------------------
+//  Declares CPreviewPage, the ScenarioEditor "Preview" tab: a top-down 2D
+//  canvas (with an optional Cesium 3D globe) that animates a scenario over
+//  time and lets the operator author entities and their motion paths --
+//  drag start points, plot line/ellipse/take-off/follow courses, paint a
+//  terrain boundary, relocate the map origin, and drive playback.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #pragma once
 
 #include "pch.h"
@@ -12,6 +24,13 @@ struct Scenario;
 struct Entity;
 struct MotionSegment;
 
+//-----------------------------------------------------------------------------
+// CPreviewPage — the "Preview" property page (dialog tab)
+//   Owns the 2D preview canvas and the Cesium 3D view, holds the animation
+//   clock/zoom/pan state, and mutates the shared Scenario in response to
+//   canvas gestures and toolbar/menu commands. Rebuilds a PreviewRenderState
+//   that the canvas reads each paint.
+//-----------------------------------------------------------------------------
 class CPreviewPage : public CHelpAwarePage
 {
 public:
@@ -55,12 +74,26 @@ public:
     // Right-click context menu action: prompt for a new label and rename entity `idx`.
     void RenameEntity(size_t idx);
 
+    // Right-click context menu action: open the catalog tree picker and re-type
+    // entity `idx` to the chosen subcategory, re-deriving its speed/attributes
+    // and updating its label to the new type's name.
+    void ChangeEntity(size_t idx);
+
     // Right-click context menu action: remove entity `idx` (keeps at least one).
     void DeleteEntity(size_t idx);
 
     // Plot > Line: give entity `idx` a straight-line course at its type's cruise
     // speed, on its conveyance plane (domain), with a draggable end-anchor.
     void PlotLineCourse(size_t idx);
+
+    // Plot > Take-off Line: like PlotLineCourse, but the entity starts STOPPED and
+    // accelerates to cruise by the end of the line (constant acceleration). Only
+    // meaningful for fixed-wing aircraft (Platform/Air) — see CanTakeoff.
+    void PlotTakeoffLine(size_t idx);
+
+    // True when entity `idx` is a Platform (kind 1) in the Air domain (2), i.e.
+    // eligible for a take-off line. Drives whether the context menu offers it.
+    bool CanTakeoff(size_t idx) const;
 
     // Plot > Ellipse: give entity `idx` an orbit (clockwise/CCW) snapped to it,
     // with two draggable focus handles.
@@ -134,6 +167,7 @@ protected:
     afx_msg void OnZoomIn();
     afx_msg void OnZoomOut();
     afx_msg void OnFit();
+    afx_msg void OnNewEntity();   // "New" button: drop a default octopus drone
     afx_msg void OnLabelsToggle();
     afx_msg void OnTrailsToggle();
     afx_msg void OnPathsToggle();
@@ -160,7 +194,11 @@ protected:
 private:
     enum class PreviewState { Idle, Playing, Paused };
 
+    // Recompute m_state (poses/paths/trails/overlays) from the model at the
+    // current preview time, then push entities to the globe.
     void RebuildRenderState();
+    // Rebuild the cached per-entity motion-path polylines + pickable ellipse
+    // targets (call after any edit that changes geometry).
     void RebuildPathsCache();
     // Map/location UI helpers.
     void PopulatePlacesCombo(int selectIdx = -1);   // fill from theApp.Settings()
@@ -206,6 +244,7 @@ private:
     void SetSegmentStartEnu(MotionSegment& s, double east, double north, double up) const;
     void SetEllipseStartBearing(size_t entityIdx, size_t segIdx,
                                 MotionSegment& s, double east, double north) const;
+    // Auto-zoom/pan so the whole scenario (and any terrain overlay) fits the canvas.
     void FitScenario();
     // Self-hosted Cesium terrain server (WSL python3 serve.py on :8088) controls.
     // Resolve DISBrowser\Scripts\<fileName> from the configured project dir (Run tab).
@@ -216,7 +255,9 @@ private:
     void RefreshTerrainServerUi();
     // Pickable ellipse orbits, rebuilt with the paths cache; copied into the
     // render state so the canvas can hit-test them. Defined in PreviewCanvas.h.
+    // Push m_previewTimeSec onto the time slider (guarded against re-entrant scroll).
     void UpdateSliderFromTime();
+    // Start / stop the ~30 Hz animation timer.
     void StartTimer();
     void StopTimer();
 

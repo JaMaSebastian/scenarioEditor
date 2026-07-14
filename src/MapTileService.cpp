@@ -1,3 +1,13 @@
+//=============================================================================
+//  MapTileService.cpp
+//-----------------------------------------------------------------------------
+//  Implements MapTileService: provider URL construction, disk cache I/O, WIC
+//  decode to premultiplied BGRA, WinHTTP fetching, the background worker loop
+//  with LRU eviction, and the static Web Mercator projection helpers.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-07-10
+//=============================================================================
 #include "pch.h"
 #include "MapTileService.h"
 
@@ -27,6 +37,10 @@ namespace
         const wchar_t* ext;         // native cache extension
     };
 
+    //
+    // ProviderFor — pick the tile source (host/path/order/extension) for a layer;
+    //   defaults to OpenTopoMap for anything but Satellite.
+    //
     Provider ProviderFor(MapLayer layer)
     {
         switch (layer)
@@ -63,6 +77,10 @@ namespace
     }
 
     // ---- filesystem ----
+    //
+    // EnsureDir — recursively create `dir` and all of its parent folders (skips
+    //   the drive root); silently no-ops for already-existing directories.
+    //
     void EnsureDir(const std::wstring& dir)
     {
         if (dir.empty()) return;
@@ -78,6 +96,10 @@ namespace
         CreateDirectoryW(dir.c_str(), nullptr);
     }
 
+    //
+    // ReadWholeFile — read the entire file into `out`; returns false on open
+    //   failure, empty/oversized (>64 MB) files, or a short read.
+    //
     bool ReadWholeFile(const std::wstring& path, std::vector<uint8_t>& out)
     {
         HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
@@ -94,6 +116,10 @@ namespace
         return true;
     }
 
+    //
+    // WriteWholeFile — write `data` to `path`, overwriting any existing file;
+    //   failures are ignored (caching is best-effort).
+    //
     void WriteWholeFile(const std::wstring& path, const std::vector<uint8_t>& data)
     {
         HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
@@ -200,6 +226,9 @@ namespace
 
 MapTileService::MapTileService() = default;
 
+//
+// ~MapTileService — stops and joins the worker thread before teardown.
+//
 MapTileService::~MapTileService()
 {
     Stop();
@@ -209,6 +238,9 @@ void MapTileService::SetCacheDir(const std::wstring& dir) { m_cacheDir = dir; }
 void MapTileService::SetOnline(bool online)               { m_online = online; }
 void MapTileService::SetNotifyWindow(HWND hwnd)           { m_notify = hwnd; }
 
+//
+// Stop — signal the worker to exit, wake it, and join it; idempotent.
+//
 void MapTileService::Stop()
 {
     {
@@ -220,6 +252,10 @@ void MapTileService::Stop()
     if (m_worker.joinable()) m_worker.join();
 }
 
+//
+// DiskPathBase — build the extensionless cache path <dir>\<layer>\<z>\<x>\<y>
+//   for a tile key.
+//
 std::wstring MapTileService::DiskPathBase(const Key& k) const
 {
     wchar_t buf[64];
@@ -227,6 +263,12 @@ std::wstring MapTileService::DiskPathBase(const Key& k) const
     return m_cacheDir + buf;
 }
 
+//
+// GetTile — return the tile's pixels immediately if decoded and Ready (touching
+//   its LRU); otherwise register a Loading entry, enqueue it, lazily spawn the
+//   worker, and return nullptr. The result aliases the cache Entry so the pixels
+//   outlive any later eviction.
+//
 std::shared_ptr<const MapTilePixels> MapTileService::GetTile(MapLayer layer,
                                                              int z, int x, int y)
 {
@@ -257,6 +299,12 @@ std::shared_ptr<const MapTilePixels> MapTileService::GetTile(MapLayer layer,
     return nullptr;
 }
 
+//
+// WorkerMain — background loop: init COM/WIC/WinHTTP, then for each queued tile
+//   try the disk cache, then the network; decode to BGRA, write freshly fetched
+//   tiles back to disk, store the result, evict down to the cache cap, and post
+//   WM_APP_TILE_READY. Runs until Stop() sets m_stop.
+//
 void MapTileService::WorkerMain()
 {
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -356,11 +404,17 @@ void MapTileService::WorkerMain()
 
 // ---- Web Mercator helpers -------------------------------------------------
 
+//
+// TileXAtLon — fractional tile X column for a longitude at zoom z.
+//
 double MapTileService::TileXAtLon(double lonDeg, int z)
 {
     return (lonDeg + 180.0) / 360.0 * static_cast<double>(1 << z);
 }
 
+//
+// TileYAtLat — fractional tile Y row for a latitude at zoom z.
+//
 double MapTileService::TileYAtLat(double latDeg, int z)
 {
     const double lat = latDeg * kPi / 180.0;
@@ -368,17 +422,26 @@ double MapTileService::TileYAtLat(double latDeg, int z)
     return (1.0 - std::log(std::tan(lat) + 1.0 / std::cos(lat)) / kPi) / 2.0 * n;
 }
 
+//
+// LonAtTileX — inverse of TileXAtLon: longitude (deg) for a fractional tile X.
+//
 double MapTileService::LonAtTileX(double x, int z)
 {
     return x / static_cast<double>(1 << z) * 360.0 - 180.0;
 }
 
+//
+// LatAtTileY — inverse of TileYAtLat: latitude (deg) for a fractional tile Y.
+//
 double MapTileService::LatAtTileY(double y, int z)
 {
     const double n = kPi - kTwoPi * y / static_cast<double>(1 << z);
     return 180.0 / kPi * std::atan(0.5 * (std::exp(n) - std::exp(-n)));
 }
 
+//
+// GroundResolution — metres per pixel at the given latitude/zoom (256px tiles).
+//
 double MapTileService::GroundResolution(double latDeg, int z)
 {
     // Metres per pixel at the given latitude/zoom for 256px Web Mercator tiles.
@@ -386,6 +449,9 @@ double MapTileService::GroundResolution(double latDeg, int z)
          / static_cast<double>(1 << z);
 }
 
+//
+// MinZoom / MaxZoom — allowed zoom range per layer (OpenTopoMap caps at 17).
+//
 int MapTileService::MinZoom(MapLayer) { return 2; }
 
 int MapTileService::MaxZoom(MapLayer layer)
@@ -393,6 +459,9 @@ int MapTileService::MaxZoom(MapLayer layer)
     return (layer == MapLayer::Topographic) ? 17 : 19;
 }
 
+//
+// Attribution — required provider credit line for a layer (empty for None/Cesium).
+//
 const wchar_t* MapTileService::Attribution(MapLayer layer)
 {
     switch (layer)

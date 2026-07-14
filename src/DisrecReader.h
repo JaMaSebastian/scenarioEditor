@@ -1,3 +1,13 @@
+//=============================================================================
+//  DisrecReader.h
+//-----------------------------------------------------------------------------
+//  Declares DisrecReader, a sequential reader for .disrec DIS recording files.
+//  Validates the 12-byte header on Open() and hands back one timestamped PDU
+//  record at a time via NextRecord(), with Rewind() to replay from the start.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #pragma once
 
 #include <cstddef>
@@ -6,6 +16,11 @@
 #include <string>
 #include <vector>
 
+//-----------------------------------------------------------------------------
+// DisrecReader — sequential reader for .disrec recording files
+//   Owns the FILE handle, validates the format header, and iterates records
+//   (timestamp + raw DIS PDU bytes). Non-copyable; closes the file on destroy.
+//-----------------------------------------------------------------------------
 class DisrecReader
 {
 public:

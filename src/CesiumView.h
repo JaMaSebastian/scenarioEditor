@@ -1,3 +1,14 @@
+//=============================================================================
+//  CesiumView.h
+//-----------------------------------------------------------------------------
+//  Declares CesiumView, an MFC CWnd that hosts a 3D CesiumJS globe inside a
+//  WebView2 control for the Preview area's "Cesium (3D)" map layer, plus the
+//  CesiumEntityPt struct used to plot labelled dots on that globe. The public
+//  API is identical whether or not the WebView2 SDK is present at build time.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-07-10
+//=============================================================================
 #pragma once
 
 #include "pch.h"
@@ -15,6 +26,11 @@
 // placeholder message, so the CMake build (which has no WebView2 SDK) stays
 // green. The public API is identical either way.
 
+//-----------------------------------------------------------------------------
+// CesiumEntityPt — one entity marker to plot on the globe
+//   Geographic position (lat/lon/altitude, metres) plus a display name and an
+//   0xRRGGBB dot colour. Passed as a batch to CesiumView::SetEntities.
+//-----------------------------------------------------------------------------
 struct CesiumEntityPt
 {
     std::string  name;
@@ -24,6 +40,13 @@ struct CesiumEntityPt
     unsigned int colorRgb = 0x78BEFF;   // 0xRRGGBB dot color
 };
 
+//-----------------------------------------------------------------------------
+// CesiumView — WebView2-hosted 3D Cesium globe child window
+//   Owns the WebView2 environment/controller/webview (via a pImpl so the header
+//   stays SDK-free), navigates it to an embedded CesiumJS page, and marshals
+//   host<->page JSON messages: fly-to, entity dots, boundary paint, camera
+//   look-at reports.
+//-----------------------------------------------------------------------------
 class CesiumView : public CWnd
 {
 public:

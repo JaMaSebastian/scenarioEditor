@@ -1,3 +1,14 @@
+//=============================================================================
+//  FormatUtil.h
+//-----------------------------------------------------------------------------
+//  Header-only display/parse helpers for numeric edit fields: FormatDoubleTrim
+//  renders a double at fixed precision with trailing zeros stripped, and
+//  ParseSpeedMps parses a free-form speed string (raw m/s, Mach, mph, km/h)
+//  into metres per second.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-25
+//=============================================================================
 #pragma once
 
 #include "pch.h"

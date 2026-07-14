@@ -1,3 +1,13 @@
+//=============================================================================
+//  PduBuilder.h
+//-----------------------------------------------------------------------------
+//  Declares the PduBuilder namespace: helpers that construct a DIS v7 Entity
+//  State PDU from a Scenario/Entity (with legacy or explicit ECEF velocity) and
+//  marshal a PDU into a big-endian wire-format byte buffer.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #pragma once
 
 #include <cstddef>

@@ -1,5 +1,20 @@
+//=============================================================================
+//  PlaysPage.cpp
+//-----------------------------------------------------------------------------
+//  Implements CPlaysPage: builds the accordion of owner-drawn category headers
+//  and subcategory buttons from theApp.Plays(), lays them out by hand with
+//  scroll support, paints the selected play's name/definition, draws the gear
+//  button, and routes header/item clicks (expand/collapse, load/run scenario).
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-07-10
+//=============================================================================
 #include "pch.h"
 #include "PlaysPage.h"
+#include "ScenarioEditor.h"        // theApp.Plays()/MutablePlays()/PlaysPath()
+#include "ScenarioEditorDialog.h"  // CScenarioEditorDialog::LoadScenarioForPlay
+#include "PlaysEditorDialog.h"     // CPlaysEditorDialog (opened by the gear button)
+#include "../log.h"
 
 #include <algorithm>   // std::max (NOMINMAX is set project-wide)
 
@@ -22,12 +37,22 @@ namespace
     constexpr int kBlurbGap  = 16;   // gap between scrollbar and blurb region
     constexpr int kBlurbTop  = 14;   // top inset of the blurb text
 
+    // Settings gear button, pinned to the top-right corner of the client area
+    // (Plays-tab-only — it configures this tab's catalog). Margin keeps it off
+    // the top / right edges.
+    constexpr int kGearSize   = 96;  // 3x the original 32px
+    constexpr int kGearMargin = 12;
+
     // Encoding-proof expand/collapse indicators. (Unicode triangles rendered as
     // raw source bytes get mangled under the codepage-1252 source charset, which
     // is what produced the earlier "garbage characters" before the name.)
     const wchar_t* const kGlyphExpanded  = L"-";
     const wchar_t* const kGlyphCollapsed = L"+";
 
+    //
+    // MakeButton — create a child BUTTON (zero-sized; positioned later in
+    //   Relayout) with the given id, caption, and extra style bits.
+    //
     HWND MakeButton(HWND parent, UINT id, const CString& text, DWORD extraStyle)
     {
         return ::CreateWindowEx(
@@ -47,14 +72,22 @@ BEGIN_MESSAGE_MAP(CPlaysPage, CHelpAwarePage)
     ON_WM_DRAWITEM()
     ON_COMMAND_RANGE(IDC_PLAYS_HEADER_FIRST, IDC_PLAYS_HEADER_LAST, &CPlaysPage::OnHeaderClicked)
     ON_COMMAND_RANGE(IDC_PLAYS_ITEM_FIRST,   IDC_PLAYS_ITEM_LAST,   &CPlaysPage::OnItemClicked)
+    ON_BN_CLICKED(IDC_BTN_GEAR,              &CPlaysPage::OnEditPlays)
 END_MESSAGE_MAP()
 
+//
+// CPlaysPage::GetFieldHelpTable — no per-field help on this page (returns empty).
+//
 void CPlaysPage::GetFieldHelpTable(const FFieldHelp*& outArray, size_t& outCount) const
 {
     outArray = nullptr;
     outCount = 0;
 }
 
+//
+// CPlaysPage::OnInitDialog — create the title font, scrollbar, gear button, and
+//   its tooltip, then build the accordion and lay everything out.
+//
 BOOL CPlaysPage::OnInitDialog()
 {
     CHelpAwarePage::OnInitDialog();
@@ -69,66 +102,117 @@ BOOL CPlaysPage::OnInitDialog()
 
     m_scroll.Create(WS_CHILD | SBS_VERT, CRect(0, 0, 0, 0), this, IDC_PLAYS_SCROLLBAR);
 
+    // Settings gear (top-right of the client area). Owner-drawn so it can paint
+    // the PNG icon with alpha; positioned in Relayout.
+    LoadGearImage();
+    m_gearBtn.Create(_T("Edit Plays"),
+                     WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+                     CRect(0, 0, 0, 0), this, IDC_BTN_GEAR);
+
+    if (m_toolTip.Create(this))
+    {
+        m_toolTip.AddTool(&m_gearBtn,
+            _T("Configure Plays\n")
+            _T("Add, edit, delete, and reorder the play categories and their ")
+            _T("subcategories; edit each subcategory's definition; and associate ")
+            _T("a scenario .ini with a subcategory (loaded — and run, if \"Run ")
+            _T("Scenario\" is set — when its button is pressed)."));
+        m_toolTip.SetMaxTipWidth(360);
+        m_toolTip.SetDelayTime(TTDT_AUTOPOP, 20000);
+        m_toolTip.Activate(TRUE);
+    }
+
     BuildAccordion();
     Relayout();
     return TRUE;
 }
 
+//
+// CPlaysPage::PreTranslateMessage — relay messages to the tooltip control so
+//   the gear button's hover help works.
+//
+BOOL CPlaysPage::PreTranslateMessage(MSG* pMsg)
+{
+    if (m_toolTip.GetSafeHwnd())
+        m_toolTip.RelayEvent(pMsg);
+    return CHelpAwarePage::PreTranslateMessage(pMsg);
+}
+
+//
+// CPlaysPage::LoadGearImage — decode the embedded gear PNG (RCDATA) into
+//   m_gearImg via a memory stream; logs and leaves the image null on failure.
+//
+void CPlaysPage::LoadGearImage()
+{
+    // Decode the gear PNG from the embedded RCDATA resource into a CImage
+    // (CImage auto-initializes GDI+ and keeps the alpha channel).
+    HINSTANCE hInst = AfxGetResourceHandle();
+    HRSRC hRes = ::FindResource(hInst, MAKEINTRESOURCE(IDB_GEAR_PNG), RT_RCDATA);
+    if (!hRes) { LOG("PlaysPage::LoadGearImage: gear resource not found"); return; }
+
+    const DWORD size = ::SizeofResource(hInst, hRes);
+    HGLOBAL hResData = ::LoadResource(hInst, hRes);
+    const void* pData = hResData ? ::LockResource(hResData) : nullptr;
+    if (!pData || size == 0) { LOG("PlaysPage::LoadGearImage: lock failed"); return; }
+
+    HGLOBAL hMem = ::GlobalAlloc(GMEM_MOVEABLE, size);
+    if (!hMem) return;
+    if (void* pMem = ::GlobalLock(hMem))
+    {
+        memcpy(pMem, pData, size);
+        ::GlobalUnlock(hMem);
+
+        IStream* pStream = nullptr;
+        if (SUCCEEDED(::CreateStreamOnHGlobal(hMem, TRUE /*own+free*/, &pStream)))
+        {
+            if (FAILED(m_gearImg.Load(pStream)))
+                LOG("PlaysPage::LoadGearImage: CImage::Load failed");
+            pStream->Release();
+            return;
+        }
+    }
+    ::GlobalFree(hMem);
+}
+
+//
+// CPlaysPage::OnEditPlays — gear button: open the modal Plays editor, then
+//   reload the accordion from the (possibly edited) catalog.
+//
+void CPlaysPage::OnEditPlays()
+{
+    // Modal editor operates on a deep copy of theApp's Plays catalog and
+    // commits on Save; rebuild the accordion regardless of how it closed.
+    CPlaysEditorDialog dlg(&theApp.MutablePlays(), theApp.PlaysPath(), this);
+    dlg.DoModal();
+    ReloadCatalog();
+}
+
+//
+// CPlaysPage::BuildAccordion — mirror theApp.Plays() into m_categories and
+//   create the owner-drawn header + push-button item windows (clamped to the
+//   IDC_PLAYS_HEADER_*/ITEM_* id ranges).
+//
 void CPlaysPage::BuildAccordion()
 {
-    // The play catalog: category -> (play name, plain-English meaning). Add
-    // categories / plays here — layout, command routing, and the client-area
-    // blurb all pick them up automatically.
+    // The play catalog is data-driven from theApp.Plays() (persisted to
+    // plays.ini, edited via the gear-button editor). Layout, command routing,
+    // and the client-area blurb all pick these up automatically. The
+    // IDC_PLAYS_HEADER_* / IDC_PLAYS_ITEM_* id ranges cap us at 10 categories
+    // and 40 subcategories total; anything beyond is dropped (the editor
+    // enforces the same caps, so this is just defensive).
     m_categories.clear();
 
-    m_categories.push_back({ _T("Defensive & Security"), {
-        { _T("Area Defense"),
-          _T("Hold terrain and deny the enemy access to a specific area.") },
-        { _T("Mobile Defense"),
-          _T("Allow or shape the enemy's movement, then defeat them with a decisive counterattack.") },
-        { _T("Retrograde"),
-          _T("Move away from the enemy in an organized way. This can include delay, withdrawal, or retirement.") },
-        { _T("Screen"),
-          _T("Provides early warning. It observes, reports, and may harass, but avoids becoming decisively engaged.") },
-        { _T("Guard"),
-          _T("Protects the main force by fighting to gain time, prevent surprise, and stop enemy observation/fire against the main body.") },
-        { _T("Cover"),
-          _T("A stronger, more independent security force that operates farther away and can fight to develop the situation before the enemy reaches the main body.") },
-        { _T("Area Security"),
-          _T("Protects a specific area, route, facility, population, or activity.") },
-    } });
-
-    m_categories.push_back({ _T("Offensive"), {
-        { _T("Movement to Contact"),
-          _T("Move forward to find and make contact with the enemy when the enemy situation is unclear.") },
-        { _T("Attack"),
-          _T("Strike the enemy to destroy/defeat forces or seize terrain.") },
-        { _T("Exploitation"),
-          _T("Follow up a successful attack to break the enemy deeper and prevent recovery.") },
-        { _T("Pursuit"),
-          _T("Chase and destroy or cut off an enemy force that is trying to escape.") },
-    } });
-
-    m_categories.push_back({ _T("Intelligence, Surveillance & Reconnaissance (ISR)"), {
-        { _T("Route Reconnaissance"),
-          _T("Examine a specific road, trail, waterway, bridge route, or movement path. Used to answer: Can we move through here? Is it blocked? Is it defended?") },
-        { _T("Zone Reconnaissance"),
-          _T("Search an entire zone or corridor from one boundary to another. Used when the commander needs a broad picture of terrain, enemy, obstacles, and routes.") },
-        { _T("Area Reconnaissance"),
-          _T("Examine a specific place, such as a town, bridge, hill, airfield, landing zone, port, or suspected enemy position.") },
-        { _T("Reconnaissance in Force"),
-          _T("A stronger combat operation meant to make the enemy react, revealing their strength, location, weapons, or intentions. This can involve fighting.") },
-        { _T("Special Reconnaissance"),
-          _T("Reconnaissance by special operations forces, often deep, covert, or politically sensitive. Used where normal forces may not be able to go.") },
-        { _T("Surveillance"),
-          _T("More passive or continuous observation over time.") },
-        { _T("Screening"),
-          _T("Watching an area to give early warning and protect friendly forces.") },
-        { _T("Scouting"),
-          _T("Informal or small-unit term for reconnaissance.") },
-        { _T("Patrol"),
-          _T("A unit sent out to gather information, secure an area, or fight if needed.") },
-    } });
+    const PlaysCatalog& plays = theApp.Plays();
+    for (const PlayCategory& src : plays.categories)
+    {
+        if (m_categories.size() >= (IDC_PLAYS_HEADER_LAST - IDC_PLAYS_HEADER_FIRST + 1))
+            break;
+        Category cat;
+        cat.name = src.name;
+        for (const PlaySub& sub : src.subs)
+            cat.items.push_back({ sub.name, sub.blurb, sub.scenarioPath });
+        m_categories.push_back(std::move(cat));
+    }
 
     const HWND parent = GetSafeHwnd();
     HFONT font = static_cast<HFONT>(GetFont() ? GetFont()->GetSafeHandle() : nullptr);
@@ -138,6 +222,7 @@ void CPlaysPage::BuildAccordion()
 
     for (Category& cat : m_categories)
     {
+        if (itemId > IDC_PLAYS_ITEM_LAST) break;
         // Header is owner-drawn so it can paint a black background with white
         // text (standard push buttons don't allow recoloring).
         cat.headerId = headerId++;
@@ -147,6 +232,7 @@ void CPlaysPage::BuildAccordion()
 
         for (const Play& item : cat.items)
         {
+            if (itemId > IDC_PLAYS_ITEM_LAST) break;
             const UINT id = itemId++;
             cat.itemIds.push_back(id);
             HWND ih = MakeButton(parent, id, item.name, BS_PUSHBUTTON | BS_LEFT);
@@ -155,6 +241,37 @@ void CPlaysPage::BuildAccordion()
     }
 }
 
+//
+// CPlaysPage::ReloadCatalog — destroy the existing accordion button windows,
+//   clear the selection blurb, then rebuild and relayout; called after the
+//   Plays editor closes.
+//
+void CPlaysPage::ReloadCatalog()
+{
+    // Destroy the currently-created header / item button windows, then rebuild
+    // the accordion from the (possibly edited) catalog. Called after the Plays
+    // editor closes.
+    for (const Category& cat : m_categories)
+    {
+        if (CWnd* h = GetDlgItem(cat.headerId)) h->DestroyWindow();
+        for (UINT id : cat.itemIds)
+            if (CWnd* it = GetDlgItem(id)) it->DestroyWindow();
+    }
+    m_categories.clear();
+
+    // The selection ids are gone; clear the client-area blurb too.
+    m_selName.Empty();
+    m_selBlurb.Empty();
+
+    BuildAccordion();
+    Relayout();
+    Invalidate();
+}
+
+//
+// CPlaysPage::UpdateHeaderText — set a category header's caption with the
+//   expand/collapse glyph reflecting its current state.
+//
 void CPlaysPage::UpdateHeaderText(const Category& cat)
 {
     if (CWnd* h = GetDlgItem(cat.headerId))
@@ -167,6 +284,10 @@ void CPlaysPage::UpdateHeaderText(const Category& cat)
     }
 }
 
+//
+// CPlaysPage::FindPlay — locate the Play backing a subcategory button id, or
+//   null if none matches.
+//
 const CPlaysPage::Play* CPlaysPage::FindPlay(UINT itemId) const
 {
     for (const Category& cat : m_categories)
@@ -178,6 +299,12 @@ const CPlaysPage::Play* CPlaysPage::FindPlay(UINT itemId) const
     return nullptr;
 }
 
+//
+// CPlaysPage::Relayout — position every accordion button (sized to its text,
+//   honoring collapse and the scroll offset), size/show the scrollbar when the
+//   content overflows, and pin the gear button + blurb region. Safe to call
+//   before the accordion/scrollbar exist.
+//
 void CPlaysPage::Relayout()
 {
     // WM_SIZE is dispatched during dialog creation, before OnInitDialog has
@@ -271,15 +398,39 @@ void CPlaysPage::Relayout()
     }
 
     m_blurbLeft = maxRight + kColGap + vsw + kBlurbGap;
+
+    // Pin the settings gear to the top-right corner of the client area, with a
+    // margin off the top and right edges; keep it above the accordion buttons
+    // (highest z-order) and push the blurb text below it.
+    if (::IsWindow(m_gearBtn.GetSafeHwnd()))
+    {
+        const int gx = rc.right - kGearSize - kGearMargin;
+        const int gy = kGearMargin;
+        m_gearBtn.SetWindowPos(&CWnd::wndTop, gx > 0 ? gx : kGearMargin, gy,
+                               kGearSize, kGearSize, SWP_NOACTIVATE);
+        m_blurbTop = gy + kGearSize + 12;
+    }
+    else
+    {
+        m_blurbTop = kBlurbTop;
+    }
 }
 
+//
+// CPlaysPage::BlurbRect — client-area rectangle (right of the accordion +
+//   scrollbar) where the selected play's name/definition is drawn.
+//
 CRect CPlaysPage::BlurbRect() const
 {
     CRect rc;
     GetClientRect(&rc);
-    return CRect(m_blurbLeft, kBlurbTop, rc.right - kBlurbGap, rc.bottom - kBlurbTop);
+    return CRect(m_blurbLeft, m_blurbTop, rc.right - kBlurbGap, rc.bottom - kBlurbTop);
 }
 
+//
+// CPlaysPage::OnPaint — draw the selected play's name (bold) and its
+//   plain-English definition, centered in the blurb region.
+//
 void CPlaysPage::OnPaint()
 {
     CPaintDC dc(this);
@@ -304,6 +455,9 @@ void CPlaysPage::OnPaint()
     dc.DrawText(m_selBlurb, textRc, DT_CENTER | DT_TOP | DT_WORDBREAK);
 }
 
+//
+// CPlaysPage::OnSize — relayout and repaint when the page is resized.
+//
 void CPlaysPage::OnSize(UINT nType, int cx, int cy)
 {
     CHelpAwarePage::OnSize(nType, cx, cy);
@@ -311,6 +465,10 @@ void CPlaysPage::OnSize(UINT nType, int cx, int cy)
     Invalidate();   // blurb region moved / resized — repaint it
 }
 
+//
+// CPlaysPage::OnVScroll — handle the accordion scrollbar (line/page/thumb),
+//   clamp the offset, and relayout; defers other scrollbars to the base.
+//
 void CPlaysPage::OnVScroll(UINT nSBCode, UINT nPos, CScrollBar* pScrollBar)
 {
     if (pScrollBar == &m_scroll)
@@ -340,6 +498,10 @@ void CPlaysPage::OnVScroll(UINT nSBCode, UINT nPos, CScrollBar* pScrollBar)
     CHelpAwarePage::OnVScroll(nSBCode, nPos, pScrollBar);
 }
 
+//
+// CPlaysPage::OnMouseWheel — scroll the accordion by the wheel delta when the
+//   content overflows; otherwise passes through to the base.
+//
 BOOL CPlaysPage::OnMouseWheel(UINT nFlags, short zDelta, CPoint pt)
 {
     if (m_maxScroll > 0)
@@ -357,8 +519,45 @@ BOOL CPlaysPage::OnMouseWheel(UINT nFlags, short zDelta, CPoint pt)
     return CHelpAwarePage::OnMouseWheel(nFlags, zDelta, pt);
 }
 
+//
+// CPlaysPage::OnDrawItem — owner-draw the gear button (transparent PNG, with a
+//   pressed state) and the category headers (black background, white
+//   left-aligned text); other controls fall through to the base.
+//
 void CPlaysPage::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT dis)
 {
+    // Settings gear: transparent PNG over the page background.
+    if (dis && dis->CtlType == ODT_BUTTON && nIDCtl == IDC_BTN_GEAR)
+    {
+        CDC dc;
+        dc.Attach(dis->hDC);
+        const CRect rc(dis->rcItem);
+        const bool pressed = (dis->itemState & ODS_SELECTED) != 0;
+
+        // Fill with the page background so the icon's transparent areas blend in.
+        dc.FillSolidRect(rc, ::GetSysColor(COLOR_3DFACE));
+        if (pressed)
+            dc.DrawEdge(const_cast<LPRECT>(&dis->rcItem), BDR_SUNKENOUTER, BF_RECT);
+
+        if (!m_gearImg.IsNull())
+        {
+            CRect dst(rc);
+            dst.DeflateRect(2, 2);
+            if (pressed) dst.OffsetRect(1, 1);
+            const int oldMode = dc.SetStretchBltMode(HALFTONE);
+            m_gearImg.Draw(dc.GetSafeHdc(), dst);   // alpha-blended for 32bpp PNG
+            dc.SetStretchBltMode(oldMode);
+        }
+        else
+        {
+            dc.SetBkMode(TRANSPARENT);
+            dc.DrawText(_T("Plays"), const_cast<LPRECT>(&dis->rcItem),
+                        DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+        dc.Detach();
+        return;
+    }
+
     // Header buttons: black background, white left-aligned text.
     if (dis && dis->CtlType == ODT_BUTTON &&
         nIDCtl >= IDC_PLAYS_HEADER_FIRST && nIDCtl <= IDC_PLAYS_HEADER_LAST)
@@ -387,6 +586,10 @@ void CPlaysPage::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT dis)
     CHelpAwarePage::OnDrawItem(nIDCtl, dis);
 }
 
+//
+// CPlaysPage::OnHeaderClicked — toggle the clicked category's expanded state,
+//   refresh its glyph, and relayout.
+//
 void CPlaysPage::OnHeaderClicked(UINT nID)
 {
     for (Category& cat : m_categories)
@@ -401,12 +604,22 @@ void CPlaysPage::OnHeaderClicked(UINT nID)
     }
 }
 
+//
+// CPlaysPage::OnItemClicked — show the clicked subcategory's name/definition in
+//   the blurb pane and, if it has an associated scenario .ini, load (and
+//   optionally run) it via the main dialog.
+//
 void CPlaysPage::OnItemClicked(UINT nID)
 {
-    if (const Play* play = FindPlay(nID))
-    {
-        m_selName  = play->name;
-        m_selBlurb = play->blurb;
-        InvalidateRect(BlurbRect(), TRUE);   // repaint just the client-area text
-    }
+    const Play* play = FindPlay(nID);
+    if (!play) return;
+
+    m_selName  = play->name;
+    m_selBlurb = play->blurb;
+    InvalidateRect(BlurbRect(), TRUE);   // repaint just the client-area text
+
+    // If this subcategory has an associated scenario .ini, load it (and run it
+    // when the editor's "Run Scenario" option is set).
+    if (m_main && !play->scenarioPath.IsEmpty())
+        m_main->LoadScenarioForPlay(play->scenarioPath, theApp.Plays().runScenario);
 }

@@ -1,3 +1,14 @@
+//=============================================================================
+//  AssetEntityEditorPage.cpp
+//-----------------------------------------------------------------------------
+//  Implements CAssetEntityEditorPage: the asset tree (add/delete/duplicate/
+//  move/validate), the catalog-backed cascading DIS type combos, and the
+//  bidirectional bind between the detail controls and the Entity model
+//  (ReadFrom / WriteTo), including position reprojection across coord modes.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #include "pch.h"
 #include "AssetEntityEditorPage.h"
 #include "CatalogEditorDialog.h"
@@ -155,12 +166,20 @@ BEGIN_MESSAGE_MAP(CAssetEntityEditorPage, CHelpAwarePage)
                                                 &CAssetEntityEditorPage::OnAssetTreeSelChanged)
 END_MESSAGE_MAP()
 
+//
+// GetFieldHelpTable — hands the base HelpAwarePage this page's field-help table.
+//
 void CAssetEntityEditorPage::GetFieldHelpTable(const FFieldHelp*& outArray, size_t& outCount) const
 {
     outArray = kFields;
     outCount = sizeof(kFields) / sizeof(kFields[0]);
 }
 
+//
+// RefreshAssetTree — rebuilds the tree items from m_scenario->entities and
+// reselects m_selectedEntityIdx (clamped). Suppresses selection notifications
+// during the rebuild so it doesn't recurse into OnAssetTreeSelChanged.
+//
 void CAssetEntityEditorPage::RefreshAssetTree()
 {
     if (!::IsWindow(GetSafeHwnd()) || !m_scenario) return;
@@ -193,6 +212,10 @@ void CAssetEntityEditorPage::RefreshAssetTree()
     m_suppressTreeNotify = false;
 }
 
+//
+// CommitToActiveEntity — writes the current control values into the selected
+// entity, using the scenario origin for local/geodetic conversions.
+//
 void CAssetEntityEditorPage::CommitToActiveEntity()
 {
     if (!m_scenario) return;
@@ -203,6 +226,9 @@ void CAssetEntityEditorPage::CommitToActiveEntity()
             m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM);
 }
 
+//
+// LoadActiveEntity — loads the selected entity (index clamped) into the controls.
+//
 void CAssetEntityEditorPage::LoadActiveEntity()
 {
     if (!m_scenario) return;
@@ -214,6 +240,10 @@ void CAssetEntityEditorPage::LoadActiveEntity()
     ReadFrom(ents[m_selectedEntityIdx]);
 }
 
+//
+// OnAssetTreeSelChanged — tree selection changed: commit edits to the
+// previously selected entity, switch to the new one, and refresh labels.
+//
 void CAssetEntityEditorPage::OnAssetTreeSelChanged(NMHDR* pNMHDR, LRESULT* pResult)
 {
     if (pResult) *pResult = 0;
@@ -233,6 +263,10 @@ void CAssetEntityEditorPage::OnAssetTreeSelChanged(NMHDR* pNMHDR, LRESULT* pResu
     RefreshAssetTree();
 }
 
+//
+// OnAddAsset — appends a new entity (next free entityId, scenario default coord
+// mode), selects it, and marks the dialog dirty.
+//
 void CAssetEntityEditorPage::OnAddAsset()
 {
     if (!m_scenario) return;
@@ -255,6 +289,10 @@ void CAssetEntityEditorPage::OnAddAsset()
     NotifyDirty(this);
 }
 
+//
+// OnDeleteAsset — removes the selected entity (always keeps at least one),
+// reselects a valid index, and marks dirty.
+//
 void CAssetEntityEditorPage::OnDeleteAsset()
 {
     if (!m_scenario) return;
@@ -271,6 +309,10 @@ void CAssetEntityEditorPage::OnDeleteAsset()
     NotifyDirty(this);
 }
 
+//
+// OnDuplicateAsset — copies the selected entity with a fresh entityId and a
+// " (copy)" name suffix, selects the copy, and marks dirty.
+//
 void CAssetEntityEditorPage::OnDuplicateAsset()
 {
     if (!m_scenario) return;
@@ -292,6 +334,9 @@ void CAssetEntityEditorPage::OnDuplicateAsset()
     NotifyDirty(this);
 }
 
+//
+// OnMoveAsset — reorders the selected entity (see inline note on the scheme).
+//
 void CAssetEntityEditorPage::OnMoveAsset()
 {
     // v2: simple "shift selection down by one position" reorder. Wraps to top.
@@ -308,6 +353,10 @@ void CAssetEntityEditorPage::OnMoveAsset()
     NotifyDirty(this);
 }
 
+//
+// OnValidateAsset — commits pending edits, runs the full Validator, filters the
+// report to issues about this entity's id, and shows a per-entity summary box.
+//
 void CAssetEntityEditorPage::OnValidateAsset()
 {
     if (!m_scenario) return;
@@ -366,6 +415,11 @@ void CAssetEntityEditorPage::OnValidateAsset()
                   MB_OK | (err > 0 ? MB_ICONWARNING : MB_ICONINFORMATION));
 }
 
+//
+// OnInitDialog — seeds the static combos (Force ID, Coord Mode), the wire-field
+// defaults, and the catalog-backed cascading combos so a fresh page is
+// well-formed before any entity is selected.
+//
 BOOL CAssetEntityEditorPage::OnInitDialog()
 {
     CHelpAwarePage::OnInitDialog();
@@ -441,6 +495,10 @@ BOOL CAssetEntityEditorPage::OnInitDialog()
     return TRUE;
 }
 
+//
+// ComboNumericValue — resolves a catalog combo to its numeric wire ID: the
+// selected item's item-data, else a parse of typed text, else fallback.
+//
 int CAssetEntityEditorPage::ComboNumericValue(UINT comboId, int fallback) const
 {
     const CComboBox* cb = (const CComboBox*)GetDlgItem(comboId);
@@ -460,6 +518,10 @@ int CAssetEntityEditorPage::ComboNumericValue(UINT comboId, int fallback) const
     return (end == wbuf) ? fallback : static_cast<int>(v);
 }
 
+//
+// RepopulateDomains — refills the Domain combo with the catalog domains valid
+// for the currently selected Kind.
+//
 void CAssetEntityEditorPage::RepopulateDomains()
 {
     if (!m_catalog) return;
@@ -468,6 +530,9 @@ void CAssetEntityEditorPage::RepopulateDomains()
               m_catalog->Domains(kindId), /*defaultDomain*/ 2);
 }
 
+//
+// RepopulateCategories — refills the Category combo for the current Kind+Domain.
+//
 void CAssetEntityEditorPage::RepopulateCategories()
 {
     if (!m_catalog) return;
@@ -477,6 +542,10 @@ void CAssetEntityEditorPage::RepopulateCategories()
               m_catalog->Categories(kindId, domainId), /*defaultCategory*/ 1);
 }
 
+//
+// RepopulateSubcategories — refills the Subcategory combo for the current
+// Kind+Domain+Category.
+//
 void CAssetEntityEditorPage::RepopulateSubcategories()
 {
     if (!m_catalog) return;
@@ -488,6 +557,9 @@ void CAssetEntityEditorPage::RepopulateSubcategories()
               /*defaultSubcategory*/ 1);
 }
 
+//
+// OnKindChanged — Kind changed; re-cascade Domain, Category, and Subcategory.
+//
 void CAssetEntityEditorPage::OnKindChanged()
 {
     RepopulateDomains();
@@ -495,12 +567,18 @@ void CAssetEntityEditorPage::OnKindChanged()
     RepopulateSubcategories();
 }
 
+//
+// OnDomainChanged — Domain changed; re-cascade Category and Subcategory.
+//
 void CAssetEntityEditorPage::OnDomainChanged()
 {
     RepopulateCategories();
     RepopulateSubcategories();
 }
 
+//
+// OnCategoryChanged — Category changed; re-cascade Subcategory.
+//
 void CAssetEntityEditorPage::OnCategoryChanged()
 {
     RepopulateSubcategories();
@@ -508,6 +586,10 @@ void CAssetEntityEditorPage::OnCategoryChanged()
 
 namespace { double ReadDoubleText(const CWnd&, UINT, double); }   // defined below
 
+//
+// OnEditCatalog — opens the catalog editor dialog and unconditionally refreshes
+// the cascading combos afterward (a Save may have added/renamed entries).
+//
 void CAssetEntityEditorPage::OnEditCatalog()
 {
     // Edit a deep copy of the live catalog; on Save the dialog rewrites
@@ -535,6 +617,10 @@ void CAssetEntityEditorPage::OnEditCatalog()
     }
 }
 
+//
+// OnInitialSpeedKillFocus — on focus loss, parses the initial-speed field
+// (accepts unit suffixes) and rewrites it as a trimmed m/s value.
+//
 void CAssetEntityEditorPage::OnInitialSpeedKillFocus()
 {
     CString t;
@@ -545,6 +631,10 @@ void CAssetEntityEditorPage::OnInitialSpeedKillFocus()
         SetDlgItemText(IDC_EDIT_ENTITY_INITIAL_SPEED, FormatDoubleTrim(mps));
 }
 
+//
+// OnEntityNameChanged — per-keystroke: pushes the edited name into the model and
+// updates the selected tree item's label (cheap, no full rebuild).
+//
 void CAssetEntityEditorPage::OnEntityNameChanged()
 {
     if (m_suppressTreeNotify) return;
@@ -578,6 +668,10 @@ void CAssetEntityEditorPage::OnEntityNameChanged()
     NotifyDirty(this);
 }
 
+//
+// OnEntityPhysOverrideRadio — maps the checked physical-model radio to the
+// active entity's physicalModelOverride and marks dirty.
+//
 void CAssetEntityEditorPage::OnEntityPhysOverrideRadio()
 {
     if (!m_scenario) return;
@@ -597,6 +691,10 @@ void CAssetEntityEditorPage::OnEntityPhysOverrideRadio()
     NotifyDirty(this);
 }
 
+//
+// OnEntitySpeedMultToggle — mirrors the speed-multiplier override checkbox into
+// the active entity and marks dirty.
+//
 void CAssetEntityEditorPage::OnEntitySpeedMultToggle()
 {
     if (!m_scenario) return;
@@ -609,6 +707,11 @@ void CAssetEntityEditorPage::OnEntitySpeedMultToggle()
     NotifyDirty(this);
 }
 
+//
+// OnEntityCoordModeChanged — coord-mode combo flipped; reprojects the displayed
+// position through ECEF so the new-mode numbers describe the same point (see
+// inline steps), then relabels the row and marks dirty.
+//
 void CAssetEntityEditorPage::OnEntityCoordModeChanged()
 {
     // The user just flipped the Initial Coord Mode combo. Pivot the
@@ -709,6 +812,11 @@ namespace
     }
 }
 
+//
+// WriteTo — pulls every editable control value into `entity`, converting the
+// position (per the selected coord mode) and H/P/R into ECEF/DIS wire fields
+// using the given scenario origin. Leaves fields unchanged when input is blank.
+//
 void CAssetEntityEditorPage::WriteTo(Entity& entity,
                                      double originLatDeg, double originLonDeg,
                                      double originAltM) const
@@ -854,6 +962,11 @@ namespace
     }
 }
 
+//
+// ReadFrom — pushes an entity's fields onto the controls: identity, timing,
+// catalog combos (selected by ID in cascade order), coord mode + position row,
+// and the physical-model / speed-multiplier options.
+//
 void CAssetEntityEditorPage::ReadFrom(const Entity& entity)
 {
     if (!::IsWindow(GetSafeHwnd())) return;
@@ -924,6 +1037,9 @@ void CAssetEntityEditorPage::ReadFrom(const Entity& entity)
     SetDlgItemText(IDC_EDIT_E_SPEED_MULT, FormatDoubleTrim(entity.speedMultiplier));
 }
 
+//
+// RelabelPositionRow — sets the position-row label text to match the coord mode.
+//
 void CAssetEntityEditorPage::RelabelPositionRow(CoordMode mode)
 {
     const TCHAR* text = _T("Lat / Lon / Alt:");
@@ -935,6 +1051,10 @@ void CAssetEntityEditorPage::RelabelPositionRow(CoordMode mode)
     SetDlgItemText(IDC_LBL_ENTITY_POSITION, text);
 }
 
+//
+// WriteActivePositionFields — writes the entity's position triple for the given
+// coord mode into the three position edit controls (trimmed formatting).
+//
 void CAssetEntityEditorPage::WriteActivePositionFields(const Entity& entity, CoordMode mode)
 {
     double a = 0.0, b = 0.0, c = 0.0;

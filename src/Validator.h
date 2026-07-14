@@ -1,3 +1,14 @@
+//=============================================================================
+//  Validator.h
+//-----------------------------------------------------------------------------
+//  Declares the scenario validation API: severity levels, per-issue and
+//  aggregate Report structures (including PDU/bandwidth estimates), and the
+//  Validate() entry points. One overload runs structural checks; the
+//  catalog-aware overload adds physical-model envelope checks per entity.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #pragma once
 
 #include <cstdint>
@@ -9,6 +20,7 @@ class  EntityTypeCatalog;
 
 namespace Validator
 {
+    // Severity — ordinal ranking of an issue (Info < Warning < Error).
     enum class Severity : uint8_t
     {
         Info    = 0,
@@ -16,6 +28,10 @@ namespace Validator
         Error   = 2,
     };
 
+    //-----------------------------------------------------------------------------
+    // Issue — one validation finding: a severity, the subject it concerns, and a
+    //   human-readable message.
+    //-----------------------------------------------------------------------------
     struct Issue
     {
         Severity     severity = Severity::Info;
@@ -23,6 +39,10 @@ namespace Validator
         std::string  message;     // human-readable
     };
 
+    //-----------------------------------------------------------------------------
+    // Report — full result of a validation pass: the list of Issues, per-severity
+    //   counts, and the estimated PDU count / average bandwidth for the scenario.
+    //-----------------------------------------------------------------------------
     struct Report
     {
         std::vector<Issue> issues;
@@ -37,6 +57,8 @@ namespace Validator
         double   mbpsAvg  = 0.0;
     };
 
+    // Structural pass: checks scenario/entity/motion fields for internal
+    // consistency and computes the PDU + bandwidth estimates.
     Report Validate(const Scenario& s);
 
     // Catalog-aware overload: in addition to the structural checks, also

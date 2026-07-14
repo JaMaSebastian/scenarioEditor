@@ -1,3 +1,14 @@
+//=============================================================================
+//  Validator.cpp
+//-----------------------------------------------------------------------------
+//  Implements scenario validation: structural checks (scenario/origin/entity/
+//  motion field consistency, duplicate ID detection, PDU + bandwidth estimates)
+//  plus optional catalog-driven physical-model envelope checks (speed, turn
+//  rate, G load, climb/descent rate, and altitude bounds per airframe profile).
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #include "Validator.h"
 #include "Scenario.h"
 #include "EntityTypeCatalog.h"
@@ -14,6 +25,9 @@ using Validator::Report;
 
 namespace
 {
+    //
+    // Add — append an Issue to the report and bump the matching severity counter.
+    //
     void Add(Report& r, Severity sev, const std::string& subject, const std::string& msg)
     {
         Issue i; i.severity = sev; i.subject = subject; i.message = msg;
@@ -25,6 +39,9 @@ namespace
         r.issues.push_back(std::move(i));
     }
 
+    //
+    // EntitySubject — formats an Issue subject like "Entity 101 (name)".
+    //
     std::string EntitySubject(const Entity& e)
     {
         char buf[64];
@@ -34,6 +51,10 @@ namespace
         return buf;
     }
 
+    //
+    // MotionSubject — formats an Issue subject like "Entity 7 / Motion 2"
+    // (mi is zero-based; displayed one-based).
+    //
     std::string MotionSubject(const Entity& e, size_t mi)
     {
         char buf[80];
@@ -42,6 +63,10 @@ namespace
         return buf;
     }
 
+    //
+    // ResolvePhysMode — resolves an entity's effective physical-model mode,
+    // falling back to the scenario default when the entity is set to Inherit.
+    //
     PhysicalModelMode ResolvePhysMode(const Entity& e, const Scenario& s)
     {
         switch (e.physicalModelOverride) {
@@ -53,6 +78,10 @@ namespace
         }
     }
 
+    //
+    // EffectiveSpeedMultiplier — the speed scale actually applied to an entity:
+    // its own override, else the scenario-wide multiplier, else 1.0.
+    //
     double EffectiveSpeedMultiplier(const Entity& e, const Scenario& s)
     {
         if (e.overrideSpeedMultiplier) return e.speedMultiplier;
@@ -246,6 +275,11 @@ namespace
     }
 }
 
+//
+// Validate — structural pass over scenario, origin, entities and motion
+// segments; accumulates Issues and computes pduCount / mbpsAvg. Returns the
+// populated Report.
+//
 Report Validator::Validate(const Scenario& s)
 {
     Report r;
@@ -376,6 +410,10 @@ Report Validator::Validate(const Scenario& s)
     return r;
 }
 
+//
+// Validate (catalog overload) — runs the structural pass, then layers per-entity
+// physical-model envelope checks on each enabled entity whose mode is not Ignore.
+//
 Report Validator::Validate(const Scenario& s, const EntityTypeCatalog& catalog)
 {
     Report r = Validate(s);

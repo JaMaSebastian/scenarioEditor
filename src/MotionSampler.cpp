@@ -1,3 +1,14 @@
+//=============================================================================
+//  MotionSampler.cpp
+//-----------------------------------------------------------------------------
+//  Implements the MotionSampler: coordinate-mode resolution of segment
+//  endpoints/foci, ellipse frame construction with arc-length tables, and the
+//  time-driven pose sampler including take-off acceleration, speed-authoritative
+//  lines, StopHold, terminal-ellipse looping, and Entity-Ellipse follow logic.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #include "MotionSampler.h"
 #include "CoordTransforms.h"
 #include "Scenario.h"
@@ -14,6 +25,10 @@ namespace
     // the segment's native frame and still produce ECEF for the wire.
     struct ResolvedPoint { double lat, lon, alt, x, y, z; };
 
+    //
+    // ResolveStart — resolve a segment's START point to both ECEF and geodetic,
+    //   dispatching on coordMode (LatLonAlt / ECEF / Local-ENU via scenario origin).
+    //
     ResolvedPoint ResolveStart(const MotionSegment& s, const Scenario* scenario)
     {
         ResolvedPoint p{};
@@ -41,6 +56,10 @@ namespace
         return p;
     }
 
+    //
+    // ResolveEnd — resolve a segment's END point to both ECEF and geodetic,
+    //   dispatching on coordMode (LatLonAlt / ECEF / Local-ENU via scenario origin).
+    //
     ResolvedPoint ResolveEnd(const MotionSegment& s, const Scenario* scenario)
     {
         ResolvedPoint p{};
@@ -107,9 +126,12 @@ namespace
 }
 
 // Mutually-recursive with the Entity-Ellipse follow-center resolution below.
+// overrideEndEcef (Line only): when set, the segment's END point is taken from
+// this ECEF triple instead of ResolveEnd — used to weld a Line's end onto a
+// moving follow-ellipse's entry point (see ResolveLineEndOnFollowEllipse).
 static SampledPose EvaluateSegmentImpl(const MotionSegment& s, double u,
                                        const Scenario* scenario, bool geometricMode,
-                                       bool allowFollow);
+                                       bool allowFollow, const double* overrideEndEcef = nullptr);
 static SampledPose SamplePoseImpl(const Entity& entity, const Scenario& scenario,
                                   double scenarioTimeSec, bool allowFollow);
 
@@ -133,6 +155,53 @@ static bool ResolveFollowCenterEcef(const MotionSegment& s, const Scenario* scen
     return false;
 }
 
+// A Line that hands off to an Entity-Ellipse must keep its END point welded to
+// the orbit, which is itself moving because the ellipse re-centers on its follow
+// target every frame. If `lineSeg` is immediately followed (next ENABLED segment)
+// by a follow Entity-Ellipse, compute that ellipse's ENTRY point (theta0) with the
+// target re-centered at `timeSec` and return it in `out` (ECEF). The line then
+// lerps toward this moving point, so at the handoff instant (t = line.endSecond =
+// ellipse.startSecond) the line's end and the ellipse's u=0 sample coincide — no
+// gap, no teleport. Returns false when there is no such follower.
+static bool ResolveLineEndOnFollowEllipse(const Entity& entity,
+                                          const MotionSegment& lineSeg,
+                                          const Scenario* scenario,
+                                          double timeSec, bool allowFollow,
+                                          double out[3])
+{
+    if (!allowFollow || !scenario || lineSeg.type != MotionType::Line) return false;
+
+    // Find the first ENABLED segment after lineSeg in list order.
+    const MotionSegment* next = nullptr;
+    bool passedSelf = false;
+    for (const MotionSegment& s : entity.motionSegments)
+    {
+        if (!passedSelf) { if (&s == &lineSeg) passedSelf = true; continue; }
+        if (!s.enabled) continue;
+        next = &s;
+        break;
+    }
+    if (!next || next->type != MotionType::Ellipse || next->followEntityId < 0)
+        return false;
+
+    double ov[3];
+    if (!ResolveFollowCenterEcef(*next, scenario, timeSec, allowFollow, ov))
+        return false;
+
+    const MotionSampler::EllipseFrame f =
+        MotionSampler::BuildEllipseFrame(*next, scenario, false, ov);
+    const MotionSampler::EllipsePoint p =
+        MotionSampler::EvalEllipseAtTheta(f, f.theta0);
+    out[0] = p.ecefX; out[1] = p.ecefY; out[2] = p.ecefZ;
+    return true;
+}
+
+//
+// BuildEllipseFrame — resolve an Ellipse segment's foci to a shared ENU frame:
+//   semi-axes from the focal distance and length, center/orientation/start angle,
+//   sweep sign, and perimeter (Ramanujan, or an integrated arc-length table when
+//   withArcTable). overrideCenterEcef re-centers the orbit on a follow target.
+//
 MotionSampler::EllipseFrame MotionSampler::BuildEllipseFrame(const MotionSegment& s,
                                                              const Scenario* scenario,
                                                              bool withArcTable,
@@ -241,6 +310,10 @@ MotionSampler::EllipseFrame MotionSampler::BuildEllipseFrame(const MotionSegment
     return f;
 }
 
+//
+// EvalEllipseAtTheta — evaluate the ellipse at parametric angle theta: returns the
+//   ECEF position, the unit ENU tangent in the sweep direction, and compass heading.
+//
 MotionSampler::EllipsePoint MotionSampler::EvalEllipseAtTheta(const EllipseFrame& f, double theta)
 {
     constexpr double kTau = 6.28318530717958647692;
@@ -264,6 +337,10 @@ MotionSampler::EllipsePoint MotionSampler::EvalEllipseAtTheta(const EllipseFrame
     return p;
 }
 
+//
+// InvertArcLength — return the parametric angle reached after travelling sFromStart
+//   metres from theta0 along the sweep direction, wrapping around the perimeter.
+//
 double MotionSampler::InvertArcLength(const EllipseFrame& f, double sFromStart)
 {
     if (!f.valid || f.perimeter <= 0.0 || f.arcTable.empty()) return f.theta0;
@@ -274,6 +351,10 @@ double MotionSampler::InvertArcLength(const EllipseFrame& f, double sFromStart)
     return AngleAtArc(f, target);
 }
 
+//
+// EvaluateSegment — public entry point: evaluate a single segment at normalized u,
+//   with follow-target resolution enabled (delegates to EvaluateSegmentImpl).
+//
 SampledPose MotionSampler::EvaluateSegment(const MotionSegment& s, double u,
                                            const Scenario* scenario,
                                            bool geometricMode)
@@ -281,9 +362,15 @@ SampledPose MotionSampler::EvaluateSegment(const MotionSegment& s, double u,
     return EvaluateSegmentImpl(s, u, scenario, geometricMode, /*allowFollow*/true);
 }
 
+//
+// EvaluateSegmentImpl — core segment evaluator at normalized u in [0,1]. Handles
+//   Stationary/StopHold (static pose), Line (lerp with optional take-off easing,
+//   path-derived heading, and welded follow-ellipse end), and Ellipse (angular or
+//   geometric parametrization, with follow-target re-centering).
+//
 static SampledPose EvaluateSegmentImpl(const MotionSegment& s, double u,
                                        const Scenario* scenario, bool geometricMode,
-                                       bool allowFollow)
+                                       bool allowFollow, const double* overrideEndEcef)
 {
     if (u < 0.0) u = 0.0;
     if (u > 1.0) u = 1.0;
@@ -305,10 +392,32 @@ static SampledPose EvaluateSegmentImpl(const MotionSegment& s, double u,
         }
         case MotionType::Line: {
             const ResolvedPoint start = ResolveStart(s, scenario);
-            const ResolvedPoint end   = ResolveEnd(s, scenario);
-            const double lat = Lerp(start.lat, end.lat, u);
-            const double lon = Lerp(start.lon, end.lon, u);
-            const double alt = Lerp(start.alt, end.alt, u);
+            // End point: normally ResolveEnd, but when welded to a moving
+            // follow-ellipse the caller supplies the orbit's entry point as ECEF.
+            ResolvedPoint end;
+            if (overrideEndEcef)
+            {
+                end.x = overrideEndEcef[0];
+                end.y = overrideEndEcef[1];
+                end.z = overrideEndEcef[2];
+                CoordTransforms::EcefToGeodeticDeg(end.x, end.y, end.z,
+                                                   end.lat, end.lon, end.alt);
+            }
+            else
+            {
+                end = ResolveEnd(s, scenario);
+            }
+            // Take-off: start stopped and accelerate at a constant rate to the
+            // segment speed. Under constant acceleration the fraction of the line
+            // covered by time-fraction u is u^2 (distance ~ 1/2 a t^2), so the
+            // instantaneous speed grows linearly from 0 to the end speed. A normal
+            // line uses the linear lerp (constant speed). geometricMode passes u
+            // in [0,1] too, but a Line is a straight chord so the traced polyline
+            // is identical either way.
+            const double up = s.accelerateFromStop ? (u * u) : u;
+            const double lat = Lerp(start.lat, end.lat, up);
+            const double lon = Lerp(start.lon, end.lon, up);
+            const double alt = Lerp(start.alt, end.alt, up);
             CoordTransforms::GeodeticToEcefDeg(lat, lon, alt,
                                                out.ecefX, out.ecefY, out.ecefZ);
 
@@ -383,12 +492,23 @@ static SampledPose EvaluateSegmentImpl(const MotionSegment& s, double u,
     return out;
 }
 
+//
+// SamplePose — public entry point: resolve an entity's pose at scenarioTimeSec,
+//   with follow-target resolution enabled (delegates to SamplePoseImpl).
+//
 SampledPose MotionSampler::SamplePose(const Entity& entity, const Scenario& scenario,
                                       double scenarioTimeSec)
 {
     return SamplePoseImpl(entity, scenario, scenarioTimeSec, /*allowFollow*/true);
 }
 
+//
+// SamplePoseImpl — select the active motion segment for scenarioTimeSec and
+//   interpolate it. Falls back to the static pose when no segments exist; clamps
+//   before the first / holds at the last completed segment in gaps; loops a
+//   terminal ellipse; and applies speed-authoritative Line timing. allowFollow
+//   guards one level of Entity-Ellipse follow recursion.
+//
 static SampledPose SamplePoseImpl(const Entity& entity, const Scenario& scenario,
                                   double scenarioTimeSec, bool allowFollow)
 {
@@ -482,7 +602,14 @@ static SampledPose SamplePoseImpl(const Entity& entity, const Scenario& scenario
             return ep;
         }
 
-        return EvaluateSegmentImpl(*prevDone, 1.0, scn, false, allowFollow);
+        // If the just-finished leg is a Line that hands off to a moving
+        // follow-ellipse, keep its held end welded to the orbit's current entry
+        // point so an inter-segment gap doesn't strand the entity behind the ellipse.
+        double heldEnd[3];
+        const bool heldDyn = ResolveLineEndOnFollowEllipse(
+            entity, *prevDone, scn, scenarioTimeSec, allowFollow, heldEnd);
+        return EvaluateSegmentImpl(*prevDone, 1.0, scn, false, allowFollow,
+                                   heldDyn ? heldEnd : nullptr);
     }
 
     const double duration = active->endSecond - active->startSecond;
@@ -501,7 +628,27 @@ static SampledPose SamplePoseImpl(const Entity& entity, const Scenario& scenario
     //
     // speedMps <= 0 falls back to the legacy duration-based lerp so any
     // segments authored without a Speed value behave as before.
-    if (active->type == MotionType::Line && active->speedMps > 0.0)
+    //
+    // Take-off legs are EXCLUDED: they must accelerate from a stop, so their
+    // position has to follow the duration-based u (which EvaluateSegmentImpl
+    // eases in with u^2 to ramp speed 0 -> cruise). Their window is already
+    // sized (2*length/speed) so the entity reaches `speed` exactly at the end.
+    // Applying the constant-speed override here would flatten the acceleration
+    // and make the entity arrive early and then hold — the "no slow start" and
+    // "pause before the next leg" bugs.
+    // A Line that hands off to a moving follow-ellipse gets its END re-derived
+    // from the orbit's current entry point every frame (see the helper). We must
+    // then use the DURATION-based u (not the speed-authoritative override): the
+    // welded end distance changes as the target moves, so only elapsed/duration
+    // guarantees u == 1 exactly at t == endSecond, landing the entity on the
+    // ellipse's u=0 sample with no gap.
+    double lineEnd[3];
+    const bool hasDynEnd = (active->type == MotionType::Line) &&
+        ResolveLineEndOnFollowEllipse(entity, *active, scn, scenarioTimeSec,
+                                      allowFollow, lineEnd);
+
+    if (active->type == MotionType::Line && active->speedMps > 0.0 &&
+        !active->accelerateFromStop && !hasDynEnd)
     {
         const ResolvedPoint sp = ResolveStart(*active, scn);
         const ResolvedPoint ep = ResolveEnd(*active, scn);
@@ -540,5 +687,6 @@ static SampledPose SamplePoseImpl(const Entity& entity, const Scenario& scenario
         return EvaluateSegmentImpl(*active, 0.0, scn, false, allowFollow);
     }
 
-    return EvaluateSegmentImpl(*active, u, scn, false, allowFollow);
+    return EvaluateSegmentImpl(*active, u, scn, false, allowFollow,
+                               hasDynEnd ? lineEnd : nullptr);
 }

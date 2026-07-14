@@ -1,3 +1,14 @@
+//=============================================================================
+//  CoordTransforms.cpp
+//-----------------------------------------------------------------------------
+//  Implements the WGS-84 geodetic/ENU/ECEF coordinate conversions and the
+//  aviation H/P/R <-> DIS (psi, theta, phi) orientation transforms. Uses an
+//  iterative Bowring inverse for ECEF->geodetic and 3x3 Tait-Bryan rotation
+//  matrices (body->NED->ECEF) for the orientation math.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #include "CoordTransforms.h"
 
 #include <cmath>
@@ -9,6 +20,10 @@ namespace
     constexpr double kHalfPi  = 1.5707963267948966192;
 }
 
+//
+// GeodeticToEcefRad — closed-form geodetic->ECEF using the prime-vertical
+// radius N; writes ECEF metres to outX/outY/outZ.
+//
 void CoordTransforms::GeodeticToEcefRad(double latRad, double lonRad, double altM,
                                         double& outX, double& outY, double& outZ)
 {
@@ -23,6 +38,10 @@ void CoordTransforms::GeodeticToEcefRad(double latRad, double lonRad, double alt
     outZ = (N * (1.0 - WGS84::e2) + altM) * sLat;
 }
 
+//
+// EcefToGeodeticRad — iterative Bowring inverse (up to 5 iterations, ~1e-12
+// convergence). Handles the polar singularity (p < 1 m) with a sentinel branch.
+//
 void CoordTransforms::EcefToGeodeticRad(double x, double y, double z,
                                         double& outLatRad, double& outLonRad,
                                         double& outAltM)
@@ -54,6 +73,10 @@ void CoordTransforms::EcefToGeodeticRad(double x, double y, double z,
     outAltM   = p / std::cos(latRad) - N;
 }
 
+//
+// LocalEnuToEcef — rotates an ENU offset into ECEF and adds it to the origin's
+// ECEF position; the rotation is the transpose of the ECEF->ENU matrix.
+//
 void CoordTransforms::LocalEnuToEcef(double east, double north, double up,
                                      double originLatRad, double originLonRad,
                                      double originAltM,
@@ -76,6 +99,10 @@ void CoordTransforms::LocalEnuToEcef(double east, double north, double up,
     outZ = oz + ( 0.0 )        * east + ( cLat)        * north + ( sLat)        * up;
 }
 
+//
+// EcefToLocalEnu — subtracts the origin's ECEF position then rotates the delta
+// into the ENU tangent plane at the origin.
+//
 void CoordTransforms::EcefToLocalEnu(double x, double y, double z,
                                      double originLatRad, double originLonRad,
                                      double originAltM,
@@ -224,6 +251,10 @@ namespace
     }
 }
 
+//
+// LocalHprToEcefPsiThetaPhi — composes body->NED (from H/P/R) with NED->ECEF
+// (from origin lat/lon), then extracts the DIS ZYX (psi, theta, phi) in radians.
+//
 void CoordTransforms::LocalHprToEcefPsiThetaPhi(double headingDeg, double pitchDeg,
                                                 double rollDeg,
                                                 double originLatDeg, double originLonDeg,
@@ -246,6 +277,10 @@ void CoordTransforms::LocalHprToEcefPsiThetaPhi(double headingDeg, double pitchD
     ExtractZyx(Rbody_to_ecef, outPsiRad, outThetaRad, outPhiRad);
 }
 
+//
+// EcefPsiThetaPhiToLocalHpr — inverse of LocalHprToEcefPsiThetaPhi: rebuilds
+// body->ECEF, pre-multiplies by ECEF->NED, then extracts H/P/R in degrees.
+//
 void CoordTransforms::EcefPsiThetaPhiToLocalHpr(double psiRad, double thetaRad,
                                                 double phiRad,
                                                 double originLatDeg, double originLonDeg,

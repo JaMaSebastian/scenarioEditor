@@ -1,3 +1,14 @@
+//=============================================================================
+//  CatalogAddDialog.cpp
+//-----------------------------------------------------------------------------
+//  Implements CCatalogAddDialog: type-combo population, parent-context
+//  resolution, next-ID auto-numbering, breadcrumb text, and the OnOK insert
+//  path that validates name/ID uniqueness before adding the new node to the
+//  edit-copy catalog.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-25
+//=============================================================================
 #include "pch.h"
 #include "CatalogAddDialog.h"
 
@@ -7,6 +18,9 @@ namespace
     enum class TreeNodeType : uint8_t
     { Root, Countries, Kind, Domain, Country, Category, Subcategory };
 
+    //
+    // Narrow — convert an MFC CString to a UTF-8 std::string.
+    //
     std::string Narrow(const CString& s)
     {
         if (s.IsEmpty()) return {};
@@ -14,6 +28,9 @@ namespace
         return a.m_psz ? std::string(a.m_psz) : std::string();
     }
 
+    //
+    // MaxIdPlusOne — next free ID for a sibling list (highest id + 1, or 1 when empty).
+    //
     uint16_t MaxIdPlusOne(const std::vector<CatalogEntry>& v)
     {
         uint16_t mx = 0;
@@ -26,6 +43,10 @@ BEGIN_MESSAGE_MAP(CCatalogAddDialog, CDialogEx)
     ON_CBN_SELCHANGE(IDC_COMBO_ADD_TYPE, &CCatalogAddDialog::OnTypeChanged)
 END_MESSAGE_MAP()
 
+//
+// CCatalogAddDialog::DefaultTypeFromContext — map the selected tree node type to
+//   the most likely child type to add (so the common case is one click + Enter).
+//
 int CCatalogAddDialog::DefaultTypeFromContext() const
 {
     switch (static_cast<TreeNodeType>(m_parentType))
@@ -40,6 +61,11 @@ int CCatalogAddDialog::DefaultTypeFromContext() const
     }
 }
 
+//
+// CCatalogAddDialog::ResolveParent — derive the parent (k,d,c) address for
+//   inserting a child of addType, from the current tree selection. Outputs 0
+//   for any level that has no resolvable parent.
+//
 void CCatalogAddDialog::ResolveParent(int addType, uint8_t& outK,
                                       uint8_t& outD, uint8_t& outC) const
 {
@@ -80,6 +106,10 @@ void CCatalogAddDialog::ResolveParent(int addType, uint8_t& outK,
     }
 }
 
+//
+// CCatalogAddDialog::AutoIdFor — next available ID for addType given the
+//   resolved parent context (1 when no siblings exist).
+//
 uint16_t CCatalogAddDialog::AutoIdFor(int addType) const
 {
     if (!m_catalog) return 1;
@@ -101,6 +131,10 @@ uint16_t CCatalogAddDialog::AutoIdFor(int addType) const
     return 1;
 }
 
+//
+// CCatalogAddDialog::BreadcrumbFor — build the "Under: X > Y > Z" parent label
+//   for addType, or a guidance string when no valid parent is selected.
+//
 CString CCatalogAddDialog::BreadcrumbFor(int addType) const
 {
     if (!m_catalog) return _T("");
@@ -145,6 +179,10 @@ CString CCatalogAddDialog::BreadcrumbFor(int addType) const
     return out;
 }
 
+//
+// CCatalogAddDialog::OnInitDialog — populate the type combo, preselect the
+//   context-derived default type, seed the ID/breadcrumb, and focus the Name box.
+//
 BOOL CCatalogAddDialog::OnInitDialog()
 {
     CDialogEx::OnInitDialog();
@@ -170,6 +208,10 @@ BOOL CCatalogAddDialog::OnInitDialog()
     return TRUE;
 }
 
+//
+// CCatalogAddDialog::OnTypeChanged — combo handler; refresh the auto-ID field
+//   and breadcrumb label to match the newly selected node type.
+//
 void CCatalogAddDialog::OnTypeChanged()
 {
     int idx = 0;
@@ -182,6 +224,12 @@ void CCatalogAddDialog::OnTypeChanged()
     SetDlgItemText(IDC_LBL_ADD_BREADCRUMB, BreadcrumbFor(idx));
 }
 
+//
+// CCatalogAddDialog::OnOK — validate the entered name/ID (non-empty, 1..65535,
+//   parent selected, sibling-unique), insert the new node into the edit-copy
+//   catalog, record it in m_added, then close. Bails without closing on any
+//   validation failure (shows a message box).
+//
 void CCatalogAddDialog::OnOK()
 {
     if (!m_catalog) { CDialogEx::OnOK(); return; }

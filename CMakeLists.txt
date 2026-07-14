@@ -29,9 +29,12 @@ add_executable(ScenarioEditor WIN32
     src/StartupIniWriter.cpp
     src/AttributesDialog.cpp
     src/PlaysPage.cpp
+    src/PlaysCatalog.cpp
+    src/PlaysEditorDialog.cpp
     src/DeployPage.cpp
     src/PreviewPage.cpp
     src/PreviewCanvas.cpp
+    src/EntityTypePickerDialog.cpp
     src/MapTileService.cpp
     src/CesiumView.cpp
     src/CatalogEditorDialog.cpp

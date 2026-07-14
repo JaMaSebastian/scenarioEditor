@@ -1,3 +1,14 @@
+//=============================================================================
+//  OutputPlaybackPage.h
+//-----------------------------------------------------------------------------
+//  Declares COutputPlaybackPage, the dark-themed "Run" tab. It edits the
+//  OutputConfig (network/file output mode, playback speed/loop), relays the
+//  playback transport buttons to the main dialog, and configures the DISBrowser
+//  Unreal side by writing Config\Startup.ini (level / origin / basemap).
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #pragma once
 
 #include "pch.h"
@@ -7,6 +18,12 @@
 struct OutputConfig;
 struct Scenario;
 
+//-----------------------------------------------------------------------------
+// COutputPlaybackPage — "Run" property page.
+//   Binds the OutputConfig to its controls (ReadFrom/WriteTo), forwards the
+//   Start/Pause/Resume/Stop and Attributes commands up to the main dialog, and
+//   writes the DISBrowser Startup.ini from the current scenario origin/bounds.
+//-----------------------------------------------------------------------------
 class COutputPlaybackPage : public CHelpAwarePage
 {
 public:
@@ -15,16 +32,34 @@ public:
 
     void SetScenario(Scenario* scenario) { m_scenario = scenario; }
 
+    //
+    // WriteTo / ReadFrom — bind the page's controls to an OutputConfig (pull
+    // control values out / push config values in).
+    //
     void WriteTo(OutputConfig& out) const;
     void ReadFrom(const OutputConfig& out);
 
 protected:
+    //
+    // OnInitDialog — applies the dark theme and seeds the mode/speed/Unreal
+    // controls from saved settings and OutputConfig defaults.
+    //
     BOOL OnInitDialog() override;
     void GetFieldHelpTable(const FFieldHelp*& outArray, size_t& outCount) const override;
 
+    //
+    // OnCtlColor — dark-theme brushes: white-on-black statics, white edit boxes.
+    //
     afx_msg HBRUSH OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor);
+    //
+    // OnBrowseRecording / OnBrowseReplay — file pickers for the .disrec paths.
+    //
     afx_msg void OnBrowseRecording();
     afx_msg void OnBrowseReplay();
+    //
+    // OnLocalPlayback* / OnAttributes — relay the transport and Attributes
+    // commands up to the main dialog (which owns the live scenario/catalog).
+    //
     afx_msg void OnLocalPlaybackStart();
     afx_msg void OnLocalPlaybackPause();
     afx_msg void OnLocalPlaybackResume();

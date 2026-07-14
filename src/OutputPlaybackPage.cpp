@@ -1,3 +1,14 @@
+//=============================================================================
+//  OutputPlaybackPage.cpp
+//-----------------------------------------------------------------------------
+//  Implements COutputPlaybackPage: the dark-themed Run tab. Sets up field help,
+//  binds the OutputConfig controls (ReadFrom/WriteTo), relays transport buttons
+//  to the main dialog, and writes DISBrowser's Config\Startup.ini from the
+//  chosen level/basemap and the scenario's origin/terrain bounds.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #include "pch.h"
 #include "OutputPlaybackPage.h"
 #include "Scenario.h"
@@ -78,12 +89,20 @@ BEGIN_MESSAGE_MAP(COutputPlaybackPage, CHelpAwarePage)
     ON_WM_CTLCOLOR()
 END_MESSAGE_MAP()
 
+//
+// GetFieldHelpTable — hands the base HelpAwarePage this page's field-help table.
+//
 void COutputPlaybackPage::GetFieldHelpTable(const FFieldHelp*& outArray, size_t& outCount) const
 {
     outArray = kFields;
     outCount = sizeof(kFields) / sizeof(kFields[0]);
 }
 
+//
+// OnInitDialog — applies the dark theme (declassics themed check/radio/group
+// controls so white text shows), seeds the output-mode, playback-speed, and
+// DISBrowser (Unreal) controls from saved settings and OutputConfig defaults.
+//
 BOOL COutputPlaybackPage::OnInitDialog()
 {
     CHelpAwarePage::OnInitDialog();
@@ -144,6 +163,10 @@ BOOL COutputPlaybackPage::OnInitDialog()
     return TRUE;
 }
 
+//
+// ResolveProjectDir — returns the saved DISBrowser project dir, else a sibling
+// "DISBrowser" folder derived from the running exe's path.
+//
 CString COutputPlaybackPage::ResolveProjectDir() const
 {
     const ::Settings& st = theApp.Settings();
@@ -160,6 +183,10 @@ CString COutputPlaybackPage::ResolveProjectDir() const
     return path + _T("\\..\\..\\..\\DISBrowser");
 }
 
+//
+// OnCtlColor — dark theme: dialog/static text white-on-black, edit boxes and
+// combo drop-lists black-on-white; falls back to base until brushes are built.
+//
 HBRUSH COutputPlaybackPage::OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor)
 {
     // WM_CTLCOLOR can arrive while the controls are being created, before
@@ -192,6 +219,10 @@ HBRUSH COutputPlaybackPage::OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor)
     }
 }
 
+//
+// ReadFrom — pushes an OutputConfig onto the controls: output-mode radios, the
+// UDP/multicast + recording/replay fields, and playback speed/loop.
+//
 void COutputPlaybackPage::ReadFrom(const OutputConfig& o)
 {
     if (!::IsWindow(GetSafeHwnd())) return;
@@ -225,6 +256,11 @@ void COutputPlaybackPage::ReadFrom(const OutputConfig& o)
     CheckDlgButton(IDC_CHK_PLAYBACK_LOOP, o.loopEnabled ? BST_CHECKED : BST_UNCHECKED);
 }
 
+//
+// WriteTo — pulls the control values into an OutputConfig: output mode, the
+// UDP/multicast + recording/replay fields, and playback speed/loop. Blank text
+// fields leave the corresponding config values unchanged.
+//
 void COutputPlaybackPage::WriteTo(OutputConfig& o) const
 {
     if (!::IsWindow(GetSafeHwnd())) return;
@@ -287,6 +323,9 @@ void COutputPlaybackPage::OnLocalPlaybackStop()   { RelayToMain(this, ID_PLAYBAC
 // from the page.
 void COutputPlaybackPage::OnAttributes()          { RelayToMain(this, ID_TOOLS_OPEN_ATTRIBUTES); }
 
+//
+// OnBrowseRecording — Save dialog for the .disrec recording output path.
+//
 void COutputPlaybackPage::OnBrowseRecording()
 {
     CFileDialog dlg(/*open*/FALSE, _T("disrec"), nullptr,
@@ -297,6 +336,9 @@ void COutputPlaybackPage::OnBrowseRecording()
         SetDlgItemText(IDC_EDIT_RECORDING_PATH, dlg.GetPathName());
 }
 
+//
+// OnBrowseReplay — Open dialog for choosing a .disrec recording to replay.
+//
 void COutputPlaybackPage::OnBrowseReplay()
 {
     CFileDialog dlg(/*open*/TRUE, _T("disrec"), nullptr,
@@ -318,6 +360,10 @@ namespace
     }
 }
 
+//
+// OnBrowseUnrealProject — folder picker (preseeded with the current value) for
+// the DISBrowser Unreal project root; writes the choice back to the edit box.
+//
 void COutputPlaybackPage::OnBrowseUnrealProject()
 {
     CString initial;
@@ -341,6 +387,11 @@ void COutputPlaybackPage::OnBrowseUnrealProject()
     ::CoTaskMemFree(pidl);
 }
 
+//
+// OnConfigureUnreal — persists the level/basemap/project picks, then writes
+// DISBrowser's Config\Startup.ini (origin + terrain bounds from the scenario)
+// via StartupIniWriter and reports success/failure to the user.
+//
 void COutputPlaybackPage::OnConfigureUnreal()
 {
     // Gather the picks.

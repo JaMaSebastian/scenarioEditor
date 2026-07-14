@@ -1,3 +1,14 @@
+//=============================================================================
+//  ScenarioWorker.h
+//-----------------------------------------------------------------------------
+//  Declares the background playback engine: PlaybackState, the immutable
+//  RuntimeScenarioSnapshot handed to the thread at Start, the WM_APP_* messages
+//  used to report status/progress back to the UI, and the ScenarioWorker class
+//  that drives generation or replay of DIS PDUs over UDP.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #pragma once
 
 #include "DisrecReader.h"
@@ -49,6 +60,12 @@ struct RuntimeScenarioSnapshot
                              //         and forwards records over UDP
 };
 
+//-----------------------------------------------------------------------------
+// ScenarioWorker — owns the playback thread and its output sinks.
+//   Spawns a single worker thread that either replays a recorded stream or
+//   generates PDUs from the scenario, emitting over UDP (uni/multicast) or to a
+//   file recorder, and posts WM_APP_PLAYBACK_* messages to the UI window.
+//-----------------------------------------------------------------------------
 class ScenarioWorker
 {
 public:

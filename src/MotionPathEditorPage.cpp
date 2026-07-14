@@ -1,3 +1,14 @@
+//=============================================================================
+//  MotionPathEditorPage.cpp
+//-----------------------------------------------------------------------------
+//  Implements CMotionPathEditorPage: the Motion Path Editor tab. Manages the
+//  entity selector, the segment timeline list, and the Line/Ellipse geometry
+//  fields, converting between Lat-Lon-Alt / Local / ECEF frames and coupling
+//  Line speed to segment End Time. Edits the shared Scenario in place.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #include "pch.h"
 #include "MotionPathEditorPage.h"
 #include "Scenario.h"
@@ -13,6 +24,10 @@
 
 namespace
 {
+    //
+    // NotifyDirty — relay WM_APP_MARK_DIRTY up to the top-level dialog so it
+    // flags the scenario as modified. See the inline note on SendMessage.
+    //
     void NotifyDirty(CWnd* page)
     {
         if (!page) return;
@@ -49,6 +64,10 @@ namespace
         { IDC_BTN_EXPORT_CSV,            _T("Export the current waypoints to a CSV file."), false },
     };
 
+    //
+    // ReadDoubleText — parse the numeric text of dialog item `id`, returning
+    // `fallback` when the field is empty or not a valid number.
+    //
     double ReadDoubleText(const CWnd& wnd, UINT id, double fallback)
     {
         CString text;
@@ -60,6 +79,9 @@ namespace
         return (end == ascii.m_psz) ? fallback : v;
     }
 
+    //
+    // WriteDoubleText — set dialog item `id` to a trimmed string form of `v`.
+    //
     void WriteDoubleText(CWnd& wnd, UINT id, double v)
     {
         wnd.SetDlgItemText(id, FormatDoubleTrim(v));
@@ -118,12 +140,19 @@ BEGIN_MESSAGE_MAP(CMotionPathEditorPage, CHelpAwarePage)
                                                &CMotionPathEditorPage::OnSegmentListSelChanged)
 END_MESSAGE_MAP()
 
+//
+// GetFieldHelpTable — expose this page's field-help table to the base class.
+//
 void CMotionPathEditorPage::GetFieldHelpTable(const FFieldHelp*& outArray, size_t& outCount) const
 {
     outArray = kFields;
     outCount = sizeof(kFields) / sizeof(kFields[0]);
 }
 
+//
+// OnInitDialog — populate the Type, Coord Mode, and Direction combos and set
+// up the segment timeline list-control columns.
+//
 BOOL CMotionPathEditorPage::OnInitDialog()
 {
     CHelpAwarePage::OnInitDialog();
@@ -181,6 +210,9 @@ BOOL CMotionPathEditorPage::OnInitDialog()
     return TRUE;
 }
 
+//
+// ActiveEntity — return the entity at m_entityIdx, or nullptr if out of range.
+//
 Entity* CMotionPathEditorPage::ActiveEntity()
 {
     if (!m_scenario) return nullptr;
@@ -188,6 +220,10 @@ Entity* CMotionPathEditorPage::ActiveEntity()
     return &m_scenario->entities[m_entityIdx];
 }
 
+//
+// ActiveSegment — return the segment at m_segmentIdx of the active entity, or
+// nullptr if no entity/segment is selected.
+//
 MotionSegment* CMotionPathEditorPage::ActiveSegment()
 {
     Entity* e = ActiveEntity();
@@ -196,6 +232,10 @@ MotionSegment* CMotionPathEditorPage::ActiveSegment()
     return &e->motionSegments[m_segmentIdx];
 }
 
+//
+// Refresh — rebuild the entity combo and segment list, then load the active
+// segment. No-op if the window isn't created yet.
+//
 void CMotionPathEditorPage::Refresh()
 {
     if (!::IsWindow(GetSafeHwnd())) return;
@@ -204,6 +244,10 @@ void CMotionPathEditorPage::Refresh()
     LoadActiveSegment();
 }
 
+//
+// RefreshEntityCombo — repopulate the entity selector with "name (id=N)"
+// labels; keeps the model index in each item's data. Events suppressed.
+//
 void CMotionPathEditorPage::RefreshEntityCombo()
 {
     CComboBox* cb = (CComboBox*)GetDlgItem(IDC_COMBO_MOTION_ENTITY);
@@ -225,6 +269,10 @@ void CMotionPathEditorPage::RefreshEntityCombo()
     m_suppressEvents = false;
 }
 
+//
+// RefreshSegmentList — rebuild the timeline list rows (index, enabled, start,
+// end, type, description) for the active entity and restore the selection.
+//
 void CMotionPathEditorPage::RefreshSegmentList()
 {
     CListCtrl* lv = (CListCtrl*)GetDlgItem(IDC_LIST_MOTION_SEGMENTS);
@@ -258,6 +306,8 @@ void CMotionPathEditorPage::RefreshSegmentList()
                 case MotionType::Line:       tn = _T("Line");       break;
                 case MotionType::Ellipse:    tn = _T("Ellipse");    break;
             }
+            if (s.type == MotionType::Line && s.accelerateFromStop)
+                tn = _T("Line (Take-off)");
             lv->SetItemText(row, 4, tn);
             lv->SetItemText(row, 5, CA2T(s.description.c_str()));
         }
@@ -270,6 +320,11 @@ void CMotionPathEditorPage::RefreshSegmentList()
     m_suppressEvents = false;
 }
 
+//
+// LoadActiveSegment — copy the active segment's enabled/timing/type/coord/
+// description plus the Line and Ellipse geometry into the controls, then set
+// type-specific visibility. Events suppressed during the load.
+//
 void CMotionPathEditorPage::LoadActiveSegment()
 {
     if (!::IsWindow(GetSafeHwnd())) return;
@@ -279,6 +334,8 @@ void CMotionPathEditorPage::LoadActiveSegment()
     const bool have = (s != nullptr);
 
     CheckDlgButton(IDC_CHK_SEGMENT_ENABLED, have && s->enabled ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(IDC_CHK_SEGMENT_TAKEOFF,
+                   have && s->accelerateFromStop ? BST_CHECKED : BST_UNCHECKED);
     WriteDoubleText(*this, IDC_EDIT_SEGMENT_START_TIME, have ? s->startSecond : 0.0);
     WriteDoubleText(*this, IDC_EDIT_SEGMENT_END_TIME,   have ? s->endSecond   : 0.0);
 
@@ -310,6 +367,11 @@ void CMotionPathEditorPage::LoadActiveSegment()
     m_suppressEvents = false;
 }
 
+//
+// CommitActiveSegmentFromUi — write enabled/timing/type/take-off/coord/
+// description back into the active segment, then commit either the Ellipse or
+// the Line/Stationary/StopHold geometry per the committed type.
+//
 void CMotionPathEditorPage::CommitActiveSegmentFromUi()
 {
     MotionSegment* s = ActiveSegment();
@@ -326,6 +388,10 @@ void CMotionPathEditorPage::CommitActiveSegmentFromUi()
             case 3: s->type = MotionType::Ellipse;    break;
         }
     }
+    // Take-off is only meaningful for a Line; the checkbox is hidden otherwise.
+    // Evaluate after the type is committed above so a type change clears it.
+    s->accelerateFromStop = (s->type == MotionType::Line) &&
+                            (IsDlgButtonChecked(IDC_CHK_SEGMENT_TAKEOFF) == BST_CHECKED);
     if (CComboBox* cb = (CComboBox*)GetDlgItem(IDC_COMBO_SEGMENT_COORD_MODE)) {
         switch (cb->GetCurSel()) {
             case 0: s->coordMode = CoordMode::LatLonAlt; break;
@@ -344,6 +410,11 @@ void CMotionPathEditorPage::CommitActiveSegmentFromUi()
         CommitLineToSegment(*s);   // covers Line, Stationary, StopHold
 }
 
+//
+// SetTypeSpecificVisibility — show/hide the Ellipse group, the Line/Stationary/
+// StopHold start group, and the Line-only end+speed+take-off controls for the
+// current type, and relabel the coordinate fields to match the coord mode.
+//
 void CMotionPathEditorPage::SetTypeSpecificVisibility()
 {
     MotionSegment* s = ActiveSegment();
@@ -393,6 +464,8 @@ void CMotionPathEditorPage::SetTypeSpecificVisibility()
         // when the entity is actually traveling). Stationary / StopHold
         // hide it together with the End row.
         IDC_LBL_LINE_SPEED, IDC_EDIT_LINE_SPEED,
+        // Take-off is a Line-only attribute (accelerate from a stop to Speed).
+        IDC_CHK_SEGMENT_TAKEOFF,
     };
     for (int id : lineEndIds)
         if (CWnd* w = GetDlgItem(id))
@@ -469,6 +542,10 @@ static void GetFocusTriple(const MotionSegment& s, int which,
     }
 }
 
+//
+// SetFocusTriple — inverse of GetFocusTriple: store 3 doubles into focus 1 or 2
+// of the segment's active-frame fields per s.coordMode.
+//
 static void SetFocusTriple(MotionSegment& s, int which,
                            double a, double b, double c)
 {
@@ -490,6 +567,11 @@ static void SetFocusTriple(MotionSegment& s, int which,
     }
 }
 
+//
+// LoadEllipseFromSegment — write the two foci, length, bearing, speed, and
+// direction into the Ellipse controls, plus the read-only computed start
+// position (sampler pose at geometric u=0) shown in the segment's coord mode.
+//
 void CMotionPathEditorPage::LoadEllipseFromSegment(const MotionSegment& s)
 {
     double a, b, c;
@@ -542,6 +624,10 @@ void CMotionPathEditorPage::LoadEllipseFromSegment(const MotionSegment& s)
     WriteDoubleText(*this, IDC_EDIT_ELLIPSE_START_C, sc);
 }
 
+//
+// CommitEllipseToSegment — read the two foci, length, bearing, speed, and
+// direction controls back into the segment.
+//
 void CMotionPathEditorPage::CommitEllipseToSegment(MotionSegment& s)
 {
     SetFocusTriple(s, 1,
@@ -562,6 +648,11 @@ void CMotionPathEditorPage::CommitEllipseToSegment(MotionSegment& s)
                                              : EllipseDirection::CounterClockwise;
 }
 
+//
+// SeedEllipseDefaultsIfBlank — when the foci/length/speed look unset, seed the
+// scenario's default coord mode, place both foci at the origin, use a 1 km
+// diameter, and pull speed from the entity's airframe cruise (else 100 m/s).
+//
 void CMotionPathEditorPage::SeedEllipseDefaultsIfBlank(MotionSegment& s)
 {
     // Inherit the scenario's default coord mode if both foci look unset
@@ -612,6 +703,10 @@ void CMotionPathEditorPage::SeedEllipseDefaultsIfBlank(MotionSegment& s)
     // startBearingDeg defaults to 0 (North) — fine, no override.
 }
 
+//
+// LoadLineFromSegment — write the start and end position triples (per coord
+// mode), the start/end heading-pitch-roll, and the Line speed into controls.
+//
 void CMotionPathEditorPage::LoadLineFromSegment(const MotionSegment& s)
 {
     // Bind the three Start position edits + the three End position edits
@@ -657,6 +752,11 @@ void CMotionPathEditorPage::LoadLineFromSegment(const MotionSegment& s)
     WriteDoubleText(*this, IDC_EDIT_LINE_SPEED, s.speedMps);
 }
 
+//
+// CommitLineToSegment — read the start (and, for Line, end) position triples
+// and attitudes back into the segment. Only reads the End row and speed for a
+// Line; deliberately does NOT re-derive End Time (see inline note).
+//
 void CMotionPathEditorPage::CommitLineToSegment(MotionSegment& s)
 {
     auto commitTriple = [this](MotionSegment& s, bool isEnd) {
@@ -709,6 +809,11 @@ void CMotionPathEditorPage::CommitLineToSegment(MotionSegment& s)
     }
 }
 
+//
+// SeedLineDefaultsIfBlank — anchor a blank start at the scenario origin (or
+// local 0,0,100); for a Line also give a ~1 km end and a cruise/100 m/s speed,
+// then re-derive End Time so the seeded start/end/speed are self-consistent.
+//
 void CMotionPathEditorPage::SeedLineDefaultsIfBlank(MotionSegment& s)
 {
     if (!m_scenario) return;
@@ -783,6 +888,10 @@ void CMotionPathEditorPage::SeedLineDefaultsIfBlank(MotionSegment& s)
     }
 }
 
+//
+// OnShowWindow — when the page becomes visible, Refresh() so entity/segment
+// edits made on other tabs are reflected without reloading the file.
+//
 void CMotionPathEditorPage::OnShowWindow(BOOL bShow, UINT nStatus)
 {
     CHelpAwarePage::OnShowWindow(bShow, nStatus);
@@ -793,6 +902,10 @@ void CMotionPathEditorPage::OnShowWindow(BOOL bShow, UINT nStatus)
     Refresh();
 }
 
+//
+// OnEntityChanged — commit the current segment, switch m_entityIdx to the
+// combo selection, clear the segment selection, and reload the list.
+//
 void CMotionPathEditorPage::OnEntityChanged()
 {
     if (m_suppressEvents) return;
@@ -804,6 +917,10 @@ void CMotionPathEditorPage::OnEntityChanged()
     LoadActiveSegment();
 }
 
+//
+// OnEllipseSpeedKillFocus — parse the Ellipse speed field (Mach/mph/km/h) and
+// rewrite it as plain m/s.
+//
 void CMotionPathEditorPage::OnEllipseSpeedKillFocus()
 {
     if (m_suppressEvents) return;
@@ -815,6 +932,11 @@ void CMotionPathEditorPage::OnEllipseSpeedKillFocus()
         SetDlgItemText(IDC_EDIT_SPEED, FormatDoubleTrim(mps));
 }
 
+//
+// OnLineSpeedKillFocus — normalize the Line speed to m/s and, since this is a
+// real user edit, slide End Time so distance = speed x duration holds, updating
+// both the End Time field and the timeline list cell.
+//
 void CMotionPathEditorPage::OnLineSpeedKillFocus()
 {
     if (m_suppressEvents) return;
@@ -844,6 +966,10 @@ void CMotionPathEditorPage::OnLineSpeedKillFocus()
             lv->SetItemText(m_segmentIdx, 3, FormatDoubleTrim(s->endSecond));
 }
 
+//
+// OnSegmentTimingChanged — push the start/end time edits into the segment and
+// update only the timeline list cells (avoids clobbering in-progress typing).
+//
 void CMotionPathEditorPage::OnSegmentTimingChanged()
 {
     if (m_suppressEvents) return;
@@ -866,6 +992,11 @@ void CMotionPathEditorPage::OnSegmentTimingChanged()
     NotifyDirty(this);
 }
 
+//
+// OnSegmentCoordModeChanged — the user picked a new coordinate frame; commit
+// current values, then convert the segment's foci (Ellipse) or start/end
+// (Line/Stationary/StopHold) through ECEF into the new frame and reload the UI.
+//
 void CMotionPathEditorPage::OnSegmentCoordModeChanged()
 {
     if (m_suppressEvents) return;
@@ -1023,6 +1154,11 @@ void CMotionPathEditorPage::OnSegmentCoordModeChanged()
     NotifyDirty(this);
 }
 
+//
+// OnSegmentTypeChanged — commit, seed defaults for the newly selected type
+// (Ellipse vs Line/Stationary/StopHold), reload its fields, refresh the list,
+// and update type-specific visibility.
+//
 void CMotionPathEditorPage::OnSegmentTypeChanged()
 {
     if (m_suppressEvents) return;
@@ -1051,6 +1187,10 @@ void CMotionPathEditorPage::OnSegmentTypeChanged()
     SetTypeSpecificVisibility();
 }
 
+//
+// OnSegmentListSelChanged — on a new timeline-row selection, commit the
+// outgoing segment, update m_segmentIdx, and load the newly selected segment.
+//
 void CMotionPathEditorPage::OnSegmentListSelChanged(NMHDR* pNMHDR, LRESULT* pResult)
 {
     if (pResult) *pResult = 0;
@@ -1064,6 +1204,10 @@ void CMotionPathEditorPage::OnSegmentListSelChanged(NMHDR* pNMHDR, LRESULT* pRes
     LoadActiveSegment();
 }
 
+//
+// OnAddSegment — append a new Stationary segment starting where the last one
+// ended (30 s long), inheriting the scenario's default coord mode; select it.
+//
 void CMotionPathEditorPage::OnAddSegment()
 {
     Entity* e = ActiveEntity();
@@ -1085,6 +1229,9 @@ void CMotionPathEditorPage::OnAddSegment()
     NotifyDirty(this);
 }
 
+//
+// OnDeleteSegment — erase the selected segment and clamp the selection.
+//
 void CMotionPathEditorPage::OnDeleteSegment()
 {
     Entity* e = ActiveEntity();
@@ -1098,6 +1245,10 @@ void CMotionPathEditorPage::OnDeleteSegment()
     NotifyDirty(this);
 }
 
+//
+// OnDuplicateSegment — insert a copy of the selected segment right after it,
+// shifting its time window forward by its own duration; select the copy.
+//
 void CMotionPathEditorPage::OnDuplicateSegment()
 {
     Entity* e = ActiveEntity();
@@ -1115,6 +1266,9 @@ void CMotionPathEditorPage::OnDuplicateSegment()
     NotifyDirty(this);
 }
 
+//
+// OnMoveSegmentUp — swap the selected segment with the previous one.
+//
 void CMotionPathEditorPage::OnMoveSegmentUp()
 {
     Entity* e = ActiveEntity();
@@ -1127,6 +1281,9 @@ void CMotionPathEditorPage::OnMoveSegmentUp()
     NotifyDirty(this);
 }
 
+//
+// OnMoveSegmentDown — swap the selected segment with the next one.
+//
 void CMotionPathEditorPage::OnMoveSegmentDown()
 {
     Entity* e = ActiveEntity();
@@ -1140,6 +1297,10 @@ void CMotionPathEditorPage::OnMoveSegmentDown()
     NotifyDirty(this);
 }
 
+//
+// OnValidateSegment — run the full scenario validator, filter the report to the
+// selected "Entity N / Motion M" subject, and show its issues in a message box.
+//
 void CMotionPathEditorPage::OnValidateSegment()
 {
     if (!m_scenario) return;

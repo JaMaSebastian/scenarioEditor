@@ -1,3 +1,14 @@
+//=============================================================================
+//  MapTileService.h
+//-----------------------------------------------------------------------------
+//  Declares MapTileService, a threaded XYZ/"slippy" raster-tile provider for
+//  the Preview map backdrop, plus the MapLayer enum, the MapTilePixels result
+//  struct, and static Web Mercator projection helpers shared with the canvas.
+//  Returns device-independent BGRA pixels; the canvas builds Direct2D bitmaps.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-07-10
+//=============================================================================
 #pragma once
 
 #include "pch.h"
@@ -34,6 +45,11 @@ enum class MapLayer : int
 #define WM_APP_TILE_READY (WM_APP + 7)
 #endif
 
+//-----------------------------------------------------------------------------
+// MapTilePixels — a decoded tile's raw pixels
+//   width x height 32bpp premultiplied BGRA image, device-independent so any
+//   thread may produce it and the canvas turns it into an ID2D1Bitmap.
+//-----------------------------------------------------------------------------
 struct MapTilePixels
 {
     int                  width  = 0;
@@ -41,6 +57,13 @@ struct MapTilePixels
     std::vector<uint8_t> bgra;   // width*height*4, 32bpp premultiplied BGRA
 };
 
+//-----------------------------------------------------------------------------
+// MapTileService — async, cached raster-tile fetcher
+//   Serves tiles from an in-memory LRU cache; on a miss, a single worker thread
+//   reads the on-disk cache / offline pack, falls back to a no-key HTTPS
+//   provider, decodes via WIC, and posts WM_APP_TILE_READY so the canvas
+//   repaints. Also exposes static Web Mercator lat/lon<->tile conversions.
+//-----------------------------------------------------------------------------
 class MapTileService
 {
 public:

@@ -1,3 +1,13 @@
+//=============================================================================
+//  DisrecReader.cpp
+//-----------------------------------------------------------------------------
+//  Implements DisrecReader: opens a .disrec file, validates its magic/version
+//  header, and decodes the little-endian framing (timestamp + length + PDU
+//  bytes) of each record. Logs and fails cleanly on bad headers or short reads.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #include "DisrecReader.h"
 #include "DisrecFormat.h"
 #include "../log.h"
@@ -5,11 +15,19 @@
 #include <cstdio>
 #include <cstring>
 
+//
+// ~DisrecReader — closes the open file (if any) on destruction.
+//
 DisrecReader::~DisrecReader()
 {
     Close();
 }
 
+//
+// Open — opens utf8Path for binary read and validates the 12-byte header
+//   (magic + version). Closes and returns false, logging via szError, on any
+//   open failure, short header read, bad magic, or unsupported version.
+//
 bool DisrecReader::Open(const std::string& path)
 {
     Close();
@@ -45,6 +63,11 @@ bool DisrecReader::Open(const std::string& path)
     return true;
 }
 
+//
+// NextRecord — reads the next record: decodes the 8-byte little-endian
+//   timestamp into outTs and the 4-byte length, then resizes outBytes and
+//   reads the PDU payload. Returns false on EOF or any short/failed read.
+//
 bool DisrecReader::NextRecord(uint64_t& outTs, std::vector<unsigned char>& outBytes)
 {
     if (!m_fp) return false;
@@ -63,11 +86,18 @@ bool DisrecReader::NextRecord(uint64_t& outTs, std::vector<unsigned char>& outBy
     return true;
 }
 
+//
+// Rewind — seeks back to the first record (just past the header) so the file
+//   can be replayed from the start without reopening.
+//
 void DisrecReader::Rewind()
 {
     if (m_fp) std::fseek(m_fp, static_cast<long>(Disrec::kHeaderBytes), SEEK_SET);
 }
 
+//
+// Close — closes and clears the file handle; safe to call when not open.
+//
 void DisrecReader::Close()
 {
     if (m_fp) { std::fclose(m_fp); m_fp = nullptr; }

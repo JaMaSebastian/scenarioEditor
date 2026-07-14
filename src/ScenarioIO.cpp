@@ -1,3 +1,16 @@
+//=============================================================================
+//  ScenarioIO.cpp
+//-----------------------------------------------------------------------------
+//  Implements Save/Load for a Scenario against a Windows-profile (INI) file.
+//  Uses the Win32 WritePrivateProfile*/GetPrivateProfile* APIs plus a set of
+//  local helpers for UTF-8 <-> wide conversion, enum <-> name mapping, typed
+//  read/write, directory creation, and Entity/Motion section naming. Handles
+//  the [Format] version gate and reconstructs entities and their indexed
+//  motion sections on load.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #include "ScenarioIO.h"
 #include "Scenario.h"
 #include "../log.h"
@@ -19,6 +32,9 @@ namespace
 {
     // ---------- string utilities ----------
 
+    //
+    // Widen — convert a UTF-8 std::string to a std::wstring (UTF-16).
+    //
     std::wstring Widen(const std::string& s)
     {
         if (s.empty()) return {};
@@ -30,6 +46,9 @@ namespace
         return out;
     }
 
+    //
+    // Narrow — convert a std::wstring (UTF-16) back to a UTF-8 std::string.
+    //
     std::string Narrow(const std::wstring& s)
     {
         if (s.empty()) return {};
@@ -45,6 +64,9 @@ namespace
 
     // ---------- enum <-> name maps ----------
 
+    //
+    // ForceIdName — map a DIS Force ID (0-3) to its spec name string.
+    //
     const wchar_t* ForceIdName(uint8_t id)
     {
         switch (id) {
@@ -54,6 +76,10 @@ namespace
             default: return L"Other";
         }
     }
+    //
+    // ParseForceId — parse a Force ID name (or numeric 0-3) back to its id,
+    // returning `fallback` if unrecognized.
+    //
     uint8_t ParseForceId(const std::wstring& v, uint8_t fallback)
     {
         if (v == L"Friendly") return 1;
@@ -68,6 +94,9 @@ namespace
         return fallback;
     }
 
+    //
+    // CoordModeName — map a CoordMode enum to its INI name string.
+    //
     const wchar_t* CoordModeName(CoordMode m)
     {
         switch (m) {
@@ -77,6 +106,9 @@ namespace
         }
         return L"LatLonAlt";
     }
+    //
+    // ParseCoordMode — parse a CoordMode name back to the enum, else `fallback`.
+    //
     CoordMode ParseCoordMode(const std::wstring& v, CoordMode fallback)
     {
         if (v == L"LatLonAlt") return CoordMode::LatLonAlt;
@@ -85,6 +117,9 @@ namespace
         return fallback;
     }
 
+    //
+    // PhysModeName — map a PhysicalModelMode enum to its INI name string.
+    //
     const wchar_t* PhysModeName(PhysicalModelMode m)
     {
         switch (m) {
@@ -94,6 +129,9 @@ namespace
         }
         return L"Ignore";
     }
+    //
+    // ParsePhysMode — parse a PhysicalModelMode name back to the enum, else `fallback`.
+    //
     PhysicalModelMode ParsePhysMode(const std::wstring& v, PhysicalModelMode fallback)
     {
         if (v == L"Ignore")   return PhysicalModelMode::Ignore;
@@ -102,6 +140,9 @@ namespace
         return fallback;
     }
 
+    //
+    // PhysOverrideName — map a PhysicalModelOverride enum to its INI name string.
+    //
     const wchar_t* PhysOverrideName(PhysicalModelOverride o)
     {
         switch (o) {
@@ -112,6 +153,9 @@ namespace
         }
         return L"Inherit";
     }
+    //
+    // ParsePhysOverride — parse a PhysicalModelOverride name back to the enum, else `fallback`.
+    //
     PhysicalModelOverride ParsePhysOverride(const std::wstring& v, PhysicalModelOverride fallback)
     {
         if (v == L"Inherit")  return PhysicalModelOverride::Inherit;
@@ -121,6 +165,9 @@ namespace
         return fallback;
     }
 
+    //
+    // MotionTypeName — map a MotionType enum to its INI name string.
+    //
     const wchar_t* MotionTypeName(MotionType t)
     {
         switch (t) {
@@ -131,6 +178,10 @@ namespace
         }
         return L"Stationary";
     }
+    //
+    // ParseMotionType — parse a MotionType name (incl. the "Stop" alias) back to
+    // the enum, else `fallback`.
+    //
     MotionType ParseMotionType(const std::wstring& v, MotionType fallback)
     {
         if (v == L"Stationary") return MotionType::Stationary;
@@ -141,6 +192,9 @@ namespace
         return fallback;
     }
 
+    //
+    // OutputModeName — map an OutputMode enum to its INI name string.
+    //
     const wchar_t* OutputModeName(OutputMode m)
     {
         switch (m) {
@@ -152,6 +206,9 @@ namespace
         }
         return L"UdpUnicast";
     }
+    //
+    // ParseOutputMode — parse an OutputMode name back to the enum, else `fallback`.
+    //
     OutputMode ParseOutputMode(const std::wstring& v, OutputMode fallback)
     {
         if (v == L"UdpUnicast")    return OutputMode::UdpUnicast;
@@ -162,10 +219,16 @@ namespace
         return fallback;
     }
 
+    //
+    // DirectionName — map an EllipseDirection enum to its INI name string.
+    //
     const wchar_t* DirectionName(EllipseDirection d)
     {
         return d == EllipseDirection::Clockwise ? L"Clockwise" : L"CounterClockwise";
     }
+    //
+    // ParseDirection — parse an EllipseDirection name back to the enum, else `fb`.
+    //
     EllipseDirection ParseDirection(const std::wstring& v, EllipseDirection fb)
     {
         if (v == L"Clockwise")        return EllipseDirection::Clockwise;
@@ -175,16 +238,25 @@ namespace
 
     // ---------- WPP helpers ----------
 
+    //
+    // WriteStr — write a string value under [section]Key= in the INI at `path`.
+    //
     bool WriteStr(const wchar_t* section, const wchar_t* key, const wchar_t* value,
                   const std::wstring& path)
     {
         return ::WritePrivateProfileStringW(section, key, value, path.c_str()) != 0;
     }
+    //
+    // WriteStr — std::wstring overload; forwards to the const wchar_t* version.
+    //
     bool WriteStr(const wchar_t* section, const wchar_t* key, const std::wstring& value,
                   const std::wstring& path)
     {
         return WriteStr(section, key, value.c_str(), path);
     }
+    //
+    // WriteInt — write a 64-bit integer as a decimal string under [section]Key=.
+    //
     bool WriteInt(const wchar_t* section, const wchar_t* key, long long value,
                   const std::wstring& path)
     {
@@ -192,6 +264,9 @@ namespace
         swprintf_s(buf, L"%lld", value);
         return WriteStr(section, key, buf, path);
     }
+    //
+    // WriteDouble — write a double under [section]Key= using round-trip-safe %.17g.
+    //
     bool WriteDouble(const wchar_t* section, const wchar_t* key, double value,
                      const std::wstring& path)
     {
@@ -201,6 +276,9 @@ namespace
         return WriteStr(section, key, buf, path);
     }
 
+    //
+    // ReadStr — read [section]Key= as a string, returning `defaultValue` if absent.
+    //
     std::wstring ReadStr(const wchar_t* section, const wchar_t* key,
                          const wchar_t* defaultValue, const std::wstring& path)
     {
@@ -209,6 +287,10 @@ namespace
                                                    buf, _countof(buf), path.c_str());
         return std::wstring(buf, n);
     }
+    //
+    // ReadInt — read [section]Key= as a 64-bit integer, returning `defaultValue`
+    // if absent or unparseable.
+    //
     long long ReadInt(const wchar_t* section, const wchar_t* key,
                       long long defaultValue, const std::wstring& path)
     {
@@ -218,6 +300,10 @@ namespace
         const long long v = std::wcstoll(s.c_str(), &end, 10);
         return (end == s.c_str()) ? defaultValue : v;
     }
+    //
+    // ReadDouble — read [section]Key= as a double, returning `defaultValue`
+    // if absent or unparseable.
+    //
     double ReadDouble(const wchar_t* section, const wchar_t* key,
                       double defaultValue, const std::wstring& path)
     {
@@ -248,6 +334,9 @@ namespace
 
     // ---------- per-entity section name ----------
 
+    //
+    // EntitySection — build the "Entity.<id>" INI section name for an entity.
+    //
     std::wstring EntitySection(uint16_t entityId)
     {
         wchar_t buf[32];
@@ -255,6 +344,9 @@ namespace
         return buf;
     }
 
+    //
+    // MotionSection — build the "Entity.<id>.Motion.<n>" section name (1-based n).
+    //
     std::wstring MotionSection(uint16_t entityId, size_t motionIdx)
     {
         wchar_t buf[64];
@@ -274,6 +366,14 @@ namespace
     }
 }
 
+//
+// ScenarioIO::Save — serialize a Scenario to the INI at `path`.
+//   Ensures the parent directory exists, deletes any pre-existing file so
+//   removed keys don't linger, then writes [Format], [Scenario], [Origin],
+//   optional [TerrainBounds]/[Level*], per-entity and per-motion sections,
+//   and [Output], flushing the profile cache at the end. Returns IoError on
+//   a write/mkdir failure, otherwise Ok.
+//
 ScenarioIO::Result ScenarioIO::Save(const Scenario& scenario,
                                     const std::wstring& path)
 {
@@ -459,6 +559,7 @@ ScenarioIO::Result ScenarioIO::Save(const Scenario& scenario,
 
             WriteStr   (M, L"SpeedMode",   Widen(m.speedMode),   path);
             WriteStr   (M, L"HeadingMode", Widen(m.headingMode), path);
+            WriteInt   (M, L"AccelerateFromStop", m.accelerateFromStop ? 1 : 0, path);
 
             // Ellipse (two-foci + length form)
             WriteDouble(M, L"Focus1LatitudeDeg",    m.f1Lat, path);
@@ -514,6 +615,15 @@ ScenarioIO::Result ScenarioIO::Save(const Scenario& scenario,
     return Result::Ok;
 }
 
+//
+// ScenarioIO::Load — deserialize the INI at `path` into `s`.
+//   Verifies the file exists and its [Format] Version is known (returns
+//   IoError / Malformed / VersionTooNew otherwise), resets `s` to defaults,
+//   then reads scenario/origin/terrain/level fields, discovers all "Entity.<N>"
+//   sections, and in a second pass attaches each entity's sorted "Motion.<M>"
+//   segments plus the [Output] config. Guarantees at least one entity. Ok on
+//   success.
+//
 ScenarioIO::Result ScenarioIO::Load(Scenario& s, const std::wstring& path)
 {
     // GetPrivateProfile* will happily report defaults for a missing file;
@@ -748,6 +858,7 @@ ScenarioIO::Result ScenarioIO::Load(Scenario& s, const std::wstring& path)
 
             m.speedMode      = Narrow(ReadStr(M, L"SpeedMode",   L"CalculateFromTime", path));
             m.headingMode    = Narrow(ReadStr(M, L"HeadingMode", L"CalculateFromPath", path));
+            m.accelerateFromStop = ReadInt(M, L"AccelerateFromStop", 0, path) != 0;
 
             m.f1Lat          = ReadDouble(M, L"Focus1LatitudeDeg",    0.0, path);
             m.f1Lon          = ReadDouble(M, L"Focus1LongitudeDeg",   0.0, path);

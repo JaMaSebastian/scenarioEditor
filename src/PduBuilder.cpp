@@ -1,3 +1,14 @@
+//=============================================================================
+//  PduBuilder.cpp
+//-----------------------------------------------------------------------------
+//  Implements PduBuilder: fills a DIS v7 Entity State PDU (IDs, type, ECEF
+//  location/velocity/orientation, marking) from the scenario and entity, and
+//  serializes a PDU to a big-endian byte buffer, writing back the header
+//  Length field that open-dis7-cpp does not compute automatically.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #include "pch.h"
 #include "PduBuilder.h"
 #include "Scenario.h"
@@ -13,6 +24,11 @@
 #include <dis7/EulerAngles.h>
 #include <dis7/utils/DataStream.h>
 
+//
+// BuildEntityStatePdu (1-arg) — derives an ECEF velocity from
+//   entity.initialSpeedMps along the body-forward axis, then delegates to the
+//   explicit-velocity overload.
+//
 DIS::EntityStatePdu PduBuilder::BuildEntityStatePdu(const Scenario& scenario, const Entity& entity)
 {
     // Legacy velocity: initialSpeedMps along the body-forward ECEF axis. The
@@ -33,6 +49,11 @@ DIS::EntityStatePdu PduBuilder::BuildEntityStatePdu(const Scenario& scenario, co
     return BuildEntityStatePdu(scenario, entity, vx, vy, vz);
 }
 
+//
+// BuildEntityStatePdu (4-arg) — populates the PDU header, entity ID/type,
+//   force, ECEF location, the caller-supplied ECEF linear velocity,
+//   orientation, and marking, and returns the completed PDU.
+//
 DIS::EntityStatePdu PduBuilder::BuildEntityStatePdu(const Scenario& scenario, const Entity& entity,
                                                     double velX, double velY, double velZ)
 {
@@ -99,6 +120,10 @@ DIS::EntityStatePdu PduBuilder::BuildEntityStatePdu(const Scenario& scenario, co
     return pdu;
 }
 
+//
+// Serialize — marshals the PDU big-endian, writing the header Length field back
+//   before the final marshal; resizes outBuffer to fit and returns byte count.
+//
 size_t PduBuilder::Serialize(DIS::Pdu& pdu, std::vector<unsigned char>& outBuffer)
 {
     // DIS wire format is big-endian per IEEE 1278.1.

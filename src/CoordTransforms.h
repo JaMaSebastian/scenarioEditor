@@ -1,3 +1,14 @@
+//=============================================================================
+//  CoordTransforms.h
+//-----------------------------------------------------------------------------
+//  Declares the pure-C++ WGS-84 coordinate and orientation transforms used to
+//  convert between geodetic (lat/lon/alt), local ENU tangent-plane, and ECEF
+//  frames, plus aviation H/P/R <-> DIS (psi, theta, phi) orientation mapping.
+//  No Unreal dependencies; ported from DISBrowser's FDISCoordinateConverter.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #pragma once
 
 // Pure C++ WGS-84 coordinate transforms (§15). Ported from DISBrowser's
@@ -22,6 +33,9 @@ namespace CoordTransforms
 
     // ---------- primitives (radians-in) ----------
 
+    //
+    // GeodeticToEcefRad — geodetic lat/lon (rad) + altitude (m) to ECEF x/y/z (m).
+    //
     void GeodeticToEcefRad(double latRad, double lonRad, double altM,
                            double& outX, double& outY, double& outZ);
 
@@ -29,15 +43,22 @@ namespace CoordTransforms
     void EcefToGeodeticRad(double x, double y, double z,
                            double& outLatRad, double& outLonRad, double& outAltM);
 
+    //
+    // LocalEnuToEcef — ENU offsets (m) about a geodetic origin (rad) to ECEF x/y/z (m).
+    //
     void LocalEnuToEcef(double east, double north, double up,
                         double originLatRad, double originLonRad, double originAltM,
                         double& outX, double& outY, double& outZ);
 
+    //
+    // EcefToLocalEnu — ECEF x/y/z (m) to ENU offsets (m) about a geodetic origin (rad).
+    //
     void EcefToLocalEnu(double x, double y, double z,
                         double originLatRad, double originLonRad, double originAltM,
                         double& outEast, double& outNorth, double& outUp);
 
     // ---------- degrees-in convenience wrappers ----------
+    // Each forwards to its radians-in primitive after a deg->rad conversion.
 
     void GeodeticToEcefDeg(double latDeg, double lonDeg, double altM,
                            double& outX, double& outY, double& outZ);

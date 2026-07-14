@@ -1,3 +1,15 @@
+//=============================================================================
+//  PreviewCanvas.h
+//-----------------------------------------------------------------------------
+//  Direct2D-rendered 2D top-down preview canvas (a subclassed MFC CWnd) that
+//  draws a scenario in scenario-origin ENU: entity dots, courses/trails,
+//  ellipse orbits, a georeferenced map backdrop, and a terrain overlay. Also
+//  declares the flattened PreviewRenderState the owning page feeds it, plus the
+//  handle/hit-test structs used for click picking and drag editing.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-25
+//=============================================================================
 #pragma once
 
 #include "pch.h"
@@ -11,6 +23,11 @@
 
 class CPreviewPage;
 
+//-----------------------------------------------------------------------------
+// PreviewEntityPose — one entity's drawable state at the current preview time
+//   Its scenario-origin ENU position, heading, force affiliation and name, plus
+//   whether it is currently pickable/draggable.
+//-----------------------------------------------------------------------------
 struct PreviewEntityPose
 {
     double      enuE = 0.0;
@@ -79,6 +96,13 @@ struct PreviewLevelZone
     uint32_t    colorRgb  = 0x2E7D32;  // 0xRRGGBB fill/outline tint
 };
 
+//-----------------------------------------------------------------------------
+// PreviewRenderState — the complete, flattened snapshot the page hands the canvas
+//   Everything needed for one frame: per-entity poses/paths/trails, editable
+//   handles (ellipse orbits, line anchors, foci), selection flags, the view
+//   transform (zoom/center/time), display toggles, and the map + terrain layers.
+//   Purely data — the canvas only reads it while painting and hit-testing.
+//-----------------------------------------------------------------------------
 struct PreviewRenderState
 {
     std::vector<PreviewEntityPose>             poses;
@@ -118,10 +142,22 @@ struct PreviewRenderState
     std::vector<PreviewLevelZone> levelZones;   // named sub-regions, drawn over terrain
 };
 
+//-----------------------------------------------------------------------------
+// CPreviewCanvas — the top-down scenario preview window
+//   Subclassed STATIC/CWnd that owns the Direct2D render target and brushes,
+//   paints a PreviewRenderState supplied by its CPreviewPage owner, and turns
+//   mouse input into pan/zoom and drag-editing (entity moves, line/ellipse
+//   handles, group selection, boundary painting) reported back to the owner.
+//-----------------------------------------------------------------------------
 class CPreviewCanvas : public CWnd
 {
 public:
     void SetOwner(CPreviewPage* owner) { m_owner = owner; }
+
+    // Inverse of ProjectEnu: map a physical-pixel client point to scenario-
+    // origin ENU east/north. Public so the page can place a new entity at a
+    // screen location (e.g. the upper-right corner of the view).
+    bool UnprojectToEnu(CPoint pxPt, double& outE, double& outN) const;
 
 protected:
     afx_msg void OnPaint();
@@ -139,24 +175,28 @@ protected:
     DECLARE_MESSAGE_MAP()
 
 private:
+    // Lazily create the Direct2D render target, brushes, text formats and (once)
+    // the map tile service. Returns false if the device resources can't be made.
     bool EnsureResources();
+    // Release all device-dependent resources (after a lost/recreated target).
     void DiscardDeviceResources();
+    // Paint one frame from the given render state (called by OnPaint).
     void Render(const PreviewRenderState& state);
     // Draw the georeferenced map backdrop (visible tiles) behind everything.
     void DrawMap(const PreviewRenderState& state, float w, float h);
     // Device bitmap for a tile, created lazily from the tile service's pixels
     // (device-independent). Returns nullptr while the tile is still loading.
     ID2D1Bitmap* TileBitmap(MapLayer layer, int z, int x, int y);
+    // Project a scenario-origin ENU point (metres) to a DIP screen point using
+    // the state's zoom/center. The single projection every draw + pick relies on.
     D2D1_POINT_2F ProjectEnu(double e, double n, const PreviewRenderState& s,
                              float canvasW, float canvasH) const;
+    // Brush for a force id (0 Other/1 Friendly/2 Opposing/3 Neutral; clamps out-of-range).
     ID2D1SolidColorBrush* BrushForForce(uint8_t forceId);
     // "Set Start" hit-test: pxPt is a physical-pixel client click. Returns true
     // if it landed within range of an ellipse orbit (and applied the pick).
     bool PickStartAt(CPoint pxPt);
 
-    // Inverse of ProjectEnu: map a physical-pixel client point to scenario-
-    // origin ENU east/north (same DIP handling as PickStartAt).
-    bool UnprojectToEnu(CPoint pxPt, double& outE, double& outN) const;
     // Nearest entity dot to a physical-pixel client point, or -1 if none is
     // within the pick radius. Skips disabled entities.
     int  HitTestEntity(CPoint pxPt) const;

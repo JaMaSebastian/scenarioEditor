@@ -1,3 +1,15 @@
+//=============================================================================
+//  CatalogAddDialog.h
+//-----------------------------------------------------------------------------
+//  Declares CCatalogAddDialog, the secondary "Add Catalog Node" modal launched
+//  from the Catalog Editor. Given the tree's parent context, it lets the user
+//  pick a node type (Kind/Domain/Category/Subcategory/Country), auto-suggests
+//  the next ID, inserts the node into the edit-copy catalog, and reports what
+//  it added so the parent can rebuild and reselect.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-25
+//=============================================================================
 #pragma once
 
 #include "pch.h"

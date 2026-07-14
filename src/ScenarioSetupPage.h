@@ -1,3 +1,14 @@
+//=============================================================================
+//  ScenarioSetupPage.h
+//-----------------------------------------------------------------------------
+//  Declares CScenarioSetupPage, the "Scenario Setup" tab of the Attributes
+//  notebook. Edits scenario-wide settings: name/description, DIS version and
+//  exercise/site/application IDs, origin lat/lon/alt, default coord mode,
+//  duration/update rate, and physical-model defaults.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #pragma once
 
 #include "pch.h"
@@ -6,6 +17,11 @@
 
 struct Scenario;
 
+//-----------------------------------------------------------------------------
+// CScenarioSetupPage — dialog page for scenario-level attributes.
+//   Marshals its controls to/from the shared Scenario via WriteTo/ReadFrom,
+//   and live-commits a few fields (coord mode, physical model) as edited.
+//-----------------------------------------------------------------------------
 class CScenarioSetupPage : public CHelpAwarePage
 {
 public:

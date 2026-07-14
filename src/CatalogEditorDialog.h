@@ -1,3 +1,14 @@
+//=============================================================================
+//  CatalogEditorDialog.h
+//-----------------------------------------------------------------------------
+//  Declares CCatalogEditorDialog, the modal editor for EntityTypeCatalog.ini.
+//  Presents the catalog as a tree plus a detail panel and per-Subcategory
+//  attribute grid, supports add/delete of nodes and (sibling-propagating)
+//  attributes, and commits edits to disk and the live catalog on Save.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-25
+//=============================================================================
 #pragma once
 
 #include "pch.h"

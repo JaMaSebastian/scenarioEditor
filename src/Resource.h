@@ -1,3 +1,17 @@
+//=============================================================================
+//  Resource.h
+//-----------------------------------------------------------------------------
+//  Symbolic identifiers for all of ScenarioEditor's resources: dialogs,
+//  controls, menus, toolbars, string-table entries, and command IDs referenced
+//  by ScenarioEditor.rc and the C++ code. Each #define maps a readable symbol
+//  to the numeric resource ID used at runtime.
+//
+//  This file is auto-generated and maintained by the Visual C++ resource
+//  editor; do not hand-edit the symbol section below.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 //{{NO_DEPENDENCIES}}
 // Microsoft Visual C++ generated include file.
 // Used by ScenarioEditor.rc
@@ -29,6 +43,9 @@
 #define IDD_PROMPT_NAME                 212
 #define IDD_ENTITY_PICKER               213
 #define IDD_ADD_PLACE                   214
+#define IDD_PLAYS_EDITOR                215
+#define IDD_ENTITY_TYPE_PICKER          216
+#define IDB_GEAR_PNG                    250
 #define IDS_APP_TITLE                   300
 #define IDS_STATE_IDLE                  301
 #define IDS_TIME_DEFAULT                302
@@ -201,6 +218,7 @@
 #define IDC_COMBO_PREVIEW_SPEED         1516
 #define IDC_CHK_PREVIEW_DESTTIME        1517
 #define IDC_LIST_PREVIEW_DESTTIME       1518
+#define IDC_BTN_PREVIEW_NEW             1519
 
 // Motion Path Editor — Ellipse fields (two-foci + length + speed +
 // start-bearing form).
@@ -277,6 +295,7 @@
 #define IDC_LBL_LINE_HINT               1626
 #define IDC_LBL_LINE_SPEED              1627
 #define IDC_EDIT_LINE_SPEED             1628
+#define IDC_CHK_SEGMENT_TAKEOFF         1629
 
 // Motion Path Editor — Ellipse start-position readout (computed from bearing).
 #define IDC_LBL_ELLIPSE_START           1630
@@ -346,6 +365,24 @@
 #define IDC_BTN_UNREAL_PROJECT_BROWSE   1882
 #define IDC_BTN_CONFIGURE_UNREAL        1883
 #define IDC_CHK_UNREAL_DYNAMIC_TILES    1884
+
+// Plays editor (IDD_PLAYS_EDITOR) — dark grid for editing categories /
+// subcategories and their associated scenario .ini, plus the gear button that
+// opens it from the main window's top-right corner.
+#define IDC_BTN_GEAR                    1900
+#define IDC_LIST_PLAYS_EDIT             1901
+#define IDC_BTN_PLAYS_ADD_CAT           1902
+#define IDC_BTN_PLAYS_ADD_SUB           1903
+#define IDC_BTN_PLAYS_DELETE            1904
+#define IDC_BTN_PLAYS_MOVE_UP           1905
+#define IDC_BTN_PLAYS_MOVE_DOWN         1906
+#define IDC_BTN_PLAYS_BROWSE            1907
+#define IDC_CHK_PLAYS_RUN               1908
+#define IDC_BTN_PLAYS_SAVE              1909
+#define IDC_BTN_PLAYS_SAVE_CLOSE        1910
+
+// Entity type picker (IDD_ENTITY_TYPE_PICKER) — read-only catalog tree.
+#define IDC_TREE_ENTITY_TYPE            1911
 
 #define AFX_IDC_TAB_CONTROL             0x3020
 #define ID_APPLY_NOW                    0x3021
@@ -883,7 +920,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        310
 #define _APS_NEXT_COMMAND_VALUE         32100
-#define _APS_NEXT_CONTROL_VALUE         1887
+#define _APS_NEXT_CONTROL_VALUE         1912
 #define _APS_NEXT_SYMED_VALUE           34000
 #endif
 #endif

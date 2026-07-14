@@ -1,3 +1,14 @@
+//=============================================================================
+//  Scenario.h
+//-----------------------------------------------------------------------------
+//  In-memory data model for a DIS scenario: the plain-old-data structs and
+//  enums that describe entities, their per-segment motion, output/sink config,
+//  an optional terrain overlay, and scenario-wide defaults. This is the model
+//  that the editor UI edits and that ScenarioIO serializes to/from scenario.ini.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #pragma once
 
 #include <cstdint>
@@ -44,12 +55,19 @@ enum class MotionType : uint8_t
     Ellipse    = 3,  // parametric orbit defined by two foci + length + speed + bearing
 };
 
+// Direction of travel around an Ellipse orbit, as seen from above.
 enum class EllipseDirection : uint8_t
 {
     Clockwise        = 0,
     CounterClockwise = 1,
 };
 
+//-----------------------------------------------------------------------------
+// MotionSegment — one timed leg of an entity's trajectory
+//   Carries a start/end pose (in Lat/Lon/Alt, Local ENU, or ECEF per coordMode)
+//   plus type-specific knobs (Line take-off easing; Ellipse two-foci + length,
+//   bearing, speed, direction, optional follow-target). Consumed by the sampler.
+//-----------------------------------------------------------------------------
 struct MotionSegment
 {
     bool        enabled        = true;
@@ -98,6 +116,14 @@ struct MotionSegment
     std::string speedMode      = "CalculateFromTime";
     std::string headingMode    = "CalculateFromPath";
 
+    // Take-off (Line only): when true the entity starts STOPPED and accelerates
+    // at a constant rate along the line, reaching the segment's speed (cruise) at
+    // the end. The sampler eases position in with u^2 instead of a linear lerp;
+    // the plot handler sets the duration to 2*length/speed so the end speed
+    // equals cruise. A following normal Line then continues at cruise (smooth
+    // hand-off) and is where the operator raises the end altitude to climb.
+    bool        accelerateFromStop = false;
+
     // ---- Ellipse-specific fields (two-foci + length form) ----
     // Foci of the ellipse in the segment's coordMode frame. Each focus
     // carries Lat/Lon/Alt + Local X/Y/Z + ECEF X/Y/Z; the active triple
@@ -136,6 +162,12 @@ struct MotionSegment
     std::string description;
 };
 
+//-----------------------------------------------------------------------------
+// Entity — one simulated DIS entity in the scenario
+//   Bundles DIS identity/type/marking (wire fields), timing and update rate,
+//   an initial pose (Lat/Lon/Alt, Local, or ECEF), orientation, an ordered
+//   list of MotionSegments, and per-entity physical-model overrides.
+//-----------------------------------------------------------------------------
 struct Entity
 {
     // ----- Model bookkeeping (not on the wire) -----
@@ -219,6 +251,12 @@ enum class OutputMode : uint8_t
     PreviewOnly    = 4,
 };
 
+//-----------------------------------------------------------------------------
+// OutputConfig — where and how generated PDUs are emitted
+//   Holds the selected OutputMode plus the settings each sink needs (UDP
+//   unicast/multicast endpoints, file record/replay paths) and playback
+//   controls (speed, loop).
+//-----------------------------------------------------------------------------
 struct OutputConfig
 {
     OutputMode  mode            = OutputMode::UdpUnicast;
@@ -288,6 +326,13 @@ struct LevelOverlay
     std::vector<LevelZone> zones;   // named sub-regions ([Level.Zone0], …)
 };
 
+//-----------------------------------------------------------------------------
+// Scenario — the top-level document edited by the app and (de)serialized by ScenarioIO
+//   Aggregates identity/metadata, DIS header fields, timing defaults, the
+//   geodetic origin, an optional painted terrain-bounds box and Preview-tab
+//   LevelOverlay, the list of entities, the OutputConfig, and physical-model
+//   defaults that individual entities may inherit or override.
+//-----------------------------------------------------------------------------
 struct Scenario
 {
     // ----- Identity / metadata -----

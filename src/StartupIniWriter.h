@@ -1,3 +1,15 @@
+//=============================================================================
+//  StartupIniWriter.h
+//-----------------------------------------------------------------------------
+//  Declares Write(), which emits the DISBrowser handoff file
+//  <projectDir>\Config\Startup.ini. DISBrowser's Boot map reads it to open the
+//  chosen level and, for the Generic level, override the EarthOrigin, basemap,
+//  and painted terrain bounds. This is the only file-based coupling between
+//  ScenarioEditor and DISBrowser.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-07-13
+//=============================================================================
 #pragma once
 
 #include <string>

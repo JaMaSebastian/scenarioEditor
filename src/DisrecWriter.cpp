@@ -1,3 +1,13 @@
+//=============================================================================
+//  DisrecWriter.cpp
+//-----------------------------------------------------------------------------
+//  Implements DisrecWriter: truncates/creates a .disrec file, writes the
+//  12-byte magic/version header, and appends each record with its little-endian
+//  timestamp and length framing around the raw DIS PDU bytes.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #include "DisrecWriter.h"
 #include "DisrecFormat.h"
 #include "../log.h"
@@ -5,11 +15,19 @@
 #include <cstdio>
 #include <cstring>
 
+//
+// ~DisrecWriter — flushes and closes the open file (if any) on destruction.
+//
 DisrecWriter::~DisrecWriter()
 {
     Close();
 }
 
+//
+// Open — opens utf8Path for binary write (truncating any existing file) and
+//   writes the 12-byte header (magic, little-endian version, reserved zeros).
+//   Resets the record count. Logs and returns false on open or write failure.
+//
 bool DisrecWriter::Open(const std::string& path)
 {
     Close();
@@ -37,6 +55,11 @@ bool DisrecWriter::Open(const std::string& path)
     return true;
 }
 
+//
+// WriteRecord — appends one record: the 8-byte little-endian timestamp, the
+//   4-byte little-endian length, then pduLen raw PDU bytes. Rejects lengths
+//   above 0xFFFFFFFF, bumps the record count, and returns false on I/O failure.
+//
 bool DisrecWriter::WriteRecord(uint64_t timestampUs, const void* pduBytes, size_t pduLen)
 {
     if (!m_fp) return false;
@@ -58,6 +81,9 @@ bool DisrecWriter::WriteRecord(uint64_t timestampUs, const void* pduBytes, size_
     return true;
 }
 
+//
+// Close — flushes buffered data and closes the file handle; safe when not open.
+//
 void DisrecWriter::Close()
 {
     if (m_fp) {

@@ -128,9 +128,12 @@
     <ClInclude Include="src\OutputPlaybackPage.h" />
     <ClInclude Include="src\AttributesDialog.h" />
     <ClInclude Include="src\PlaysPage.h" />
+    <ClInclude Include="src\PlaysCatalog.h" />
+    <ClInclude Include="src\PlaysEditorDialog.h" />
     <ClInclude Include="src\DeployPage.h" />
     <ClInclude Include="src\PreviewPage.h" />
     <ClInclude Include="src\PreviewCanvas.h" />
+    <ClInclude Include="src\EntityTypePickerDialog.h" />
     <ClInclude Include="src\MapTileService.h" />
     <ClInclude Include="src\CesiumView.h" />
     <ClInclude Include="src\Direct2DContext.h" />
@@ -166,9 +169,12 @@
     <ClCompile Include="src\OutputPlaybackPage.cpp" />
     <ClCompile Include="src\AttributesDialog.cpp" />
     <ClCompile Include="src\PlaysPage.cpp" />
+    <ClCompile Include="src\PlaysCatalog.cpp" />
+    <ClCompile Include="src\PlaysEditorDialog.cpp" />
     <ClCompile Include="src\DeployPage.cpp" />
     <ClCompile Include="src\PreviewPage.cpp" />
     <ClCompile Include="src\PreviewCanvas.cpp" />
+    <ClCompile Include="src\EntityTypePickerDialog.cpp" />
     <ClCompile Include="src\MapTileService.cpp" />
     <ClCompile Include="src\CesiumView.cpp" />
     <ClCompile Include="src\CatalogEditorDialog.cpp" />

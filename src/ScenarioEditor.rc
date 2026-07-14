@@ -107,6 +107,14 @@ IDR_MAIN_TOOLBAR        BITMAP                  "toolbar.bmp"
 
 /////////////////////////////////////////////////////////////////////////////
 //
+// Embedded assets (loaded via CImage from resource memory).
+//
+
+IDB_GEAR_PNG            RCDATA                  "res\\gear.png"
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
 // Toolbar
 //
 
@@ -313,6 +321,36 @@ BEGIN
     PUSHBUTTON      "Cancel",IDCANCEL,180,48,50,14
 END
 
+IDD_PLAYS_EDITOR DIALOGEX 0, 0, 620, 320
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Plays Editor"
+FONT 12, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    CONTROL         "",IDC_LIST_PLAYS_EDIT,"SysListView32",LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP,8,8,604,232
+    LTEXT           "Double-click a cell to edit: Name, Definition, or (subcategory) Scenario .ini.",IDC_STATIC,8,246,604,10
+    PUSHBUTTON      "Add Category",IDC_BTN_PLAYS_ADD_CAT,8,260,72,14
+    PUSHBUTTON      "Add Subcategory",IDC_BTN_PLAYS_ADD_SUB,84,260,86,14
+    PUSHBUTTON      "Delete",IDC_BTN_PLAYS_DELETE,174,260,48,14
+    PUSHBUTTON      "Move Up",IDC_BTN_PLAYS_MOVE_UP,226,260,52,14
+    PUSHBUTTON      "Move Down",IDC_BTN_PLAYS_MOVE_DOWN,282,260,54,14
+    PUSHBUTTON      "Browse Scenario...",IDC_BTN_PLAYS_BROWSE,340,260,92,14
+    CONTROL         "Run Scenario",IDC_CHK_PLAYS_RUN,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,286,140,12
+    PUSHBUTTON      "Save",IDC_BTN_PLAYS_SAVE,438,298,50,14
+    DEFPUSHBUTTON   "Save && Close",IDC_BTN_PLAYS_SAVE_CLOSE,492,298,70,14
+    PUSHBUTTON      "Cancel",IDCANCEL,566,298,48,14
+END
+
+IDD_ENTITY_TYPE_PICKER DIALOGEX 0, 0, 300, 320
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Change Entity Type"
+FONT 12, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "Choose a subcategory (leaf) to re-type this entity:",IDC_STATIC,8,6,284,10
+    CONTROL         "",IDC_TREE_ENTITY_TYPE,"SysTreeView32",TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP,8,20,284,272
+    DEFPUSHBUTTON   "OK",IDOK,186,300,50,14
+    PUSHBUTTON      "Cancel",IDCANCEL,240,300,50,14
+END
+
 IDD_ENTITY_PICKER DIALOGEX 0, 0, 240, 70
 STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Entity Ellipse"
@@ -430,6 +468,7 @@ BEGIN
     EDITTEXT        IDC_EDIT_LINE_END_R,510,296,50,12,ES_AUTOHSCROLL
     LTEXT           "Speed (m/s):",IDC_LBL_LINE_SPEED,22,318,50,10
     EDITTEXT        IDC_EDIT_LINE_SPEED,76,316,60,12,ES_AUTOHSCROLL
+    CONTROL         "Take-off (accelerate from a stop to Speed at the end)",IDC_CHK_SEGMENT_TAKEOFF,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,150,317,260,10
     LTEXT           "Start/End describe the path endpoints. H/P/R = heading/pitch/roll (deg). Stationary and StopHold use only the Start row. Speed defaults to airframe cruise.",IDC_LBL_LINE_HINT,22,338,650,10
     GROUPBOX        "Waypoints",IDC_STATIC,6,380,540,50
     CONTROL         "",IDC_LIST_WAYPOINTS,"SysListView32",LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP,12,394,528,30
@@ -514,6 +553,7 @@ BEGIN
     PUSHBUTTON      "Resume",IDC_BTN_PREVIEW_RESUME,540,44,50,14
     PUSHBUTTON      "Stop",IDC_BTN_PREVIEW_STOP,540,62,50,14
     PUSHBUTTON      "Zoom In",IDC_BTN_PREVIEW_ZOOM_IN,596,8,56,14
+    PUSHBUTTON      "New",IDC_BTN_PREVIEW_NEW,656,8,40,14
     PUSHBUTTON      "Zoom Out",IDC_BTN_PREVIEW_ZOOM_OUT,596,26,56,14
     PUSHBUTTON      "Fit Scenario",IDC_BTN_PREVIEW_FIT,596,44,56,14
     LTEXT           "Speed:",IDC_STATIC,596,64,56,9

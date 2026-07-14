@@ -1,3 +1,14 @@
+//=============================================================================
+//  CatalogEditorDialog.cpp
+//-----------------------------------------------------------------------------
+//  Implements CCatalogEditorDialog: the attribute-hint table, tree build/
+//  rebuild and NodeRef<->lParam packing, detail-panel and attribute-grid
+//  refresh, inline value editing (with speed-unit parsing), node and attribute
+//  add/delete with cascade/propagation, and the Save/Cancel commit path.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-25
+//=============================================================================
 #include "pch.h"
 #include "CatalogEditorDialog.h"
 #include "CatalogAddDialog.h"
@@ -56,12 +67,19 @@ namespace
         { _T("WingspanMeters"),                  _T("Dimension (m).") },
         { _T("HeightMeters"),                    _T("Dimension (m).") },
     };
+    //
+    // HintFor — look up the descriptive hint for a well-known attribute key;
+    //   empty string when the key is not in the table.
+    //
     const TCHAR* HintFor(const CString& key)
     {
         for (const auto& h : kHints) if (key == h.key) return h.hint;
         return _T("");
     }
 
+    //
+    // Narrow — convert an MFC CString to a UTF-8 std::string.
+    //
     std::string Narrow(const CString& s)
     {
         if (s.IsEmpty()) return {};
@@ -74,6 +92,11 @@ namespace
 // Tiny inline modal for prompting a single name string.
 // =========================================================================
 
+//-----------------------------------------------------------------------------
+// CPromptDialog — single-line text-entry modal.
+//   Reusable prompt used for attribute values and new attribute names; returns
+//   the edited string via Value() after IDOK.
+//-----------------------------------------------------------------------------
 class CPromptDialog : public CDialogEx
 {
 public:
@@ -116,6 +139,10 @@ protected:
 //   bits 24..31  = c
 //   bits 32..47  = id    (uint16)
 
+//
+// CCatalogEditorDialog::Pack — encode a NodeRef into a tree-item lParam
+//   (type/k/d/c in the low bytes, 16-bit id above).
+//
 DWORD_PTR CCatalogEditorDialog::Pack(const NodeRef& r)
 {
     return (static_cast<DWORD_PTR>(r.type) << 0) |
@@ -124,6 +151,9 @@ DWORD_PTR CCatalogEditorDialog::Pack(const NodeRef& r)
            (static_cast<DWORD_PTR>(r.c)    << 24) |
            (static_cast<DWORD_PTR>(r.id)   << 32);
 }
+//
+// CCatalogEditorDialog::Unpack — inverse of Pack; decode a lParam back to a NodeRef.
+//
 CCatalogEditorDialog::NodeRef CCatalogEditorDialog::Unpack(DWORD_PTR p)
 {
     NodeRef r;
@@ -137,6 +167,10 @@ CCatalogEditorDialog::NodeRef CCatalogEditorDialog::Unpack(DWORD_PTR p)
 
 // =========================================================================
 
+//
+// CCatalogEditorDialog::CCatalogEditorDialog — take a deep copy of the live
+//   catalog into m_edit and remember the on-disk path for Save.
+//
 CCatalogEditorDialog::CCatalogEditorDialog(EntityTypeCatalog* live, std::wstring path,
                                            CWnd* parent)
     : CDialogEx(IDD, parent), m_live(live), m_path(std::move(path))
@@ -144,6 +178,10 @@ CCatalogEditorDialog::CCatalogEditorDialog(EntityTypeCatalog* live, std::wstring
     if (m_live) m_edit = *m_live;   // deep copy
 }
 
+//
+// CCatalogEditorDialog::OnInitDialog — configure the attribute grid columns,
+//   clear the detail panel, make the ID field read-only, and build the tree.
+//
 BOOL CCatalogEditorDialog::OnInitDialog()
 {
     CDialogEx::OnInitDialog();
@@ -170,6 +208,10 @@ BOOL CCatalogEditorDialog::OnInitDialog()
     return TRUE;
 }
 
+//
+// CCatalogEditorDialog::SetColumnWidths25_75 — size the attribute grid so the
+//   Attribute column takes ~25% and the Value column the remaining ~75%.
+//
 void CCatalogEditorDialog::SetColumnWidths25_75()
 {
     CListCtrl* lv = (CListCtrl*)GetDlgItem(IDC_LIST_ATTRIBUTES);
@@ -182,6 +224,10 @@ void CCatalogEditorDialog::SetColumnWidths25_75()
     lv->SetColumnWidth(1, totalW - attrW);
 }
 
+//
+// CCatalogEditorDialog::UpdateHintFor — show the hint text for the given
+//   attribute name in the hint label.
+//
 void CCatalogEditorDialog::UpdateHintFor(const CString& name)
 {
     SetDlgItemText(IDC_LBL_CATALOG_HINT, HintFor(name));
@@ -191,6 +237,12 @@ void CCatalogEditorDialog::UpdateHintFor(const CString& name)
 // Tree rebuild
 // -------------------------------------------------------------------------
 
+//
+// CCatalogEditorDialog::RebuildTree — clear and repopulate the whole tree from
+//   m_edit (Kinds > Domains > Categories > Subcategories, plus the Countries
+//   branch), sorting each level by id. Reselects preserveSel if it still exists.
+//   Suppresses selection events during the rebuild.
+//
 void CCatalogEditorDialog::RebuildTree(NodeRef preserveSel)
 {
     CTreeCtrl* tree = (CTreeCtrl*)GetDlgItem(IDC_TREE_CATALOG);
@@ -309,6 +361,10 @@ void CCatalogEditorDialog::RebuildTree(NodeRef preserveSel)
 // Selection handling
 // -------------------------------------------------------------------------
 
+//
+// CCatalogEditorDialog::FindEntry — resolve a NodeRef to its live CatalogEntry
+//   in m_edit; nullptr for Root/Countries headers or a missing entry.
+//
 CatalogEntry* CCatalogEditorDialog::FindEntry(const NodeRef& r)
 {
     switch (r.type)
@@ -345,6 +401,10 @@ CatalogEntry* CCatalogEditorDialog::FindEntry(const NodeRef& r)
     return nullptr;
 }
 
+//
+// CCatalogEditorDialog::OnTreeSelChanged — tree selection handler; unpack the
+//   newly selected node into m_sel and refresh the detail panel.
+//
 void CCatalogEditorDialog::OnTreeSelChanged(NMHDR* pNMHDR, LRESULT* pResult)
 {
     if (pResult) *pResult = 0;
@@ -355,6 +415,11 @@ void CCatalogEditorDialog::OnTreeSelChanged(NMHDR* pNMHDR, LRESULT* pResult)
     RefreshDetail();
 }
 
+//
+// CCatalogEditorDialog::RefreshDetail — repopulate the type label, ID/Name
+//   fields, and attribute grid for the current selection (grid only for
+//   Subcategory nodes, using the parent Category for ordering).
+//
 void CCatalogEditorDialog::RefreshDetail()
 {
     m_suppressEvents = true;
@@ -406,6 +471,12 @@ void CCatalogEditorDialog::RefreshDetail()
     m_suppressEvents = false;
 }
 
+//
+// CCatalogEditorDialog::RefreshAttributeGrid — fill the attribute grid for a
+//   Subcategory. Uses parentCat's attributeNames for row order (blank when the
+//   subcat lacks a value); falls back to the subcat's own map order if no
+//   parent schema is available.
+//
 void CCatalogEditorDialog::RefreshAttributeGrid(const CatalogEntry* sub,
                                                 const CatalogEntry* parentCat)
 {
@@ -437,6 +508,10 @@ void CCatalogEditorDialog::RefreshAttributeGrid(const CatalogEntry* sub,
     }
 }
 
+//
+// CCatalogEditorDialog::OnAttributeRowChanged — grid selection handler; update
+//   the hint label to describe the newly selected attribute.
+//
 void CCatalogEditorDialog::OnAttributeRowChanged(NMHDR* pNMHDR, LRESULT* pResult)
 {
     if (pResult) *pResult = 0;
@@ -448,6 +523,12 @@ void CCatalogEditorDialog::OnAttributeRowChanged(NMHDR* pNMHDR, LRESULT* pResult
     UpdateHintFor(lv->GetItemText(nm->iItem, 0));
 }
 
+//
+// CCatalogEditorDialog::OnAttributeDblClick — edit an attribute value via a
+//   CPromptDialog. For speed fields (name contains "Speed" and
+//   "MetersPerSecond") the entry is run through ParseSpeedMps so Mach/mph/km/h
+//   inputs are converted to m/s. Commits the value to the Subcategory's map.
+//
 void CCatalogEditorDialog::OnAttributeDblClick(NMHDR* pNMHDR, LRESULT* pResult)
 {
     if (pResult) *pResult = 0;
@@ -490,6 +571,10 @@ void CCatalogEditorDialog::OnAttributeDblClick(NMHDR* pNMHDR, LRESULT* pResult)
 // Name editing (commit on every change to the in-memory copy)
 // -------------------------------------------------------------------------
 
+//
+// CCatalogEditorDialog::OnNameChanged — live-commit the Name edit box to the
+//   selected entry and update its tree-item label.
+//
 void CCatalogEditorDialog::OnNameChanged()
 {
     if (m_suppressEvents) return;
@@ -519,6 +604,10 @@ void CCatalogEditorDialog::OnNameChanged()
 // Add node — delegates to CCatalogAddDialog
 // -------------------------------------------------------------------------
 
+//
+// CCatalogEditorDialog::OnAddNode — launch CCatalogAddDialog wired to m_edit and
+//   the current selection; on IDOK rebuild the tree with the new node selected.
+//
 void CCatalogEditorDialog::OnAddNode()
 {
     CCatalogAddDialog dlg(this);
@@ -544,6 +633,11 @@ void CCatalogEditorDialog::OnAddNode()
 // Delete node
 // -------------------------------------------------------------------------
 
+//
+// CCatalogEditorDialog::OnDeleteNode — after confirmation, remove the selected
+//   node and cascade-delete all descendants (Domains/Categories/Subcategories
+//   under a Kind, etc.), then rebuild the tree. Root/Countries headers reject.
+//
 void CCatalogEditorDialog::OnDeleteNode()
 {
     if (m_sel.type == NodeType::Root || m_sel.type == NodeType::Countries)
@@ -618,6 +712,12 @@ void CCatalogEditorDialog::OnDeleteNode()
 // Add Attribute (sibling-propagating)
 // -------------------------------------------------------------------------
 
+//
+// CCatalogEditorDialog::OnAddAttribute — add a new attribute to the selected
+//   Category (or the parent of the selected Subcategory) after prompting for a
+//   name. Rejects duplicates and the reserved "Name"; seeds an empty value on
+//   every sibling Subcategory so the schema stays consistent.
+//
 void CCatalogEditorDialog::OnAddAttribute()
 {
     // Resolve the parent Category for the current selection. We allow
@@ -670,6 +770,11 @@ void CCatalogEditorDialog::OnAddAttribute()
 // Delete Attribute (sibling-propagating)
 // -------------------------------------------------------------------------
 
+//
+// CCatalogEditorDialog::OnDeleteAttribute — after confirmation, remove the
+//   selected attribute from the parent Category's schema and erase it from every
+//   sibling Subcategory's value map.
+//
 void CCatalogEditorDialog::OnDeleteAttribute()
 {
     CListCtrl* lv = (CListCtrl*)GetDlgItem(IDC_LIST_ATTRIBUTES);
@@ -712,6 +817,11 @@ void CCatalogEditorDialog::OnDeleteAttribute()
 // Save / Cancel
 // -------------------------------------------------------------------------
 
+//
+// CCatalogEditorDialog::OnSave — write m_edit to disk and, on success, copy it
+//   into the live catalog. Shows an error box and leaves the live catalog
+//   untouched if the write fails.
+//
 void CCatalogEditorDialog::OnSave()
 {
     if (!m_live) return;
@@ -726,12 +836,18 @@ void CCatalogEditorDialog::OnSave()
     LOG(szError);
 }
 
+//
+// CCatalogEditorDialog::OnSaveClose — save, then close the dialog with IDOK.
+//
 void CCatalogEditorDialog::OnSaveClose()
 {
     OnSave();
     EndDialog(IDOK);
 }
 
+//
+// CCatalogEditorDialog::OnCancel — close without committing; m_edit is discarded.
+//
 void CCatalogEditorDialog::OnCancel()
 {
     // Discard m_edit (deep copy never written back).

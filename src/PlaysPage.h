@@ -1,10 +1,24 @@
+//=============================================================================
+//  PlaysPage.h
+//-----------------------------------------------------------------------------
+//  Declares CPlaysPage, the "Plays" tab: a scrollable, collapsible accordion
+//  of play categories/subcategories built dynamically from the app's Plays
+//  catalog, plus a client-area blurb pane and a gear button that opens the
+//  Plays editor. Clicking a subcategory can load/run its associated scenario.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-07-10
+//=============================================================================
 #pragma once
 
 #include "pch.h"
 #include "Resource.h"
 #include "HelpAwarePage.h"
 
+#include <atlimage.h>   // CImage — gear button PNG (alpha-blended)
 #include <vector>
+
+class CScenarioEditorDialog;
 
 // "Plays" tab: a vertical accordion of collapsible category panels down the
 // left side. Each category is a full-width-of-its-text header button; clicking
@@ -25,8 +39,17 @@ public:
     enum { IDD = IDD_PLAYS_PAGE };
     CPlaysPage(CWnd* pParent = nullptr) : CHelpAwarePage(IDD, pParent) {}
 
+    // The main dialog handles loading/running the scenario when a subcategory
+    // with an associated .ini is clicked. Set once after page creation.
+    void SetMainDialog(CScenarioEditorDialog* main) { m_main = main; }
+
+    // Destroy the accordion's buttons and rebuild from theApp.Plays(). Called
+    // by the main dialog after the Plays editor closes.
+    void ReloadCatalog();
+
 protected:
     BOOL OnInitDialog() override;
+    BOOL PreTranslateMessage(MSG* pMsg) override;   // relay tooltip events
     void GetFieldHelpTable(const FFieldHelp*& outArray, size_t& outCount) const override;
 
     afx_msg void OnSize(UINT nType, int cx, int cy);
@@ -36,6 +59,7 @@ protected:
     afx_msg void OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT lpDrawItemStruct);
     afx_msg void OnHeaderClicked(UINT nID);
     afx_msg void OnItemClicked(UINT nID);
+    afx_msg void OnEditPlays();   // gear button — opens the Plays editor
 
     DECLARE_MESSAGE_MAP()
 
@@ -43,7 +67,8 @@ private:
     struct Play
     {
         CString name;
-        CString blurb;   // plain-English meaning shown in the client area
+        CString blurb;         // plain-English meaning shown in the client area
+        CString scenarioPath;  // associated scenario .ini (may be empty)
     };
     struct Category
     {
@@ -55,6 +80,7 @@ private:
     };
 
     void BuildAccordion();   // create the header / item buttons once
+    void LoadGearImage();    // decode the gear PNG resource into m_gearImg
     void Relayout();         // position everything, honoring collapse + scroll
     void UpdateHeaderText(const Category& cat);  // refresh the expand/collapse glyph
     const Play* FindPlay(UINT itemId) const;
@@ -71,4 +97,11 @@ private:
     CString    m_selName;         // selected play name / meaning (client-area text)
     CString    m_selBlurb;
     CFont      m_titleFont;       // bold font for the selected play's name
+    int        m_blurbTop = 14;   // top inset of the blurb text (pushed below the gear)
+
+    CButton      m_gearBtn;       // top-right of the client area; opens the editor
+    CImage       m_gearImg;       // gear icon (PNG, alpha), drawn owner-draw
+    CToolTipCtrl m_toolTip;       // hover help for the gear button
+
+    CScenarioEditorDialog* m_main = nullptr;  // for load/run on subcategory click
 };

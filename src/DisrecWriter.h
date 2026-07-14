@@ -1,3 +1,13 @@
+//=============================================================================
+//  DisrecWriter.h
+//-----------------------------------------------------------------------------
+//  Declares DisrecWriter, which creates a .disrec DIS recording file: emits
+//  the format header on Open() and appends timestamped PDU records, tracking a
+//  running record count. Counterpart to DisrecReader.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #pragma once
 
 #include <cstddef>

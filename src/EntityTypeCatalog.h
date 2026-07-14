@@ -1,3 +1,14 @@
+//=============================================================================
+//  EntityTypeCatalog.h
+//-----------------------------------------------------------------------------
+//  Declares the in-memory model of EntityTypeCatalog.ini — the SISO-REF-010
+//  Kind / Domain / Country / Category / Subcategory hierarchy plus per-airframe
+//  physical envelopes. Backs the entity-type dropdowns, the Catalog Editor,
+//  and the Validator's envelope checks.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #pragma once
 
 #include <cstdint>
@@ -10,6 +21,13 @@
 // supplies the contents of the Kind / Domain / Country / Category /
 // Subcategory dropdowns on the Asset / Entity Editor tab.
 
+//-----------------------------------------------------------------------------
+// CatalogEntry — one node in the catalog hierarchy (Kind/Domain/Country/
+//                Category/Subcategory).
+//   Carries a numeric id + display name for every node type; the attribute
+//   list/values are only meaningful for Category (schema) and Subcategory
+//   (values) entries.
+//-----------------------------------------------------------------------------
 struct CatalogEntry
 {
     uint16_t    id   = 0;        // SISO-REF-010 numeric ID (uint16 covers Country)
@@ -66,6 +84,12 @@ struct AirframeProfile
     double maxDecelMps2      = 0.0;
 };
 
+//-----------------------------------------------------------------------------
+// EntityTypeCatalog — loads/holds/saves the entity-type hierarchy.
+//   Provides const lookup by (Kind, Domain, Category, Subcategory) for the UI,
+//   mutable container access for the Catalog Editor, and INI load/save. Read-
+//   only after LoadFromIni() unless edited via the Mutable* accessors.
+//-----------------------------------------------------------------------------
 class EntityTypeCatalog
 {
 public:

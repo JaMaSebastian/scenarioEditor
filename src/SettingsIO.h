@@ -1,3 +1,13 @@
+//=============================================================================
+//  SettingsIO.h
+//-----------------------------------------------------------------------------
+//  Declares the persisted per-user UI state (window geometry, paths, Unreal
+//  handoff target, Deploy column widths, saved map places) and the Load/Save
+//  API that reads and atomically writes settings.ini next to the executable.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #pragma once
 
 #include <string>
@@ -17,6 +27,11 @@ struct MapPlace
     double      alt = 0.0;   // eye/viewing altitude in metres (globe camera height)
 };
 
+//-----------------------------------------------------------------------------
+// Settings — the complete persisted UI/app state, one instance per session.
+//   Grouped to mirror the settings.ini sections ([Window], [Paths], [Unreal],
+//   [Deploy], [Places]); members default to sensible first-run values.
+//-----------------------------------------------------------------------------
 struct Settings
 {
     // [Window]

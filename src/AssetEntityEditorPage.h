@@ -1,3 +1,14 @@
+//=============================================================================
+//  AssetEntityEditorPage.h
+//-----------------------------------------------------------------------------
+//  Declares CAssetEntityEditorPage, the "Assets / Entities" property page. It
+//  presents a tree of the scenario's entities and a detail panel for editing
+//  the selected entity's DIS type (catalog-backed cascading combos), identity,
+//  initial position/orientation, timing, and per-entity physical-model options.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #pragma once
 
 #include "pch.h"
@@ -11,6 +22,12 @@ struct Scenario;
 class  EntityTypeCatalog;
 enum class CoordMode : uint8_t;   // full definition in Scenario.h
 
+//-----------------------------------------------------------------------------
+// CAssetEntityEditorPage — property page for editing scenario entities.
+//   Owns the asset tree + detail controls; edits one entity at a time against
+//   a non-owning live Scenario pointer, using a non-owning EntityTypeCatalog to
+//   drive the DIS Kind/Domain/Category/Subcategory dropdowns.
+//-----------------------------------------------------------------------------
 class CAssetEntityEditorPage : public CHelpAwarePage
 {
 public:
@@ -45,25 +62,62 @@ protected:
     BOOL OnInitDialog() override;
     void GetFieldHelpTable(const FFieldHelp*& outArray, size_t& outCount) const override;
 
+    //
+    // Cascading DIS type combos: reselecting a higher level re-filters the
+    // levels below it (Kind -> Domain -> Category -> Subcategory).
+    //
     afx_msg void OnKindChanged();
     afx_msg void OnDomainChanged();
     afx_msg void OnCategoryChanged();
+    //
+    // OnEntityCoordModeChanged — user switched the Initial Coord Mode combo;
+    // reprojects the displayed position triple into the new frame.
+    //
     afx_msg void OnEntityCoordModeChanged();
+    //
+    // OnEntityPhysOverrideRadio — commits the selected physical-model override
+    // radio into the active entity.
+    //
     afx_msg void OnEntityPhysOverrideRadio();
+    //
+    // OnEntitySpeedMultToggle — commits the per-entity speed-multiplier
+    // override checkbox state.
+    //
     afx_msg void OnEntitySpeedMultToggle();
+    //
+    // OnEntityNameChanged — live-updates model + tree label as the name is typed.
+    //
     afx_msg void OnEntityNameChanged();
+    //
+    // OnEditCatalog — opens the catalog editor dialog, then refreshes combos.
+    //
     afx_msg void OnEditCatalog();
+    //
+    // OnInitialSpeedKillFocus — normalizes the initial-speed field (parses units).
+    //
     afx_msg void OnInitialSpeedKillFocus();
+    //
+    // Asset-tree toolbar actions: add / delete / duplicate / reorder / validate
+    // the selected entity.
+    //
     afx_msg void OnAddAsset();
     afx_msg void OnDeleteAsset();
     afx_msg void OnDuplicateAsset();
     afx_msg void OnMoveAsset();
     afx_msg void OnValidateAsset();
+    //
+    // OnAssetTreeSelChanged — commits the previous entity, then loads the newly
+    // selected one into the detail controls.
+    //
     afx_msg void OnAssetTreeSelChanged(NMHDR* pNMHDR, LRESULT* pResult);
 
     DECLARE_MESSAGE_MAP()
 
 private:
+    //
+    // ComboNumericValue — returns the numeric wire ID for a catalog combo:
+    // the selected item's item-data, else a parse of typed text, else fallback.
+    //
     int  ComboNumericValue(UINT comboId, int fallback) const;
 
     void RepopulateDomains();

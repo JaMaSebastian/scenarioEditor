@@ -1,3 +1,15 @@
+//=============================================================================
+//  StartupIniWriter.cpp
+//-----------------------------------------------------------------------------
+//  Implements Write(), which produces DISBrowser's Config\Startup.ini: the
+//  [Startup] level token plus, for the Generic level, [Generic] origin, basemap
+//  (mapping the self-hosted "Cesium 3D" option to Map=Custom), dynamic-tile
+//  flag, and optional painted terrain bounds. Self-hosted Cesium URLs are
+//  appended as raw quoted lines because WritePrivateProfileStringW mangles them.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-07-13
+//=============================================================================
 #include "pch.h"
 #include "StartupIniWriter.h"
 
@@ -7,6 +19,9 @@
 
 namespace
 {
+    //
+    // Widen — UTF-8 std::string to std::wstring via MultiByteToWideChar.
+    //
     std::wstring Widen(const std::string& s)
     {
         if (s.empty()) return {};
@@ -32,6 +47,12 @@ namespace
     }
 }
 
+//
+// StartupIniWriter::Write — validate the project dir, ensure Config\ exists,
+// rewrite Startup.ini from scratch, and (for Generic) emit origin/basemap/
+// terrain-bounds and any self-hosted Cesium URLs. On success outError receives
+// the written path; on failure it receives an error message and returns false.
+//
 bool StartupIniWriter::Write(const std::wstring& disBrowserProjectDir,
                              const std::string&  levelToken,
                              const std::string&  basemap,

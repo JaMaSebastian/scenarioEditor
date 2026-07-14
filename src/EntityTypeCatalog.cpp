@@ -1,3 +1,14 @@
+//=============================================================================
+//  EntityTypeCatalog.cpp
+//-----------------------------------------------------------------------------
+//  Implements EntityTypeCatalog: parsing EntityTypeCatalog.ini into the
+//  in-memory hierarchy (including migration of legacy [Airframe.*] sections
+//  into the per-Subcategory attribute model), const lookups by numeric ID,
+//  the AirframeProfile compatibility shim, and writing the catalog back out.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #include "pch.h"
 #include "EntityTypeCatalog.h"
 #include "../log.h"
@@ -26,6 +37,10 @@ namespace
         return out;
     }
 
+    //
+    // ReadKey — read a single key's string value from a section of the INI.
+    //   Returns an empty string when the key is absent.
+    //
     std::wstring ReadKey(const wchar_t* section, const wchar_t* key,
                          const std::wstring& path)
     {
@@ -69,6 +84,9 @@ namespace
         return false; // more than 4 numeric components
     }
 
+    //
+    // SortById — stable-order a list of catalog entries by ascending numeric id.
+    //
     void SortById(std::vector<CatalogEntry>& v)
     {
         std::sort(v.begin(), v.end(),
@@ -76,12 +94,18 @@ namespace
     }
 }
 
+//
+// EntityTypeCatalog::Domains — Domains catalogued under a Kind; m_empty if none.
+//
 const std::vector<CatalogEntry>& EntityTypeCatalog::Domains(uint8_t kindId) const
 {
     auto it = m_domainsByKind.find(kindId);
     return (it == m_domainsByKind.end()) ? m_empty : it->second;
 }
 
+//
+// EntityTypeCatalog::Categories — Categories under a (Kind, Domain); m_empty if none.
+//
 const std::vector<CatalogEntry>& EntityTypeCatalog::Categories(uint8_t kindId,
                                                                 uint8_t domainId) const
 {
@@ -89,6 +113,10 @@ const std::vector<CatalogEntry>& EntityTypeCatalog::Categories(uint8_t kindId,
     return (it == m_categoriesByKindDomain.end()) ? m_empty : it->second;
 }
 
+//
+// EntityTypeCatalog::Subcategories — Subcategories under a (Kind, Domain,
+//   Category); m_empty if none.
+//
 const std::vector<CatalogEntry>& EntityTypeCatalog::Subcategories(uint8_t kindId,
                                                                   uint8_t domainId,
                                                                   uint8_t categoryId) const
@@ -97,6 +125,12 @@ const std::vector<CatalogEntry>& EntityTypeCatalog::Subcategories(uint8_t kindId
     return (it == m_subcategoriesByKindDomainCategory.end()) ? m_empty : it->second;
 }
 
+//
+// EntityTypeCatalog::Profile — build the legacy AirframeProfile envelope for a
+//   (Kind, Domain, Category, Subcategory) tuple by reading well-known attribute
+//   keys off the Subcategory. Returns a profile with valid=false when the tuple
+//   is unknown or carries no attribute values.
+//
 AirframeProfile EntityTypeCatalog::Profile(uint8_t kindId, uint8_t domainId,
                                            uint8_t categoryId, uint8_t subcategoryId) const
 {
@@ -147,6 +181,9 @@ AirframeProfile EntityTypeCatalog::Profile(uint8_t kindId, uint8_t domainId,
     return p;
 }
 
+//
+// EntityTypeCatalog::Clear — wipe all in-memory hierarchy containers.
+//
 void EntityTypeCatalog::Clear()
 {
     m_kinds.clear();
@@ -156,6 +193,11 @@ void EntityTypeCatalog::Clear()
     m_subcategoriesByKindDomainCategory.clear();
 }
 
+//
+// EntityTypeCatalog::SaveToIni — serialize the catalog to disk in the current
+//   [Category.*]/[Subcategory.*] attribute format (no legacy [Airframe.*]).
+//   Deletes any existing file first to avoid stale sections. Returns true.
+//
 bool EntityTypeCatalog::SaveToIni(const std::wstring& path) const
 {
     // Delete the existing file so we can write fresh (avoids stale
@@ -256,6 +298,13 @@ bool EntityTypeCatalog::SaveToIni(const std::wstring& path) const
     return true;
 }
 
+//
+// EntityTypeCatalog::LoadFromIni — clear and repopulate the catalog from an INI
+//   file. Enumerates every section, dispatches by prefix (Kind/Domain/Country/
+//   Category/Subcategory), migrates legacy [Airframe.*] sections into the
+//   Category schema + Subcategory attribute maps, sorts each list by id, and
+//   logs a summary. Returns Loaded() (false on missing file/empty result).
+//
 bool EntityTypeCatalog::LoadFromIni(const std::wstring& path)
 {
     m_kinds.clear();

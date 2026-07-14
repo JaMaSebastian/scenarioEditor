@@ -1,3 +1,14 @@
+//=============================================================================
+//  AttributesDialog.cpp
+//-----------------------------------------------------------------------------
+//  Implements CAttributesDialog: hosts the Scenario Setup, Asset / Entity
+//  Editor, and Motion Path Editor pages in a tab control, laying them out over
+//  the tab's content area. Populates them from the shared scenario, flushes
+//  edits on close, tracks the dirty state, and routes keyboard shortcuts.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-07-10
+//=============================================================================
 #include "pch.h"
 #include "AttributesDialog.h"
 #include "Scenario.h"
@@ -21,6 +32,10 @@ namespace
     }
 }
 
+//
+// CAttributesDialog — cache the scenario, catalog, help state, and start tab
+// for use during OnInitDialog.
+//
 CAttributesDialog::CAttributesDialog(Scenario* scenario,
                                      const EntityTypeCatalog* catalog,
                                      bool helpActive,
@@ -34,6 +49,9 @@ CAttributesDialog::CAttributesDialog(Scenario* scenario,
 {
 }
 
+//
+// DoDataExchange — bind the tab control member to IDC_ATTR_TABCTRL.
+//
 void CAttributesDialog::DoDataExchange(CDataExchange* pDX)
 {
     CDialogEx::DoDataExchange(pDX);
@@ -53,6 +71,11 @@ BEGIN_MESSAGE_MAP(CAttributesDialog, CDialogEx)
     ON_COMMAND(ID_KB_DUPLICATE_SEGMENT,&CAttributesDialog::OnKbDuplicateSegment)
 END_MESSAGE_MAP()
 
+//
+// OnInitDialog — load accelerators, insert the three tabs, create and populate
+// the hosted pages from the scenario (with dirty tracking suppressed), carry
+// the help state into them, lay them out, and show the requested start tab.
+//
 BOOL CAttributesDialog::OnInitDialog()
 {
     CDialogEx::OnInitDialog();
@@ -94,6 +117,10 @@ BOOL CAttributesDialog::OnInitDialog()
     return TRUE;
 }
 
+//
+// CreatePages — wire each page to the shared scenario/catalog, then create all
+// three as hidden child dialogs overlaid on the tab content area.
+//
 void CAttributesDialog::CreatePages()
 {
     // Parent the pages to the dialog (NOT the tab control) and overlay them on
@@ -119,6 +146,10 @@ void CAttributesDialog::CreatePages()
     m_pages[2] = create(m_pageMotion, IDD_MOTION_PATH_EDITOR_PAGE);
 }
 
+//
+// ShowPage — hide the currently active page and show the one at `index`,
+// positioned/sized to the tab's content rect, and sync the tab selection.
+//
 void CAttributesDialog::ShowPage(int index)
 {
     if (index < 0 || index >= 3) return;
@@ -144,12 +175,19 @@ void CAttributesDialog::ShowPage(int index)
     m_tabCtrl.SetCurSel(index);
 }
 
+//
+// OnTabSelChange — show the page matching the tab control's new selection.
+//
 void CAttributesDialog::OnTabSelChange(NMHDR*, LRESULT* pResult)
 {
     ShowPage(m_tabCtrl.GetCurSel());
     if (pResult) *pResult = 0;
 }
 
+//
+// LayoutChildren — size the tab control to the client area (reserving space at
+// the bottom), pin the Close button bottom-right, and resize the active page.
+//
 void CAttributesDialog::LayoutChildren()
 {
     if (!::IsWindow(m_tabCtrl.GetSafeHwnd())) return;
@@ -192,12 +230,19 @@ void CAttributesDialog::LayoutChildren()
     }
 }
 
+//
+// OnSize — re-run the child layout whenever the dialog is resized.
+//
 void CAttributesDialog::OnSize(UINT nType, int cx, int cy)
 {
     CDialogEx::OnSize(nType, cx, cy);
     LayoutChildren();
 }
 
+//
+// PreTranslateMessage — give the accelerator table first crack at each message
+// so shortcuts fire the ON_COMMAND handlers.
+//
 BOOL CAttributesDialog::PreTranslateMessage(MSG* pMsg)
 {
     if (m_hAccel && ::TranslateAccelerator(m_hWnd, m_hAccel, pMsg))
@@ -205,6 +250,10 @@ BOOL CAttributesDialog::PreTranslateMessage(MSG* pMsg)
     return CDialogEx::PreTranslateMessage(pMsg);
 }
 
+//
+// OnMarkDirtyMessage — a hosted page reported an edit; flag the dialog modified
+// unless dirty tracking is suppressed (during initial population).
+//
 LRESULT CAttributesDialog::OnMarkDirtyMessage(WPARAM /*w*/, LPARAM /*l*/)
 {
     if (!m_suppressDirty)
@@ -212,6 +261,10 @@ LRESULT CAttributesDialog::OnMarkDirtyMessage(WPARAM /*w*/, LPARAM /*l*/)
     return 0;
 }
 
+//
+// CaptureIntoScenario — write the Setup page, the selected Asset/Entity, and
+// the Motion page's pending edits back into the shared scenario.
+//
 void CAttributesDialog::CaptureIntoScenario()
 {
     if (!m_scenario) return;
@@ -244,6 +297,10 @@ void CAttributesDialog::OnCancel()
     CDialogEx::OnCancel();
 }
 
+//
+// OnKb* — keyboard-shortcut handlers: switch to the owning page (Assets = 1,
+// Motion = 2) and synthesize a click on the matching toolbar button.
+//
 void CAttributesDialog::OnKbAddAsset()        { ShowPage(1); FireBnClicked(m_pages[1], IDC_BTN_ADD_ASSET); }
 void CAttributesDialog::OnKbDeleteAsset()     { ShowPage(1); FireBnClicked(m_pages[1], IDC_BTN_DELETE_ASSET); }
 void CAttributesDialog::OnKbDuplicateAsset()  { ShowPage(1); FireBnClicked(m_pages[1], IDC_BTN_DUPLICATE_ASSET); }

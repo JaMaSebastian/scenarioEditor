@@ -1,3 +1,17 @@
+//=============================================================================
+//  PreviewPage.cpp
+//-----------------------------------------------------------------------------
+//  Implements CPreviewPage, the ScenarioEditor "Preview" tab. Drives timed
+//  playback of a scenario, projects entities onto a 2D canvas / Cesium globe,
+//  and implements the authoring gestures (drag start, plot line/ellipse/
+//  take-off/follow courses, set duration/delay, group ops, boundary paint,
+//  map relocation) plus the self-hosted terrain-server controls.
+//  Free helpers (name indexing, path rescale, ellipse snap, TCP probe) and
+//  the small modal dialogs live in an anonymous namespace up top.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #include "pch.h"
 #include "PreviewPage.h"
 #include "Scenario.h"
@@ -5,6 +19,8 @@
 #include "CoordTransforms.h"
 #include "ScenarioWorker.h"   // WM_APP_REFRESH_UI
 #include "ScenarioEditor.h"   // theApp.Catalog() — per-type cruise speed
+#include "EntityTypeCatalog.h"      // CatalogEntry / AirframeProfile
+#include "EntityTypePickerDialog.h" // "Change Entity" catalog tree picker
 #include "../log.h"
 
 #include <algorithm>
@@ -381,6 +397,7 @@ BEGIN_MESSAGE_MAP(CPreviewPage, CHelpAwarePage)
     ON_BN_CLICKED(IDC_BTN_PREVIEW_ZOOM_IN,     &CPreviewPage::OnZoomIn)
     ON_BN_CLICKED(IDC_BTN_PREVIEW_ZOOM_OUT,    &CPreviewPage::OnZoomOut)
     ON_BN_CLICKED(IDC_BTN_PREVIEW_FIT,         &CPreviewPage::OnFit)
+    ON_BN_CLICKED(IDC_BTN_PREVIEW_NEW,         &CPreviewPage::OnNewEntity)
     ON_BN_CLICKED(IDC_CHK_PREVIEW_LABELS,      &CPreviewPage::OnLabelsToggle)
     ON_BN_CLICKED(IDC_CHK_PREVIEW_TRAILS,      &CPreviewPage::OnTrailsToggle)
     ON_BN_CLICKED(IDC_CHK_PREVIEW_PATHS,       &CPreviewPage::OnPathsToggle)
@@ -404,12 +421,19 @@ BEGIN_MESSAGE_MAP(CPreviewPage, CHelpAwarePage)
     ON_WM_DRAWITEM()
 END_MESSAGE_MAP()
 
+//
+// GetFieldHelpTable — hand the base help system this page's per-control help table.
+//
 void CPreviewPage::GetFieldHelpTable(const FFieldHelp*& outArray, size_t& outCount) const
 {
     outArray = kFields;
     outCount = sizeof(kFields) / sizeof(kFields[0]);
 }
 
+//
+// OnCtlColor — paint the dark theme: white text on black for the page,
+//   static labels, declassic'd checkboxes, and combo drop-down lists.
+//
 HBRUSH CPreviewPage::OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor)
 {
     if (!m_blackBrush.GetSafeHandle() || !m_whiteBrush.GetSafeHandle())
@@ -432,6 +456,11 @@ HBRUSH CPreviewPage::OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor)
     }
 }
 
+//
+// OnInitDialog — one-time page setup: dark theme, subclass the canvas, seed the
+//   checkboxes / speed & map-layer combos / places list / dest-time grid, size
+//   the time slider, build the first render state, and start the server poll.
+//
 BOOL CPreviewPage::OnInitDialog()
 {
     CHelpAwarePage::OnInitDialog();
@@ -589,6 +618,10 @@ void CPreviewPage::OnShowWindow(BOOL bShow, UINT nStatus)
     }
 }
 
+//
+// OnMapLayerChange — map-layer combo changed: update m_mapLayer, show/hide the
+//   Cesium globe vs the 2D canvas, and repaint.
+//
 void CPreviewPage::OnMapLayerChange()
 {
     CComboBox* cb = (CComboBox*)GetDlgItem(IDC_COMBO_MAP_LAYER);
@@ -665,6 +698,10 @@ void CPreviewPage::FlyCesiumToOrigin()
     m_cesium.FlyTo(m_scenario->originLatDeg, m_scenario->originLonDeg, CurrentViewAltitude());
 }
 
+//
+// PushCesiumEntities — convert each current entity pose (ENU) to lat/lon/alt and
+//   send it, colored by force, to the 3D globe. No-op unless Cesium is active.
+//
 void CPreviewPage::PushCesiumEntities()
 {
     if (m_mapLayer != MapLayer::Cesium || !m_cesium.GetSafeHwnd() || !m_scenario) return;
@@ -690,6 +727,10 @@ void CPreviewPage::PushCesiumEntities()
     m_cesium.SetEntities(pts);
 }
 
+//
+// OnMapPlaceChange — a saved Location was picked: relocate the map/scenario
+//   origin to that place (flying the globe to its captured height if any).
+//
 void CPreviewPage::OnMapPlaceChange()
 {
     CComboBox* cb = (CComboBox*)GetDlgItem(IDC_COMBO_MAP_PLACE);
@@ -701,6 +742,10 @@ void CPreviewPage::OnMapPlaceChange()
     ApplyMapPlace(mp.lat, mp.lon, mp.alt > 0.0 ? mp.alt : -1.0);
 }
 
+//
+// OnMapAddPlace — "Add Location": prompt (prefilled from the current view),
+//   append the new MapPlace, persist Settings, then fly there.
+//
 void CPreviewPage::OnMapAddPlace()
 {
     const double lat = m_scenario ? m_scenario->originLatDeg : 0.0;
@@ -720,6 +765,10 @@ void CPreviewPage::OnMapAddPlace()
     ApplyMapPlace(p.lat, p.lon, p.alt > 0.0 ? p.alt : -1.0);
 }
 
+//
+// OnMapDelPlace — remove the selected saved Location, persist, and reselect a
+//   neighboring entry.
+//
 void CPreviewPage::OnMapDelPlace()
 {
     CComboBox* cb = (CComboBox*)GetDlgItem(IDC_COMBO_MAP_PLACE);
@@ -784,12 +833,20 @@ void CPreviewPage::OnMapCapturePlace()
     PopulatePlacesCombo(static_cast<int>(theApp.Settings().mapPlaces.size()) - 1);
 }
 
+//
+// OnMapMoveEntitiesToggle — remember whether a Location change should drag the
+//   entities along (vs. leaving them world-fixed).
+//
 void CPreviewPage::OnMapMoveEntitiesToggle()
 {
     if (CButton* b = (CButton*)GetDlgItem(IDC_CHK_MAP_MOVE_ENTITIES))
         m_moveEntitiesWithMap = (b->GetCheck() == BST_CHECKED);
 }
 
+//
+// PopulatePlacesCombo — refill the Location drop-down from saved settings,
+//   optionally selecting row `selectIdx`.
+//
 void CPreviewPage::PopulatePlacesCombo(int selectIdx)
 {
     CComboBox* cb = (CComboBox*)GetDlgItem(IDC_COMBO_MAP_PLACE);
@@ -802,12 +859,21 @@ void CPreviewPage::PopulatePlacesCombo(int selectIdx)
         cb->SetCurSel(selectIdx);
 }
 
+//
+// RefreshMapView — rebuild the render state and repaint the canvas after a map change.
+//
 void CPreviewPage::RefreshMapView()
 {
     RebuildRenderState();
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
 
+//
+// ApplyMapPlace — re-anchor the scenario origin to (lat,lon). Depending on the
+//   "move entities" toggle, either drag the scene with the origin or keep every
+//   entity world-fixed (re-expressing Local geometry against the new origin).
+//   Rebuilds caches, repaints, and flies the globe camera. Marks the model dirty.
+//
 void CPreviewPage::ApplyMapPlace(double lat, double lon, double flyHeightM)
 {
     if (!m_scenario) { RefreshMapView(); return; }
@@ -899,6 +965,10 @@ void CPreviewPage::ApplyMapPlace(double lat, double lon, double flyHeightM)
         top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
 }
 
+//
+// EffectivePreviewDuration — playback span in seconds: the larger of the authored
+//   scenario duration and the latest enabled segment end (falls back to 300s).
+//
 double CPreviewPage::EffectivePreviewDuration() const
 {
     double dur = (m_scenario && m_scenario->durationSeconds > 0.0)
@@ -914,12 +984,18 @@ double CPreviewPage::EffectivePreviewDuration() const
     return dur;
 }
 
+//
+// UpdateSliderRange — size the time slider to the effective duration (0.1 s ticks).
+//
 void CPreviewPage::UpdateSliderRange()
 {
     if (CSliderCtrl* s = (CSliderCtrl*)GetDlgItem(IDC_SLIDER_PREVIEW_TIME))
         s->SetRange(0, static_cast<int>(EffectivePreviewDuration() * 10.0), TRUE);
 }
 
+//
+// StartTimer — begin the ~30 Hz animation timer (idempotent).
+//
 void CPreviewPage::StartTimer()
 {
     if (m_timerActive) return;
@@ -927,6 +1003,9 @@ void CPreviewPage::StartTimer()
     m_timerActive = true;
 }
 
+//
+// StopTimer — stop the animation timer (idempotent).
+//
 void CPreviewPage::StopTimer()
 {
     if (!m_timerActive) return;
@@ -934,6 +1013,10 @@ void CPreviewPage::StopTimer()
     m_timerActive = false;
 }
 
+//
+// OnStart — begin playback: from Idle reset to t=0 and clear trails, then run
+//   the animation timer.
+//
 void CPreviewPage::OnStart()
 {
     if (!m_scenario || m_scenario->durationSeconds <= 0.0) return;
@@ -948,6 +1031,9 @@ void CPreviewPage::OnStart()
     StartTimer();
 }
 
+//
+// OnPause — pause playback while keeping the current time.
+//
 void CPreviewPage::OnPause()
 {
     if (m_runState != PreviewState::Playing) return;
@@ -955,6 +1041,9 @@ void CPreviewPage::OnPause()
     StopTimer();
 }
 
+//
+// OnResume — resume from Paused, re-basing the tick clock so time doesn't jump.
+//
 void CPreviewPage::OnResume()
 {
     if (m_runState != PreviewState::Paused) return;
@@ -963,6 +1052,9 @@ void CPreviewPage::OnResume()
     StartTimer();
 }
 
+//
+// OnStop — stop playback and reset to t=0, clearing trails and repainting.
+//
 void CPreviewPage::OnStop()
 {
     StopTimer();
@@ -987,6 +1079,11 @@ void CPreviewPage::OnSpeedChange()
     }
 }
 
+//
+// OnTimer — timer dispatch: the server-poll timer refreshes terrain UI; the
+//   animation timer advances preview time by dt*speed, clamps/stops at the end,
+//   and repaints.
+//
 void CPreviewPage::OnTimer(UINT_PTR id)
 {
     if (id == kServerPollTimerId) { RefreshTerrainServerUi(); return; }
@@ -1013,6 +1110,10 @@ void CPreviewPage::OnTimer(UINT_PTR id)
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
 
+//
+// OnHScroll — time-slider scrub: set preview time from the slider position,
+//   discard trail history, and repaint.
+//
 void CPreviewPage::OnHScroll(UINT code, UINT pos, CScrollBar* sb)
 {
     if (m_suppressScroll) { CHelpAwarePage::OnHScroll(code, pos, sb); return; }
@@ -1029,6 +1130,9 @@ void CPreviewPage::OnHScroll(UINT code, UINT pos, CScrollBar* sb)
     CHelpAwarePage::OnHScroll(code, pos, sb);
 }
 
+//
+// OnZoomIn — zoom the canvas in one step (about the view center).
+//
 void CPreviewPage::OnZoomIn()
 {
     m_zoomMetersPerPx /= 1.25;
@@ -1037,6 +1141,9 @@ void CPreviewPage::OnZoomIn()
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
 
+//
+// OnZoomOut — zoom the canvas out one step (about the view center).
+//
 void CPreviewPage::OnZoomOut()
 {
     m_zoomMetersPerPx *= 1.25;
@@ -1045,6 +1152,9 @@ void CPreviewPage::OnZoomOut()
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
 
+//
+// OnFit — re-fit the whole scenario to the canvas and repaint.
+//
 void CPreviewPage::OnFit()
 {
     FitScenario();
@@ -1096,6 +1206,9 @@ void CPreviewPage::ZoomAtPixel(double factor, int cursorXPx, int cursorYPx)
     m_canvas.Invalidate(FALSE);
 }
 
+//
+// OnLabelsToggle — toggle entity labels and repaint.
+//
 void CPreviewPage::OnLabelsToggle()
 {
     m_showLabels = IsDlgButtonChecked(IDC_CHK_PREVIEW_LABELS) == BST_CHECKED;
@@ -1103,6 +1216,9 @@ void CPreviewPage::OnLabelsToggle()
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
 
+//
+// OnTrailsToggle — toggle motion trails (clearing history when off) and repaint.
+//
 void CPreviewPage::OnTrailsToggle()
 {
     m_showTrails = IsDlgButtonChecked(IDC_CHK_PREVIEW_TRAILS) == BST_CHECKED;
@@ -1111,6 +1227,9 @@ void CPreviewPage::OnTrailsToggle()
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
 
+//
+// OnPathsToggle — toggle drawing of configured motion paths and repaint.
+//
 void CPreviewPage::OnPathsToggle()
 {
     m_showPaths = IsDlgButtonChecked(IDC_CHK_PREVIEW_PATHS) == BST_CHECKED;
@@ -1118,6 +1237,9 @@ void CPreviewPage::OnPathsToggle()
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
 
+//
+// OnOrientationToggle — toggle per-entity heading vectors and repaint.
+//
 void CPreviewPage::OnOrientationToggle()
 {
     m_showOrientation = IsDlgButtonChecked(IDC_CHK_PREVIEW_ORIENTATION) == BST_CHECKED;
@@ -1125,6 +1247,9 @@ void CPreviewPage::OnOrientationToggle()
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
 
+//
+// OnTerrainToggle — toggle the level land/ocean footprint overlay and repaint.
+//
 void CPreviewPage::OnTerrainToggle()
 {
     m_showTerrain = IsDlgButtonChecked(IDC_CHK_PREVIEW_TERRAIN) == BST_CHECKED;
@@ -1132,6 +1257,9 @@ void CPreviewPage::OnTerrainToggle()
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
 
+//
+// OnLegendToggle — toggle the size/direction legend overlay and repaint.
+//
 void CPreviewPage::OnLegendToggle()
 {
     m_showLegend = IsDlgButtonChecked(IDC_CHK_PREVIEW_LEGEND) == BST_CHECKED;
@@ -1202,6 +1330,11 @@ void CPreviewPage::OnBoundaryPainted(double latMinDeg, double latMaxDeg,
         top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
 }
 
+//
+// OnBuildTerrain — kick off the DEM download + WSL/Docker tiling pipeline for the
+//   painted terrain box. Validates the box + locates retile_terrain.cmd, confirms
+//   with the operator, then ShellExecutes the script.
+//
 void CPreviewPage::OnBuildTerrain()
 {
     if (!m_scenario || !m_scenario->terrainBoundsValid)
@@ -1310,6 +1443,11 @@ void CPreviewPage::RefreshTerrainServerUi()
                : "PreviewPage: terrain server DOWN");
 }
 
+//
+// OnStartTerrainServer — launch the self-hosted tile server (serve_terrain.cmd) in
+//   its own console unless it's already up; the poll timer flips the UI once :8088
+//   answers.
+//
 void CPreviewPage::OnStartTerrainServer()
 {
     if (m_terrainServerUp || ProbeTcpPort("127.0.0.1", 8088, 250))
@@ -1561,6 +1699,8 @@ void CPreviewPage::RenameEntity(size_t idx)
     if (idx >= m_scenario->entities.size()) return;
     Entity& e = m_scenario->entities[idx];
 
+    // Prompt for a new label (seeded with the current one); write it to both
+    // name and marking so every view stays in sync.
     const CString initial(EntityDisplayName(e).c_str());
     CPromptDialog dlg(_T("Rename Entity"), _T("Name:"), initial, this);
     if (dlg.DoModal() != IDOK) return;
@@ -1580,6 +1720,116 @@ void CPreviewPage::RenameEntity(size_t idx)
         top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
 }
 
+void CPreviewPage::ChangeEntity(size_t idx)
+{
+    if (!m_scenario) return;
+    if (idx >= m_scenario->entities.size()) return;
+    Entity& e = m_scenario->entities[idx];
+
+    // Read-only catalog tree picker, pre-selected to the entity's current type.
+    CEntityTypePickerDialog dlg(&theApp.Catalog(),
+                                e.kind, e.domain, e.category, e.subcategory, this);
+    if (dlg.DoModal() != IDOK || !dlg.HasSelection()) return;
+
+    uint8_t k = 0, d = 0, c = 0, sub = 0;
+    dlg.GetSelection(k, d, c, sub);
+
+    // Re-type (leave country/specific/extra alone).
+    e.kind = k; e.domain = d; e.category = c; e.subcategory = sub;
+
+    // Update the on-screen label to the new type's catalog name.
+    for (const CatalogEntry& ce : theApp.Catalog().Subcategories(k, d, c))
+        if (ce.id == sub)
+        {
+            e.name = ce.name;
+            if (!e.marking.empty()) e.marking = ce.name.substr(0, 11);  // DIS marking = 11 chars
+            break;
+        }
+
+    // Re-derive speed/attributes from the new type's cruise speed. Silent if the
+    // type has no catalog cruise (unlike Refresh Speed, which nags) — the type
+    // change itself already succeeded. Validator envelope + dest-time recompute
+    // from the type on demand.
+    const AirframeProfile prof = theApp.Catalog().Profile(k, d, c, sub);
+    if (prof.valid && prof.cruiseSpeedMps > 0.0)
+    {
+        m_refreshFailed.erase(idx);
+        RefreshPathSpeed(e, prof.cruiseSpeedMps, m_scenario);
+        e.initialSpeedMps = prof.cruiseSpeedMps;
+    }
+
+    RebuildPathsCache();
+    RebuildRenderState();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+}
+
+void CPreviewPage::OnNewEntity()
+{
+    if (!m_scenario) return;
+
+    Entity fresh;
+    // Default to the octopus interceptor drone (Platform / Air / UAV).
+    fresh.kind = 1; fresh.domain = 2; fresh.category = 50; fresh.subcategory = 98;
+    fresh.country = 225;
+
+    // Unique EntityID = max existing + 1 (same rule as the Assets page).
+    uint16_t next = 1;
+    for (const Entity& e : m_scenario->entities)
+        if (e.entityId >= next) next = static_cast<uint16_t>(e.entityId + 1);
+    fresh.entityId = next;
+
+    // Label from the catalog type name (fallback if the type isn't catalogued).
+    std::string typeName = "Octopus Drone";
+    for (const CatalogEntry& ce : theApp.Catalog().Subcategories(1, 2, 50))
+        if (ce.id == 98) { typeName = ce.name; break; }
+    fresh.name    = typeName;
+    fresh.marking = typeName.substr(0, 11);   // DIS marking = 11 chars
+
+    // Place in the upper-right REGION of the current preview view (not jammed
+    // into the pixel corner). A brand-new entity faces north (heading 0), so
+    // "Plot > Line" draws its 2 km starter segment straight UP; if the entity
+    // sat right at the top edge that line — and its draggable end-anchor — would
+    // run off-screen and look like nothing happened. Insetting ~20-25% keeps the
+    // entity and a northward starter line comfortably visible. Fall back to an
+    // up-and-right offset from the view center if the canvas isn't ready yet.
+    double east = m_centerEnuE + 500.0;
+    double north = m_centerEnuN + 500.0;
+    if (m_canvas.GetSafeHwnd())
+    {
+        CRect rc; m_canvas.GetClientRect(&rc);
+        if (rc.Width() > 0 && rc.Height() > 0)
+        {
+            const int px = rc.left + (rc.Width()  * 4) / 5;   // ~80% across (right side)
+            const int py = rc.top  + (rc.Height() * 1) / 4;   // ~25% down  (upper area)
+            double e = 0.0, n = 0.0;
+            if (m_canvas.UnprojectToEnu(CPoint(px, py), e, n))
+            {
+                east = e; north = n;
+            }
+        }
+    }
+    // Fill all coordinate representations consistently from ENU (east, north, up).
+    SetEntityInitialEnu(fresh, east, north, 0.0);
+
+    m_scenario->entities.push_back(std::move(fresh));
+
+    // NOTE: do NOT group-select the new entity. A group-selected entity's
+    // right-click menu is the GROUP menu (Set Duration / Refresh Speed only) —
+    // the per-entity Plot / Rename / Change Entity items are suppressed. Leaving
+    // the freshly-added drone group-selected made "Plot > Line" unavailable.
+    RebuildPathsCache();
+    RebuildRenderState();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+}
+
+//
+// DeleteEntity — remove entity `idx` (never the last one), refresh caches, and
+//   reload the other tabs.
+//
 void CPreviewPage::DeleteEntity(size_t idx)
 {
     if (!m_scenario) return;
@@ -1654,6 +1904,79 @@ void CPreviewPage::PlotLineCourse(size_t idx)
     seg.endHeadingDeg   = e.headingDeg;
 
     // "Plot a course" replaces any existing motion with this single Line.
+    e.motionSegments.clear();
+    e.motionSegments.push_back(std::move(seg));
+
+    RebuildPathsCache();
+    RebuildRenderState();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+}
+
+bool CPreviewPage::CanTakeoff(size_t idx) const
+{
+    if (!m_scenario || idx >= m_scenario->entities.size()) return false;
+    const Entity& e = m_scenario->entities[idx];
+    // Take-off applies to fixed-wing aircraft: Kind 1 (Platform), Domain 2 (Air).
+    return e.kind == 1 && e.domain == 2;
+}
+
+void CPreviewPage::PlotTakeoffLine(size_t idx)
+{
+    if (!m_scenario) return;
+    if (idx >= m_scenario->entities.size()) return;
+    Entity& e = m_scenario->entities[idx];
+
+    // Anchor at the entity's current preview position (its start), like Plot>Line.
+    double east = 0.0, north = 0.0, up = 0.0;
+    if (idx < m_state.poses.size())
+    {
+        east  = m_state.poses[idx].enuE;
+        north = m_state.poses[idx].enuN;
+        up    = m_state.poses[idx].enuU;
+    }
+    else
+    {
+        CoordTransforms::EcefToLocalEnuDeg(
+            e.ecefX, e.ecefY, e.ecefZ,
+            m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM,
+            east, north, up);
+    }
+
+    // Cruise (the speed reached at the END of the take-off roll); fall back to
+    // 100 m/s when the type isn't catalogued.
+    double speed = 0.0;
+    const AirframeProfile prof = theApp.Catalog().Profile(
+        e.kind, e.domain, e.category, e.subcategory);
+    if (prof.valid && prof.cruiseSpeedMps > 0.0) speed = prof.cruiseSpeedMps;
+    if (speed <= 0.0) speed = 100.0;
+
+    // Straight starter roll along the entity's heading, at the current altitude
+    // (a take-off roll stays on the runway; the operator climbs on the NEXT leg
+    // by raising its end altitude). Drag the pink end-anchor to the real
+    // lift-off point. Duration = 2*length/speed so, accelerating from a stop at a
+    // constant rate, the entity reaches cruise exactly at the end.
+    const double initLen = 2000.0;   // 2 km starter — visible and grabbable
+    const double hr      = e.headingDeg * (3.14159265358979323846 / 180.0);
+
+    MotionSegment seg;
+    seg.type              = MotionType::Line;
+    seg.coordMode         = CoordMode::Local;
+    seg.accelerateFromStop = true;   // start stopped, accelerate to `speed`
+    seg.startSecond       = 0.0;
+    seg.endSecond         = (speed > 0.0) ? (2.0 * initLen / speed) : 60.0;
+    seg.speedMps          = speed;
+    seg.startLocalX       = east;
+    seg.startLocalY       = north;
+    seg.startLocalZ       = up;
+    seg.endLocalX         = east  + initLen * std::sin(hr);
+    seg.endLocalY         = north + initLen * std::cos(hr);
+    seg.endLocalZ         = up;
+    seg.startHeadingDeg   = e.headingDeg;
+    seg.endHeadingDeg     = e.headingDeg;
+
+    // "Plot a course" replaces any existing motion with this single take-off Line.
     e.motionSegments.clear();
     e.motionSegments.push_back(std::move(seg));
 
@@ -1768,18 +2091,19 @@ void CPreviewPage::PlotEntityEllipse(size_t idx, bool clockwise)
     Entity& e = m_scenario->entities[idx];
     const Entity& target = m_scenario->entities[targetIdx];
 
-    // Center the initial orbit on the TARGET's current preview position.
+    // Center the initial orbit on the TARGET's position AT THE ORBIT'S START TIME
+    // (t = 0 here), NOT at the currently-scrubbed preview time. This is a FOLLOW
+    // orbit: at playback the sampler re-centers it on the target's live position,
+    // so the orbit start = target(t) + a fixed offset baked in by SnapEllipse. For
+    // the orbiter to begin circling right where it sits (no jump onto the orbit),
+    // that offset must be measured against the target's position at the same
+    // instant the orbit begins. Using the scrubbed-time target position instead
+    // introduces a gap whenever the preview isn't parked at t = 0.
     double cE = 0.0, cN = 0.0, up = 0.0;
-    if (targetIdx < m_state.poses.size())
     {
-        cE = m_state.poses[targetIdx].enuE;
-        cN = m_state.poses[targetIdx].enuN;
-        up = m_state.poses[targetIdx].enuU;
-    }
-    else
-    {
+        const SampledPose tgt0 = MotionSampler::SamplePose(target, *m_scenario, 0.0);
         CoordTransforms::EcefToLocalEnuDeg(
-            target.ecefX, target.ecefY, target.ecefZ,
+            tgt0.ecefX, tgt0.ecefY, tgt0.ecefZ,
             m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM,
             cE, cN, up);
     }
@@ -1938,13 +2262,16 @@ void CPreviewPage::DragLineEnd(size_t entityIdx, size_t segIdx, double enuE, dou
     seg.endLocalY = enuN;
 
     // Keep travel time consistent with the type's cruise speed over the new
-    // distance, so the entity still arrives at the end at endSecond.
+    // distance, so the entity still arrives at the end at endSecond. A take-off
+    // leg accelerates from 0 to `speedMps`, so its average speed is half cruise
+    // and it needs twice the time (2*dist/speed) to reach cruise at the end.
     const double dx = seg.endLocalX - seg.startLocalX;
     const double dy = seg.endLocalY - seg.startLocalY;
     const double dz = seg.endLocalZ - seg.startLocalZ;
     const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
     if (seg.speedMps > 0.0 && dist > 0.0)
-        seg.endSecond = seg.startSecond + dist / seg.speedMps;
+        seg.endSecond = seg.startSecond +
+            (seg.accelerateFromStop ? (2.0 * dist / seg.speedMps) : (dist / seg.speedMps));
 
     // Keep a chained next leg glued to this moving end so the multi-leg course
     // stays connected (drag a junction -> the following leg's start follows).
@@ -1992,6 +2319,9 @@ void CPreviewPage::DragLineEnd(size_t entityIdx, size_t segIdx, double enuE, dou
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
 
+//
+// EndLineEndDrag — commit a finished line-end drag: reload the other tabs and mark dirty.
+//
 void CPreviewPage::EndLineEndDrag()
 {
     if (CWnd* top = GetTopLevelParent())
@@ -2138,18 +2468,27 @@ void CPreviewPage::AddEntityEllipseToEnd(size_t entityIdx, bool clockwise)
         m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM,
         attachE, attachN, attachU);
 
-    // Center the orbit on the target's current preview position.
+    // Center the orbit on the target's position AT THE TRANSITION TIME (when the
+    // orbiter actually flies off the line onto the orbit), NOT at whatever time
+    // the preview is currently scrubbed to.
+    //
+    // This is a FOLLOW orbit: at playback the sampler re-centers it every frame on
+    // the target's LIVE position (MotionSampler::ResolveFollowCenterEcef), so the
+    // orbit's start point is (target(t) + a fixed start-offset baked in by
+    // SnapEllipse). For the entity to flow off the line WITHOUT A JUMP, the orbit
+    // start must coincide with the line end exactly when the orbiter arrives —
+    // t = prev.endSecond (== the new segment's startSecond). Snapping against the
+    // target's *authoring-time* (scrubbed) position instead is what left the gap:
+    // by the time the orbiter reached the line end, the target (e.g. the cargo
+    // ship) had sailed on, and the re-centered orbit no longer began at the line
+    // end. Sampling the target at prev.endSecond bakes in the right offset so the
+    // re-centering lands the orbit start exactly on the line end at the handoff.
+    const double t0 = prev.endSecond;   // == seg.startSecond, set below
     double cE = 0.0, cN = 0.0, up = 0.0;
-    if (targetIdx < m_state.poses.size())
     {
-        cE = m_state.poses[targetIdx].enuE;
-        cN = m_state.poses[targetIdx].enuN;
-        up = m_state.poses[targetIdx].enuU;
-    }
-    else
-    {
+        const SampledPose tgt0 = MotionSampler::SamplePose(target, *m_scenario, t0);
         CoordTransforms::EcefToLocalEnuDeg(
-            target.ecefX, target.ecefY, target.ecefZ,
+            tgt0.ecefX, tgt0.ecefY, tgt0.ecefZ,
             m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM,
             cE, cN, up);
     }
@@ -2266,6 +2605,10 @@ void CPreviewPage::SetEntityDelay(size_t idx)
         top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
 }
 
+//
+// SetSelectedEntities — replace the group selection with the given entity indices
+//   (clearing refresh-failed flags), then repaint.
+//
 void CPreviewPage::SetSelectedEntities(const std::vector<size_t>& idxs)
 {
     m_selected.clear();
@@ -2277,6 +2620,9 @@ void CPreviewPage::SetSelectedEntities(const std::vector<size_t>& idxs)
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
 
+//
+// ClearSelection — drop the group selection and refresh-failed flags, then repaint.
+//
 void CPreviewPage::ClearSelection()
 {
     if (m_selected.empty() && m_refreshFailed.empty()) return;
@@ -2346,6 +2692,10 @@ void CPreviewPage::RefreshGroupSpeed()
         top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
 }
 
+//
+// RefreshEntitySpeed — re-pull one entity's catalog cruise speed onto its moving
+//   segments (nags if the type has no catalog cruise).
+//
 void CPreviewPage::RefreshEntitySpeed(size_t idx)
 {
     if (!m_scenario || idx >= m_scenario->entities.size()) return;
@@ -2372,6 +2722,9 @@ void CPreviewPage::RefreshEntitySpeed(size_t idx)
         top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
 }
 
+//
+// OnDestTimeToggle — show/hide the destination-time grid, populating it when shown.
+//
 void CPreviewPage::OnDestTimeToggle()
 {
     m_showDestTime = IsDlgButtonChecked(IDC_CHK_PREVIEW_DESTTIME) == BST_CHECKED;
@@ -2404,6 +2757,11 @@ void CPreviewPage::OnPropertiesItemChanged(NMHDR* pNMHDR, LRESULT* pResult)
     m_suppressPropsRefresh = false;
 }
 
+//
+// RefreshDestTimeList — rebuild the properties grid: per entity the scheduled path
+//   Duration, geometric Path Time (at catalog cruise), Cruise speed, and an
+//   Infinite flag for terminal orbits. Each row stores its entity index.
+//
 void CPreviewPage::RefreshDestTimeList()
 {
     CListCtrl* lc = (CListCtrl*)GetDlgItem(IDC_LIST_PREVIEW_DESTTIME);
@@ -2484,6 +2842,10 @@ void CPreviewPage::RefreshDestTimeList()
     lc->Invalidate();
 }
 
+//
+// SetEntityInitialEnu — write an entity's initial pose from scenario-origin ENU,
+//   keeping its ECEF / Local / geodetic representations consistent.
+//
 void CPreviewPage::SetEntityInitialEnu(Entity& e, double east, double north,
                                        double up) const
 {
@@ -2502,6 +2864,10 @@ void CPreviewPage::SetEntityInitialEnu(Entity& e, double east, double north,
     e.lat = lat; e.lon = lon; e.alt = alt;
 }
 
+//
+// SetSegmentStartEnu — write a segment's start point from scenario-origin ENU,
+//   keeping its ECEF / Local / geodetic representations consistent.
+//
 void CPreviewPage::SetSegmentStartEnu(MotionSegment& s, double east, double north,
                                       double up) const
 {
@@ -2518,6 +2884,10 @@ void CPreviewPage::SetSegmentStartEnu(MotionSegment& s, double east, double nort
     s.startLat = lat; s.startLon = lon; s.startAlt = alt;
 }
 
+//
+// SetEllipseStartBearing — set a non-Local ellipse's start bearing so its start
+//   point lands at (east,north), using the cached orbit center.
+//
 void CPreviewPage::SetEllipseStartBearing(size_t entityIdx, size_t segIdx,
                                           MotionSegment& s,
                                           double east, double north) const
@@ -2538,6 +2908,10 @@ void CPreviewPage::SetEllipseStartBearing(size_t entityIdx, size_t segIdx,
     s.startBearingDeg = brg;
 }
 
+//
+// UpdateSliderFromTime — reflect the current preview time on the slider without
+//   re-triggering the scroll handler.
+//
 void CPreviewPage::UpdateSliderFromTime()
 {
     if (CSliderCtrl* s = (CSliderCtrl*)GetDlgItem(IDC_SLIDER_PREVIEW_TIME))
@@ -2633,6 +3007,10 @@ void CPreviewPage::RebuildPathsCache()
     }
 }
 
+//
+// FocusToEnu — resolve one ellipse focus (f1/f2, per coordMode) to scenario-origin
+//   ENU east/north.
+//
 void CPreviewPage::FocusToEnu(const MotionSegment& s, bool focus2,
                               double& outE, double& outN) const
 {
@@ -2671,6 +3049,9 @@ void CPreviewPage::FocusToEnu(const MotionSegment& s, bool focus2,
         outE, outN, up);
 }
 
+//
+// FindEntityIndexById — index of the entity with matching entityId, or -1.
+//
 int CPreviewPage::FindEntityIndexById(int entityId) const
 {
     if (!m_scenario || entityId < 0) return -1;
@@ -2680,6 +3061,11 @@ int CPreviewPage::FindEntityIndexById(int entityId) const
     return -1;
 }
 
+//
+// FollowCenterOffset — ENU delta from a follow-ellipse's stored foci midpoint to
+//   the target's current position; false unless it's a follow ellipse with a
+//   live target.
+//
 bool CPreviewPage::FollowCenterOffset(const MotionSegment& s,
                                       double& outDE, double& outDN) const
 {
@@ -2732,6 +3118,10 @@ void CPreviewPage::AppendFollowEllipsePath(size_t entityIdx, const MotionSegment
     }
 }
 
+//
+// FitScenario — compute zoom + center so every entity path (and the terrain
+//   overlay) fits the canvas with ~10% padding.
+//
 void CPreviewPage::FitScenario()
 {
     if (!m_scenario || m_scenario->entities.empty())

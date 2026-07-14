@@ -1,3 +1,13 @@
+//=============================================================================
+//  UdpSender.h
+//-----------------------------------------------------------------------------
+//  Declares UdpSender, a lazily-opened IPv4 UDP socket wrapper that sends
+//  datagrams to a host:port, automatically applying multicast socket options
+//  (TTL/interface/loopback) when the destination is in 224.0.0.0/4.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #pragma once
 
 #include <cstddef>

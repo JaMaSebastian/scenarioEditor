@@ -1,3 +1,14 @@
+//=============================================================================
+//  ScenarioEditorDialog.h
+//-----------------------------------------------------------------------------
+//  Declares CScenarioEditorDialog, the main application window. Hosts the
+//  toolbar, tab control (Run / Plays / Deploy / Preview), and status bar,
+//  owns the editable Scenario model and the playback worker, and coordinates
+//  File I/O, dirty tracking, validation, and the modal Attributes notebook.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-21
+//=============================================================================
 #pragma once
 
 #include "pch.h"
@@ -10,12 +21,22 @@
 #include "DeployPage.h"
 #include "PreviewPage.h"
 
+//-----------------------------------------------------------------------------
+// CScenarioEditorDialog — the top-level modal dialog / main window.
+//   Manages page hosting and layout, drives playback via ScenarioWorker,
+//   and mediates load/save/validate against the shared Scenario model.
+//-----------------------------------------------------------------------------
 class CScenarioEditorDialog : public CDialogEx
 {
 public:
     enum { IDD = IDD_SCENARIO_EDITOR_DIALOG };
 
     CScenarioEditorDialog(CWnd* pParent = nullptr);
+
+    // Load (and optionally run) the scenario associated with a Plays
+    // subcategory. Mirrors File > Open: prompts on unsaved changes, refreshes
+    // the UI, clears the dirty flag. Empty path is a no-op.
+    void LoadScenarioForPlay(const CString& iniPath, bool alsoRun);
 
 protected:
     void DoDataExchange(CDataExchange* pDX) override;

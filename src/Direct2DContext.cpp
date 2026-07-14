@@ -1,3 +1,13 @@
+//=============================================================================
+//  Direct2DContext.cpp
+//-----------------------------------------------------------------------------
+//  Implements the shared Direct2D/DirectWrite factory accessors. Each factory
+//  is created on first use (single-threaded D2D factory, shared DWrite factory)
+//  and cached in a process-global; Shutdown() releases both.
+//
+//  Author:        Matt Sebastian
+//  Date started:  2026-05-25
+//=============================================================================
 #include "pch.h"
 #include "Direct2DContext.h"
 
@@ -7,6 +17,10 @@ namespace
     IDWriteFactory* g_dwrite  = nullptr;
 }
 
+//
+// Factory — returns the process-wide ID2D1Factory, creating a single-threaded
+//   one on first call. May return null if creation fails.
+//
 ID2D1Factory* Direct2DContext::Factory()
 {
     if (!g_factory)
@@ -20,6 +34,10 @@ ID2D1Factory* Direct2DContext::Factory()
     return g_factory;
 }
 
+//
+// DWrite — returns the process-wide shared IDWriteFactory, creating it on the
+//   first call. May return null if creation fails.
+//
 IDWriteFactory* Direct2DContext::DWrite()
 {
     if (!g_dwrite)
@@ -31,6 +49,10 @@ IDWriteFactory* Direct2DContext::DWrite()
     return g_dwrite;
 }
 
+//
+// Shutdown — releases and nulls both cached factories; call once at process
+//   teardown. Safe if the factories were never created.
+//
 void Direct2DContext::Shutdown()
 {
     if (g_dwrite)  { g_dwrite->Release();  g_dwrite  = nullptr; }
