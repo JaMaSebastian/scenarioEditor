@@ -161,6 +161,50 @@ int main()
         e.motionSegments.push_back(m);
     }
 
+    // ---- Camera schedule (now persisted inside scenario.ini as [Camera.N]) ----
+    {
+        CameraFrame c0;                     // Entity camera mounted on entity 101
+        c0.kind           = CameraKind::Entity;
+        c0.sourceEntityId = 101;
+        c0.presetType     = "Octopus";
+        c0.presetAngle    = "front";
+        c0.targetEntityId = 7;
+        c0.transition     = CameraTransition::HardCut;
+        c0.beginSecond    = 0.0;
+        c0.endSecond      = 120.5;
+        c0.label          = "Drone 1 / Octopus / front";
+        c0.zoomEnabled    = true;           // dynamic fit, with cached target size
+        c0.dynamicZoom    = true;
+        c0.zoomFillPct    = 72.5;
+        c0.targetLengthM  = 15.06;
+        c0.targetWidthM   = 9.96;
+        c0.targetHeightM  = 4.88;
+        c0.limitsEnabled  = true;           // enforce the preset's gimbal envelope
+        s.cameras.push_back(c0);
+
+        CameraFrame c1;                     // Stationary vantage
+        c1.kind        = CameraKind::Stationary;
+        c1.vantEastM   = 245.83;
+        c1.vantNorthM  = -944.72;
+        c1.vantUpM     = 3.5;
+        c1.targetEntityId = 101;
+        c1.transition  = CameraTransition::CrossfadeBlend;
+        c1.beginSecond = 200.0;
+        c1.endSecond   = 260.0;
+        c1.label       = "Camera 1";
+        c1.zoomEnabled = true;              // static FOV override
+        c1.zoomFovDeg  = 37.25;
+        c1.dynamicZoom = false;
+        s.cameras.push_back(c1);
+    }
+
+    // ---- Foliage selection ([Foliage] section) ----
+    s.foliage.oak        = true;
+    s.foliage.bigTrees   = false;
+    s.foliage.palm       = true;
+    s.foliage.palmKind   = PalmKind::Straight;
+    s.foliage.renderMode = FoliageRenderMode::I3dm;
+
     const std::wstring path = TempIniPath();
     std::printf("Saving to %S\n", path.c_str());
     const ScenarioIO::Result wrc = ScenarioIO::Save(s, path);
@@ -309,6 +353,47 @@ int main()
         }
     SkipDetail:;
     }
+
+    // ---- Camera schedule ----
+    EXPECT_EQ(loaded.cameras.size(), s.cameras.size(), "Camera.Count");
+    if (loaded.cameras.size() == s.cameras.size())
+    {
+        for (size_t i = 0; i < s.cameras.size(); ++i)
+        {
+            const CameraFrame& a = s.cameras[i];
+            const CameraFrame& b = loaded.cameras[i];
+            char tag[32]; std::snprintf(tag, sizeof(tag), "Camera[%zu]", i);
+            std::string T(tag);
+            EXPECT_EQ((int)b.kind, (int)a.kind, (T + ".kind").c_str());
+            EXPECT_EQ(b.sourceEntityId, a.sourceEntityId, (T + ".sourceEntityId").c_str());
+            EXPECT_EQ(b.presetType,  a.presetType,  (T + ".presetType").c_str());
+            EXPECT_EQ(b.presetAngle, a.presetAngle, (T + ".presetAngle").c_str());
+            EXPECT_EQ(b.targetEntityId, a.targetEntityId, (T + ".targetEntityId").c_str());
+            EXPECT_NEAR(b.vantEastM,  a.vantEastM,  1e-9, (T + ".vantEast").c_str());
+            EXPECT_NEAR(b.vantNorthM, a.vantNorthM, 1e-9, (T + ".vantNorth").c_str());
+            EXPECT_NEAR(b.vantUpM,    a.vantUpM,    1e-9, (T + ".vantUp").c_str());
+            EXPECT_EQ((int)b.transition, (int)a.transition, (T + ".transition").c_str());
+            EXPECT_NEAR(b.beginSecond, a.beginSecond, 1e-9, (T + ".begin").c_str());
+            EXPECT_NEAR(b.endSecond,   a.endSecond,   1e-9, (T + ".end").c_str());
+            EXPECT_EQ(b.label, a.label, (T + ".label").c_str());
+            EXPECT_EQ((int)b.zoomEnabled, (int)a.zoomEnabled, (T + ".zoomEnabled").c_str());
+            EXPECT_NEAR(b.zoomFovDeg,  a.zoomFovDeg,  1e-9, (T + ".zoomFovDeg").c_str());
+            EXPECT_EQ((int)b.dynamicZoom, (int)a.dynamicZoom, (T + ".dynamicZoom").c_str());
+            EXPECT_NEAR(b.zoomFillPct, a.zoomFillPct, 1e-9, (T + ".zoomFillPct").c_str());
+            EXPECT_NEAR(b.targetLengthM, a.targetLengthM, 1e-9, (T + ".targetLengthM").c_str());
+            EXPECT_NEAR(b.targetWidthM,  a.targetWidthM,  1e-9, (T + ".targetWidthM").c_str());
+            EXPECT_NEAR(b.targetHeightM, a.targetHeightM, 1e-9, (T + ".targetHeightM").c_str());
+            // Entity-only key, so a Stationary frame must come back with it off.
+            EXPECT_EQ((int)b.limitsEnabled, (int)a.limitsEnabled, (T + ".limitsEnabled").c_str());
+        }
+    }
+
+    // ---- Foliage selection ----
+    EXPECT_EQ(loaded.foliage.oak,        s.foliage.oak,        "Foliage.Oak");
+    EXPECT_EQ(loaded.foliage.bigTrees,   s.foliage.bigTrees,   "Foliage.BigTrees");
+    EXPECT_EQ(loaded.foliage.palm,       s.foliage.palm,       "Foliage.Palm");
+    EXPECT_EQ((int)loaded.foliage.palmKind,   (int)s.foliage.palmKind,   "Foliage.PalmKind");
+    EXPECT_EQ((int)loaded.foliage.renderMode, (int)s.foliage.renderMode, "Foliage.RenderMode");
 
     if (failures == 0) {
         std::printf("\nRound-trip PASS\n");

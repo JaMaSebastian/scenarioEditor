@@ -25,6 +25,7 @@ int main()
 {
     // ---- Case 1: entity with no motion segments returns static pose ----
     Scenario scn;
+    scn.entities.emplace_back();   // fresh scenarios start with no entities
     Entity& e = scn.entity();
     e.ecefX = -2706174.85;
     e.ecefY = -4261059.49;

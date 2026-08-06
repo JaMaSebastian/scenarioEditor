@@ -16,13 +16,18 @@
 #include "Resource.h"
 #include "HelpAwarePage.h"
 #include "PreviewCanvas.h"
+#include "CameraTimeline.h"
 #include "CesiumView.h"
 
 #include <set>
+#include <string>
+#include <vector>
 
 struct Scenario;
 struct Entity;
 struct MotionSegment;
+struct CameraFrame;
+enum class CameraTransition : uint8_t;
 
 //-----------------------------------------------------------------------------
 // CPreviewPage — the "Preview" property page (dialog tab)
@@ -66,6 +71,56 @@ public:
     // Commit a finished drag: reload the other tabs from the model and flag the
     // scenario modified (so it persists into the .ini on Save).
     void EndEntityDrag();
+
+    // ----- Camera system (Preview-tab authoring) -----
+    // Canvas drag of a Stationary camera box: live-move camera frame `frameIdx`'s
+    // vantage to scenario-origin ENU (e,n); EndCameraDrag commits (mark dirty).
+    void DragCameraTo(size_t frameIdx, double enuE, double enuN);
+    void EndCameraDrag();
+    // Level-zone box drag: recenter zone `idx` on ENU (centerE, centerN), keeping
+    // its size; EndZoneDrag commits (reload tabs + mark dirty).
+    void DragZoneTo(size_t idx, double centerE, double centerN);
+    void EndZoneDrag();
+    // Camera-box RMB actions (canvas box and timeline box alike).
+    void SetCameraTarget(size_t frameIdx, uint16_t targetEntityId);
+    void SetCameraTransition(size_t frameIdx, CameraTransition t);
+    void DeleteCamera(size_t frameIdx);
+    // Zoom edits. Only the frame whose timeline box is live ever zooms, so these
+    // are per-frame; DISBrowser applies them while that box owns the clock.
+    void SetCameraZoomEnabled(size_t frameIdx, bool on);
+    void SetCameraDynamicZoom(size_t frameIdx, bool on);
+    void SetCameraGimbalLimits(size_t frameIdx, bool on);
+    void SetCameraZoomFov(size_t frameIdx, double fovDeg);
+    void SetCameraZoomFill(size_t frameIdx, double fillPct);
+    // Re-resolve every frame's cached target dimensions from the entity catalog.
+    void RefreshCameraTargetExtents();
+
+    // Entity-dot "Delete Camera": count the Entity cameras mounted on the entity
+    // at `entityIdx`, and remove them all (each drops its timeline box too, since
+    // the schedule and the boxes are the same list).
+    size_t EntityCameraCount(size_t entityIdx) const;
+    void   DeleteCamerasForEntity(size_t entityIdx);
+
+    // Entity-dot "New Camera..." path: pop a modal (preset / target / zoom /
+    // transition) and mount an Entity camera on the clicked entity as a timeline frame.
+    void NewEntityCameraViaDialog(size_t entityIdx);
+    void AddEntityCameraFrame(size_t entityIdx, size_t presetIndex,
+                              uint16_t targetEntityId, CameraTransition transition,
+                              bool zoomEnabled = false, double zoomFovDeg = 90.0,
+                              bool dynamicZoom = false, double zoomFillPct = 85.0,
+                              bool limitsEnabled = false);
+    // (kept for the timeline/other callers)
+    size_t  CameraPresetCount() const;
+    CString CameraPresetLabel(size_t i) const;
+
+    // Camera-timeline interface (read + edit the schedule; keep it contiguous).
+    const std::vector<CameraFrame>* GetCameras() const;
+    std::vector<CameraFrame>*       MutableCameras();
+    double GetPreviewDuration() const { return EffectivePreviewDuration(); }
+    double GetPreviewTime()     const { return m_previewTimeSec; }
+    void   ScrubToTime(double t);            // set the playback time from a timeline click
+    void   OnTimelineFrameEditing();         // live refresh during a box move/resize
+    void   OnTimelineEdited();               // commit a box move/resize (normalize + dirty)
 
     // Right-click context menu action: clone entity `idx`, give it a unique
     // EntityID and a "-N"-suffixed name, then refresh the preview + other tabs.
@@ -115,6 +170,10 @@ public:
     // (enuE,enuN); EndLineEndDrag commits (reload tabs + mark dirty) on release.
     void DragLineEnd(size_t entityIdx, size_t segIdx, double enuE, double enuN);
     void EndLineEndDrag();
+
+    // After editing one leg's timing, re-glue every following enabled segment so
+    // the whole course stays time-contiguous (no frozen inter-segment gap).
+    void RechainFollowingTimes(Entity& e, size_t fromIdx);
 
     // Right-click a course line > "Add Line": append a new Line leg starting where
     // the entity's last segment ends, continuing its direction, with a pink anchor.
@@ -168,18 +227,34 @@ protected:
     afx_msg void OnZoomOut();
     afx_msg void OnFit();
     afx_msg void OnNewEntity();   // "New" button: drop a default octopus drone
+    afx_msg void OnNewCamera();   // "New Cam" button: drop a stationary camera box
+    // Lowest-numbered "Camera N" label not already used by an existing frame, so
+    // deleting then re-adding stationary cameras never produces duplicate names.
+    std::string NextStationaryCameraLabel() const;
+    afx_msg void OnAddCamera();   // "Add" button: create an entity camera from the dropdowns
     afx_msg void OnLabelsToggle();
     afx_msg void OnTrailsToggle();
     afx_msg void OnPathsToggle();
     afx_msg void OnOrientationToggle();
     afx_msg void OnTerrainToggle();
+    afx_msg void OnZonesToggle();
+
+    // Snapshot the current Preview display toggles into settings.ini so they
+    // survive across sessions. Called from every toggle handler.
+    void PersistToggles();
     afx_msg void OnLegendToggle();
+    afx_msg void OnShowOriginToggle();   // toggle: recenter view on ENU(0,0) + draw a red X there
+    afx_msg void OnGotoOrigin();         // recenter view on ENU(0,0) at the current zoom/height
     afx_msg void OnSetStart();
     afx_msg void OnBoundary();
+    afx_msg void OnFoliage();   // "Foliage" button: pick tree types + rendering backend
     afx_msg void OnBuildTerrain();
+    afx_msg void OnBuildFoliage();   // "Build i3dm Foliage": bake the streamed i3dm tree tileset
+    afx_msg void OnPurgeTerrain();
     afx_msg void OnStartTerrainServer();
     afx_msg void OnStopTerrainServer();
     afx_msg void OnSpeedChange();
+    afx_msg void OnCamScaleChange();   // time-scale dropdown for the camera strip
     afx_msg void OnDestTimeToggle();
     afx_msg void OnMapLayerChange();
     afx_msg void OnMapPlaceChange();
@@ -200,6 +275,13 @@ private:
     // Rebuild the cached per-entity motion-path polylines + pickable ellipse
     // targets (call after any edit that changes geometry).
     void RebuildPathsCache();
+    // Camera helpers.
+    void PopulateCameraCombos();   // fill the entity/preset/target/transition dropdowns
+    void AddCameraFrame(CameraFrame&& f);   // split the schedule at the scrub time
+    void NormalizeCameraSchedule();         // clamp, sort, and de-overlap the schedule
+    // Sync the camera-strip horizontal scroll bar (range/page/pos) to the current
+    // time scale + duration; disable it when the whole schedule fits on screen.
+    void UpdateCameraScrollBar();
     // Map/location UI helpers.
     void PopulatePlacesCombo(int selectIdx = -1);   // fill from theApp.Settings()
     // Re-anchor the map/scenario origin to (lat,lon). When flyHeightM >= 0 and the
@@ -213,6 +295,11 @@ private:
     void PushCesiumEntities();                       // send current entity positions to the globe
     void FlyCesiumToOrigin();                         // aim the globe camera at the scenario origin
     double CurrentViewAltitude();                     // eye-height framing the current 2D view (m)
+    // Current map view center as geodetic lat/lon + eye altitude: the Cesium
+    // globe's look-at point when the 3D layer is active, else the 2D canvas center
+    // resolved against the origin. Falls back to the scenario origin when nothing
+    // better is available. Used to prefill the Add/Capture Location dialog.
+    void CurrentViewLatLonAlt(double& lat, double& lon, double& alt);
     void RefreshDestTimeList();   // fill the "Show Dest Time" grid from current motion
     // Time-axis length for the preview: the larger of the authored scenario
     // duration and the latest enabled segment end across all entities, so the
@@ -268,6 +355,7 @@ private:
 
     Scenario*            m_scenario       = nullptr;
     CPreviewCanvas       m_canvas;
+    CCameraTimeline      m_timeline;      // camera schedule strip under the canvas
     CesiumView           m_cesium;        // 3D globe (shown when map layer = Cesium)
     PreviewState         m_runState       = PreviewState::Idle;
     double               m_previewTimeSec = 0.0;
@@ -284,14 +372,22 @@ private:
     bool                 m_showTrails      = true;
     bool                 m_showPaths       = true;
     bool                 m_showOrientation = false;
-    bool                 m_showTerrain     = true;   // [Level] overlay toggle
+    bool                 m_showTerrain     = true;   // [Level] land/ocean footprint toggle
+    bool                 m_showZones       = true;   // [Level] named-zone (e.g. Palm Forest) toggle
     MapLayer             m_mapLayer        = MapLayer::None;  // map backdrop layer
     bool                 m_mapOnline       = true;   // allow tile downloads
     bool                 m_moveEntitiesWithMap = false; // relocate the scene with a
                                                         // Location change (vs. leave
                                                         // entities world-fixed); off by default
     bool                 m_showLegend      = false;  // size/direction legend overlay
+    bool                 m_showOrigin      = false;  // toggle: mark scenario origin (ENU 0,0) with a red X
     bool                 m_showDestTime    = false;  // destination-time grid
+
+    // Entity drag-drop diagnostic: DragEntityTo caches the last drop here so
+    // EndEntityDrag can log the drop ENU vs. the resulting streamed t=0 pose.
+    int                  m_dragDiagIdx     = -1;
+    double               m_dragDiagEnuE    = 0.0;
+    double               m_dragDiagEnuN    = 0.0;
     bool                 m_suppressPropsRefresh = false;  // guard: don't repopulate the
                                                           // grid while handling its own
                                                           // selection notification

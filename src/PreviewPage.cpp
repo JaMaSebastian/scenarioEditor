@@ -17,9 +17,14 @@
 #include "Scenario.h"
 #include "MotionSampler.h"
 #include "CoordTransforms.h"
-#include "ScenarioWorker.h"   // WM_APP_REFRESH_UI
+#include "ScenarioWorker.h"   // WM_APP_REFRESH_UI / WM_APP_MARK_DIRTY
 #include "ScenarioEditor.h"   // theApp.Catalog() — per-type cruise speed
+#include "EntityCameraDialog.h"
+#include "FoliageDialog.h"          // "Foliage" button dialog
 #include "EntityTypeCatalog.h"      // CatalogEntry / AirframeProfile
+#include "SpeedSeed.h"              // SeedCruiseSpeedMps — catalog cruise / 10 m/s default
+#include "CameraTargetExtents.h"    // cache the framed entity's catalogued size
+#include "CameraZoomMenu.h"         // shared "Zoom" RMB submenu (canvas + timeline)
 #include "EntityTypePickerDialog.h" // "Change Entity" catalog tree picker
 #include "../log.h"
 
@@ -94,9 +99,12 @@ namespace
         { IDC_CHK_PREVIEW_TRAILS,      _T("Show motion trails behind moving entities."), false },
         { IDC_CHK_PREVIEW_PATHS,       _T("Show configured motion paths."), false },
         { IDC_CHK_PREVIEW_ORIENTATION, _T("Show heading vectors on each entity."), false },
-        { IDC_CHK_PREVIEW_TERRAIN,     _T("Show the level's land/ocean footprint (when the scenario defines one)."), false },
+        { IDC_CHK_PREVIEW_TERRAIN,     _T("Show the level's land/ocean footprint (the big terrain box)."), false },
+        { IDC_CHK_PREVIEW_ZONES,       _T("Show the level's named zones (e.g. Palm Forest) — independent of the terrain box."), false },
         { IDC_CHK_PREVIEW_LEGEND,      _T("Show size (per-area edge distances) and N/S/E/W direction labels."), false },
         { IDC_BTN_PREVIEW_SET_START,   _T("Click, then click an ellipse to set where that entity starts."), false },
+        { IDC_BTN_PREVIEW_SHOW_ORIGIN, _T("Draw a red X at the scenario origin (ENU 0,0) and center the view on it."), false },
+        { IDC_BTN_PREVIEW_GOTO_ORIGIN, _T("Move the camera over the scenario origin, keeping the current height/zoom."), false },
     };
 
     // Split a display name into base + trailing "-<digits>" index.
@@ -377,9 +385,34 @@ namespace
         }
     }
 
+    // Camera-strip time-scale choices (seconds represented by kRefPx pixels).
+    // Smaller value => more pixels/second => wider boxes. Order matches the combo.
+    struct CamScale { const wchar_t* label; double seconds; };
+    constexpr CamScale kCamScales[] = {
+        { L"10 ms",  0.01 },
+        { L"100 ms", 0.10 },
+        { L"1 s",    1.00 },
+        { L"2 s",    2.00 },
+        { L"5 s",    5.00 },
+        { L"10 s",  10.00 },
+        { L"100 s", 100.00 },
+    };
+    constexpr int kCamScaleDefault = 2;   // "1 s"
+
     // Sample N evenly-spaced points along [0, duration] for FitScenario
     // and the per-entity motion-path cache.
     constexpr size_t kFitSampleCount  = 32;
+    // FitScenario ignores entity positions farther than this from the origin.
+    // A flat ENU fit only makes sense near the origin; a > 5000 km offset means
+    // the throwaway default entity (origin still at 0,0) or a scenario whose
+    // origin was relocated away from its entities — fitting to it just zooms into
+    // a phantom point and blanks the map. Those fall through to the origin-framed
+    // fallback so the satellite/map backdrop stays visible.
+    constexpr double kFitMaxOffsetM   = 5.0e6;   // 5000 km
+    // Default zoom when there's nothing meaningful to fit (empty/fresh scenario, or
+    // all entities skipped as far-flung): a comfortable ~10 km-across view of the
+    // origin so the satellite/map backdrop is visible and navigable.
+    constexpr double kFreshViewMetersPerPx = 8.0;
     // (path sampling now lives per-segment inside RebuildPathsCache —
     // see kLinePts / kEllipsePts there)
 }
@@ -398,18 +431,27 @@ BEGIN_MESSAGE_MAP(CPreviewPage, CHelpAwarePage)
     ON_BN_CLICKED(IDC_BTN_PREVIEW_ZOOM_OUT,    &CPreviewPage::OnZoomOut)
     ON_BN_CLICKED(IDC_BTN_PREVIEW_FIT,         &CPreviewPage::OnFit)
     ON_BN_CLICKED(IDC_BTN_PREVIEW_NEW,         &CPreviewPage::OnNewEntity)
+    ON_BN_CLICKED(IDC_BTN_PREVIEW_NEW_CAMERA,  &CPreviewPage::OnNewCamera)
+    ON_BN_CLICKED(IDC_BTN_CAM_ADD,             &CPreviewPage::OnAddCamera)
     ON_BN_CLICKED(IDC_CHK_PREVIEW_LABELS,      &CPreviewPage::OnLabelsToggle)
     ON_BN_CLICKED(IDC_CHK_PREVIEW_TRAILS,      &CPreviewPage::OnTrailsToggle)
     ON_BN_CLICKED(IDC_CHK_PREVIEW_PATHS,       &CPreviewPage::OnPathsToggle)
     ON_BN_CLICKED(IDC_CHK_PREVIEW_ORIENTATION, &CPreviewPage::OnOrientationToggle)
     ON_BN_CLICKED(IDC_CHK_PREVIEW_TERRAIN,     &CPreviewPage::OnTerrainToggle)
+    ON_BN_CLICKED(IDC_CHK_PREVIEW_ZONES,       &CPreviewPage::OnZonesToggle)
     ON_BN_CLICKED(IDC_CHK_PREVIEW_LEGEND,      &CPreviewPage::OnLegendToggle)
+    ON_BN_CLICKED(IDC_BTN_PREVIEW_SHOW_ORIGIN, &CPreviewPage::OnShowOriginToggle)
+    ON_BN_CLICKED(IDC_BTN_PREVIEW_GOTO_ORIGIN, &CPreviewPage::OnGotoOrigin)
     ON_BN_CLICKED(IDC_BTN_PREVIEW_SET_START,   &CPreviewPage::OnSetStart)
     ON_BN_CLICKED(IDC_BTN_PREVIEW_BOUNDARY,    &CPreviewPage::OnBoundary)
+    ON_BN_CLICKED(IDC_BTN_PREVIEW_FOLIAGE,     &CPreviewPage::OnFoliage)
     ON_BN_CLICKED(IDC_BTN_PREVIEW_BUILD_TERRAIN, &CPreviewPage::OnBuildTerrain)
+    ON_BN_CLICKED(IDC_BTN_PREVIEW_BUILD_FOLIAGE, &CPreviewPage::OnBuildFoliage)
+    ON_BN_CLICKED(IDC_BTN_PREVIEW_PURGE_TERRAIN, &CPreviewPage::OnPurgeTerrain)
     ON_BN_CLICKED(IDC_BTN_PREVIEW_TERRAIN_START, &CPreviewPage::OnStartTerrainServer)
     ON_BN_CLICKED(IDC_BTN_PREVIEW_TERRAIN_STOP,  &CPreviewPage::OnStopTerrainServer)
     ON_CBN_SELCHANGE(IDC_COMBO_PREVIEW_SPEED,  &CPreviewPage::OnSpeedChange)
+    ON_CBN_SELCHANGE(IDC_COMBO_CAM_SCALE,      &CPreviewPage::OnCamScaleChange)
     ON_BN_CLICKED(IDC_CHK_PREVIEW_DESTTIME,    &CPreviewPage::OnDestTimeToggle)
     ON_CBN_SELCHANGE(IDC_COMBO_MAP_LAYER,      &CPreviewPage::OnMapLayerChange)
     ON_CBN_SELCHANGE(IDC_COMBO_MAP_PLACE,      &CPreviewPage::OnMapPlaceChange)
@@ -498,11 +540,31 @@ BOOL CPreviewPage::OnInitDialog()
         LOG(buf);
     }
 
+    // Camera timeline strip (below the canvas). Same subclass pattern as the canvas.
+    m_timeline.SetOwner(this);
+    m_timeline.SubclassDlgItem(IDC_CAMERA_TIMELINE, this);
+
+    // Restore persisted Preview toggles so the checkboxes come up exactly as the
+    // user last left them (settings.ini [Preview], loaded once at app startup).
+    {
+        const Settings& st = theApp.Settings();
+        m_showLabels          = st.previewShowLabels;
+        m_showTrails          = st.previewShowTrails;
+        m_showPaths           = st.previewShowPaths;
+        m_showOrientation     = st.previewShowOrientation;
+        m_showTerrain         = st.previewShowTerrain;
+        m_showZones           = st.previewShowZones;
+        m_showLegend          = st.previewShowLegend;
+        m_showDestTime        = st.previewShowProperties;
+        m_moveEntitiesWithMap = st.previewMoveEntities;
+    }
+
     CheckDlgButton(IDC_CHK_PREVIEW_LABELS,      m_showLabels      ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(IDC_CHK_PREVIEW_TRAILS,      m_showTrails      ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(IDC_CHK_PREVIEW_PATHS,       m_showPaths       ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(IDC_CHK_PREVIEW_ORIENTATION, m_showOrientation ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(IDC_CHK_PREVIEW_TERRAIN,     m_showTerrain     ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(IDC_CHK_PREVIEW_ZONES,       m_showZones       ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(IDC_CHK_PREVIEW_LEGEND,      m_showLegend      ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(IDC_CHK_MAP_MOVE_ENTITIES,   m_moveEntitiesWithMap ? BST_CHECKED : BST_UNCHECKED);
 
@@ -551,7 +613,7 @@ BOOL CPreviewPage::OnInitDialog()
             }
             dt->SetColumnWidth(4, avail - used);     // Infinite = remainder
         }
-        dt->ShowWindow(SW_HIDE);   // revealed when "Show Properties" is checked
+        dt->ShowWindow(SW_HIDE);   // revealed when the Show > "Properties" box is checked
     }
     CheckDlgButton(IDC_CHK_PREVIEW_DESTTIME, m_showDestTime ? BST_CHECKED : BST_UNCHECKED);
 
@@ -575,6 +637,23 @@ BOOL CPreviewPage::OnInitDialog()
         SettingsIO::Save(theApp.Settings(), theApp.SettingsPath());
     }
     PopulatePlacesCombo();
+
+    // Camera-strip time-scale dropdown: seed the choices and apply the default
+    // scale to the timeline so boxes render at a known zoom.
+    if (CComboBox* sc = (CComboBox*)GetDlgItem(IDC_COMBO_CAM_SCALE))
+    {
+        sc->ResetContent();
+        for (const CamScale& s : kCamScales) sc->AddString(s.label);
+        sc->SetCurSel(kCamScaleDefault);
+        m_timeline.SetTimeScale(kCamScales[kCamScaleDefault].seconds);
+    }
+
+    // Camera dropdowns (entity / preset / target / transition) + normalize any
+    // cameras loaded with the scenario so the schedule tiles the timeline.
+    PopulateCameraCombos();
+    NormalizeCameraSchedule();
+    RefreshCameraTargetExtents();   // entity types may have changed since authoring
+    UpdateCameraScrollBar();
 
     UpdateSliderRange();
     if (CSliderCtrl* s = (CSliderCtrl*)GetDlgItem(IDC_SLIDER_PREVIEW_TIME))
@@ -611,10 +690,13 @@ void CPreviewPage::OnShowWindow(BOOL bShow, UINT nStatus)
         // different scenario then switch tabs" case without forcing the user
         // to click Fit explicitly. Slider range may also need updating.
         UpdateSliderRange();
+        PopulateCameraCombos();   // entity list may have changed on other tabs
         RebuildPathsCache();
         FitScenario();
         RebuildRenderState();
+        UpdateCameraScrollBar();  // duration may have changed on another tab
         if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+        if (m_timeline.GetSafeHwnd()) m_timeline.Invalidate(FALSE);
     }
 }
 
@@ -743,14 +825,48 @@ void CPreviewPage::OnMapPlaceChange()
 }
 
 //
-// OnMapAddPlace — "Add Location": prompt (prefilled from the current view),
-//   append the new MapPlace, persist Settings, then fly there.
+// CurrentViewLatLonAlt — resolve where the map view is currently centered to
+//   geodetic lat/lon + eye altitude. Cesium (3D): the globe's reported look-at
+//   point. 2D layers: the canvas center (m_centerEnuE/N) resolved against the
+//   origin, with the 2D eye-height from zoom. Falls back to the scenario origin
+//   when no scenario exists or the globe hasn't reported its position yet.
+//
+void CPreviewPage::CurrentViewLatLonAlt(double& lat, double& lon, double& alt)
+{
+    lat = m_scenario ? m_scenario->originLatDeg : 0.0;
+    lon = m_scenario ? m_scenario->originLonDeg : 0.0;
+    alt = CurrentViewAltitude();   // eye/viewing height (2D framing)
+
+    if (m_mapLayer == MapLayer::Cesium)
+    {
+        // Globe center + eye altitude (where the user flew); leave the origin
+        // fallback in place if it hasn't reported yet.
+        m_cesium.GetLookAt(lat, lon, alt);
+    }
+    else if (m_scenario)
+    {
+        // m_centerEnuE/N are the ENU metres (East/North) from the origin at the
+        // middle of the view; resolve them back to geodetic. Altitude stays the
+        // 2D eye-height computed above.
+        double X = 0.0, Y = 0.0, Z = 0.0;
+        CoordTransforms::LocalEnuToEcefDeg(
+            m_centerEnuE, m_centerEnuN, 0.0,
+            m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM,
+            X, Y, Z);
+        double ga = 0.0;
+        CoordTransforms::EcefToGeodeticDeg(X, Y, Z, lat, lon, ga);
+    }
+}
+
+//
+// OnMapAddPlace — "Add Location": prompt (prefilled from the current globe/canvas
+//   view), append the new MapPlace, persist Settings, then relocate the origin there.
 //
 void CPreviewPage::OnMapAddPlace()
 {
-    const double lat = m_scenario ? m_scenario->originLatDeg : 0.0;
-    const double lon = m_scenario ? m_scenario->originLonDeg : 0.0;
-    CAddPlaceDialog dlg(lat, lon, CurrentViewAltitude(), this);
+    double lat = 0.0, lon = 0.0, alt = 0.0;
+    CurrentViewLatLonAlt(lat, lon, alt);
+    CAddPlaceDialog dlg(lat, lon, alt, this);
     if (dlg.DoModal() != IDOK) return;
 
     MapPlace p;
@@ -785,40 +901,17 @@ void CPreviewPage::OnMapDelPlace()
 
 void CPreviewPage::OnMapCapturePlace()
 {
-    // "Current location" = wherever the map view is currently centered:
-    //   - Cesium (3D): the point the globe is centered on (where the user flew).
-    //   - 2D layers:   the lat/lon under the center of the panned/zoomed canvas.
-    // Falls back to the scenario origin only when nothing better is available.
-    // Seeds the Add Place dialog so the captured lat/lon can be named and saved;
-    // this only bookmarks the spot -- it doesn't relocate the scenario (pick it
-    // from the Location list to do that).
-    double lat = m_scenario ? m_scenario->originLatDeg : 0.0;
-    double lon = m_scenario ? m_scenario->originLonDeg : 0.0;
-    double alt = CurrentViewAltitude();   // eye/viewing height
-    if (m_mapLayer == MapLayer::Cesium)
-    {
-        // Use the globe's reported center + eye altitude; don't silently fall
-        // back to the origin (that would present the wrong point as the view).
-        if (!m_cesium.GetLookAt(lat, lon, alt))
-        {
-            AfxMessageBox(_T("The 3D globe hasn't reported its position yet. ")
-                          _T("Rotate or zoom the globe once, then click Capture."));
-            return;
-        }
-    }
-    else if (m_scenario)
-    {
-        // m_centerEnuE/N are the ENU metres (East/North) from the scenario origin
-        // at the middle of the view; resolve them back to geodetic. Altitude is
-        // the 2D view's eye-height equivalent (from zoom), computed above.
-        double X = 0.0, Y = 0.0, Z = 0.0;
-        CoordTransforms::LocalEnuToEcefDeg(
-            m_centerEnuE, m_centerEnuN, 0.0,
-            m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM,
-            X, Y, Z);
-        double ga = 0.0;
-        CoordTransforms::EcefToGeodeticDeg(X, Y, Z, lat, lon, ga);
-    }
+    // "Current location" = wherever the map view is currently centered (globe
+    // look-at in 3D, canvas center in 2D). Seeds the Add Place dialog so the
+    // captured lat/lon can be named and saved, then relocates the scenario origin
+    // to it (see ApplyMapPlace below). Capturing MUST move the origin explicitly:
+    // PopulatePlacesCombo selects the new row programmatically, which does NOT fire
+    // CBN_SELCHANGE, so OnMapPlaceChange never runs — without ApplyMapPlace the
+    // origin would silently stay put (and every "Configure Unreal" would keep
+    // writing the OLD origin, so DISBrowser spawns at the previous spot no matter
+    // which location you just captured).
+    double lat = 0.0, lon = 0.0, alt = 0.0;
+    CurrentViewLatLonAlt(lat, lon, alt);
 
     CAddPlaceDialog dlg(lat, lon, alt, this);
     if (dlg.DoModal() != IDOK) return;
@@ -831,6 +924,10 @@ void CPreviewPage::OnMapCapturePlace()
     theApp.Settings().mapPlaces.push_back(p);
     SettingsIO::Save(theApp.Settings(), theApp.SettingsPath());
     PopulatePlacesCombo(static_cast<int>(theApp.Settings().mapPlaces.size()) - 1);
+    // Move the scenario origin to the captured spot so it becomes the active
+    // location (what "Configure Unreal" hands DISBrowser). Programmatic combo
+    // selection above doesn't fire OnMapPlaceChange, so relocate explicitly.
+    ApplyMapPlace(p.lat, p.lon, p.alt > 0.0 ? p.alt : -1.0);
 }
 
 //
@@ -841,6 +938,7 @@ void CPreviewPage::OnMapMoveEntitiesToggle()
 {
     if (CButton* b = (CButton*)GetDlgItem(IDC_CHK_MAP_MOVE_ENTITIES))
         m_moveEntitiesWithMap = (b->GetCheck() == BST_CHECKED);
+    PersistToggles();
 }
 
 //
@@ -963,6 +1061,31 @@ void CPreviewPage::ApplyMapPlace(double lat, double lon, double flyHeightM)
         FlyCesiumToOrigin();
     if (CWnd* top = GetTopLevelParent())
         top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+
+    // Sanity check: in KEEP-WORLD mode ("Move entities" off) the entities stay fixed
+    // on the Earth while the origin jumps to the new place. If that leaves them far
+    // from the origin, the flat map/preview projection breaks (entities render on the
+    // far side of the globe). Warn so it isn't a surprise — enabling "Move entities"
+    // avoids it. (In MOVE mode the entities follow the origin, so this never fires.)
+    // Only when the origin is committed (a saved/loaded scenario): while the origin
+    // is provisional the operator is just navigating the default view, so relocating
+    // must stay silent.
+    if (m_scenario->originSet && !m_moveEntitiesWithMap)
+    {
+        constexpr double kDisconnectM = 500000.0;   // 500 km — see kOriginDisconnectMeters
+        double best = HUGE_VAL;
+        for (const Entity& ent : m_scenario->entities)
+            if (ent.enabled) best = std::min(best, std::hypot(ent.localX, ent.localY));
+        if (best > kDisconnectM && best < HUGE_VAL)
+        {
+            CString msg;
+            msg.Format(_T("The origin moved, but the scenario's entities stayed fixed on the ")
+                       _T("Earth and are now about %.0f km away — the map/preview will look wrong.")
+                       _T("\n\nEnable \"Move entities\" before relocating to bring them along, or ")
+                       _T("pick a Location near the entities."), best / 1000.0);
+            AfxMessageBox(msg, MB_OK | MB_ICONWARNING);
+        }
+    }
 }
 
 //
@@ -991,6 +1114,12 @@ void CPreviewPage::UpdateSliderRange()
 {
     if (CSliderCtrl* s = (CSliderCtrl*)GetDlgItem(IDC_SLIDER_PREVIEW_TIME))
         s->SetRange(0, static_cast<int>(EffectivePreviewDuration() * 10.0), TRUE);
+    // The camera schedule's right edge tracks the duration; keep it clamped and
+    // repaint the strip. Duration drives the strip's pixel width, so resync the
+    // horizontal scroll bar too.
+    NormalizeCameraSchedule();
+    UpdateCameraScrollBar();
+    if (m_timeline.GetSafeHwnd()) m_timeline.Invalidate(FALSE);
 }
 
 //
@@ -1108,6 +1237,7 @@ void CPreviewPage::OnTimer(UINT_PTR id)
     UpdateSliderFromTime();
     RebuildRenderState();
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+    if (m_timeline.GetSafeHwnd()) m_timeline.Invalidate(FALSE);  // move the playhead
 }
 
 //
@@ -1117,6 +1247,36 @@ void CPreviewPage::OnTimer(UINT_PTR id)
 void CPreviewPage::OnHScroll(UINT code, UINT pos, CScrollBar* sb)
 {
     if (m_suppressScroll) { CHelpAwarePage::OnHScroll(code, pos, sb); return; }
+
+    // Camera-strip horizontal scroll bar: pan the (zoomed) timeline view.
+    CScrollBar* hbar = (CScrollBar*)GetDlgItem(IDC_CAMERA_HSCROLL);
+    if (sb && hbar && sb->GetSafeHwnd() == hbar->GetSafeHwnd())
+    {
+        SCROLLINFO si = {}; si.cbSize = sizeof(si); si.fMask = SIF_ALL;
+        hbar->GetScrollInfo(&si);
+        int p = si.nPos;
+        const int line = 20;
+        switch (code)
+        {
+        case SB_LINELEFT:    p -= line;            break;
+        case SB_LINERIGHT:   p += line;            break;
+        case SB_PAGELEFT:    p -= (int)si.nPage;   break;
+        case SB_PAGERIGHT:   p += (int)si.nPage;   break;
+        case SB_THUMBTRACK:
+        case SB_THUMBPOSITION: p = si.nTrackPos;   break;
+        case SB_LEFT:        p = si.nMin;          break;
+        case SB_RIGHT:       p = si.nMax;          break;
+        default: break;
+        }
+        const int maxPos = std::max(0, (int)si.nMax - (int)si.nPage + 1);
+        if (p < 0) p = 0;
+        if (p > maxPos) p = maxPos;
+        hbar->SetScrollPos(p, TRUE);
+        m_timeline.SetScrollOffset(p);
+        if (m_timeline.GetSafeHwnd()) m_timeline.Invalidate(FALSE);
+        return;
+    }
+
     CSliderCtrl* slider = (CSliderCtrl*)GetDlgItem(IDC_SLIDER_PREVIEW_TIME);
     if (sb && slider && sb->GetSafeHwnd() == slider->GetSafeHwnd())
     {
@@ -1125,6 +1285,7 @@ void CPreviewPage::OnHScroll(UINT code, UINT pos, CScrollBar* sb)
         m_trails.clear();   // scrubbing invalidates trail history
         RebuildRenderState();
         if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+        if (m_timeline.GetSafeHwnd()) m_timeline.Invalidate(FALSE);  // move the playhead
         return;
     }
     CHelpAwarePage::OnHScroll(code, pos, sb);
@@ -1212,6 +1373,7 @@ void CPreviewPage::ZoomAtPixel(double factor, int cursorXPx, int cursorYPx)
 void CPreviewPage::OnLabelsToggle()
 {
     m_showLabels = IsDlgButtonChecked(IDC_CHK_PREVIEW_LABELS) == BST_CHECKED;
+    PersistToggles();
     RebuildRenderState();
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
@@ -1223,6 +1385,7 @@ void CPreviewPage::OnTrailsToggle()
 {
     m_showTrails = IsDlgButtonChecked(IDC_CHK_PREVIEW_TRAILS) == BST_CHECKED;
     if (!m_showTrails) m_trails.clear();
+    PersistToggles();
     RebuildRenderState();
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
@@ -1233,6 +1396,7 @@ void CPreviewPage::OnTrailsToggle()
 void CPreviewPage::OnPathsToggle()
 {
     m_showPaths = IsDlgButtonChecked(IDC_CHK_PREVIEW_PATHS) == BST_CHECKED;
+    PersistToggles();
     RebuildRenderState();
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
@@ -1243,6 +1407,7 @@ void CPreviewPage::OnPathsToggle()
 void CPreviewPage::OnOrientationToggle()
 {
     m_showOrientation = IsDlgButtonChecked(IDC_CHK_PREVIEW_ORIENTATION) == BST_CHECKED;
+    PersistToggles();
     RebuildRenderState();
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
@@ -1253,6 +1418,39 @@ void CPreviewPage::OnOrientationToggle()
 void CPreviewPage::OnTerrainToggle()
 {
     m_showTerrain = IsDlgButtonChecked(IDC_CHK_PREVIEW_TERRAIN) == BST_CHECKED;
+    PersistToggles();
+    RebuildRenderState();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+}
+
+//
+// PersistToggles — write the current Preview display-toggle states into
+//   settings.ini so they come back the same way next session.
+//
+void CPreviewPage::PersistToggles()
+{
+    Settings& st = theApp.Settings();
+    st.previewShowLabels      = m_showLabels;
+    st.previewShowTrails      = m_showTrails;
+    st.previewShowPaths       = m_showPaths;
+    st.previewShowOrientation = m_showOrientation;
+    st.previewShowTerrain     = m_showTerrain;
+    st.previewShowZones       = m_showZones;
+    st.previewShowLegend      = m_showLegend;
+    st.previewShowProperties  = m_showDestTime;
+    st.previewMoveEntities    = m_moveEntitiesWithMap;
+    SettingsIO::Save(st, theApp.SettingsPath());
+}
+
+//
+// OnZonesToggle — toggle the named level zones (e.g. Palm Forest) independently
+//   of the land/ocean footprint, so the big terrain box can be hidden while a
+//   zone stays visible. Repaints.
+//
+void CPreviewPage::OnZonesToggle()
+{
+    m_showZones = IsDlgButtonChecked(IDC_CHK_PREVIEW_ZONES) == BST_CHECKED;
+    PersistToggles();
     RebuildRenderState();
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
@@ -1263,8 +1461,50 @@ void CPreviewPage::OnTerrainToggle()
 void CPreviewPage::OnLegendToggle()
 {
     m_showLegend = IsDlgButtonChecked(IDC_CHK_PREVIEW_LEGEND) == BST_CHECKED;
+    PersistToggles();
     RebuildRenderState();
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+}
+
+void CPreviewPage::OnShowOriginToggle()
+{
+    // Owner-draw toggle (not a checkbox): flip our own bool, repaint the button's
+    // bold green check, and when turning ON re-center the view on the scenario
+    // origin (ENU 0,0) so the red X marker drawn by the canvas is in view.
+    m_showOrigin = !m_showOrigin;
+    if (CWnd* btn = GetDlgItem(IDC_BTN_PREVIEW_SHOW_ORIGIN))
+        btn->Invalidate();   // repaint owner-draw to show/hide the green check
+    if (m_showOrigin)
+    {
+        m_centerEnuE = 0.0;   // origin is ENU (0,0); recenter the view on it
+        m_centerEnuN = 0.0;
+    }
+    RebuildRenderState();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+}
+
+//
+// OnGotoOrigin — move the camera over the scenario origin without changing how
+//   high it looks from: the 2D view keeps its zoom (metres/pixel) and the 3D
+//   globe keeps its current eye altitude; only the center moves. Unlike
+//   "Show Origin" this is a pure navigation action — it doesn't toggle the
+//   red-X marker.
+//
+void CPreviewPage::OnGotoOrigin()
+{
+    m_centerEnuE = 0.0;   // origin is ENU (0,0)
+    m_centerEnuN = 0.0;
+    RebuildRenderState();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+
+    if (m_mapLayer == MapLayer::Cesium && m_cesium.GetSafeHwnd() && m_scenario)
+    {
+        // Keep the globe's reported eye altitude; if it hasn't reported a
+        // position yet, fall back to the 2D view's equivalent eye height.
+        double lat = 0.0, lon = 0.0, alt = 0.0;
+        if (!m_cesium.GetLookAt(lat, lon, alt)) alt = CurrentViewAltitude();
+        m_cesium.FlyTo(m_scenario->originLatDeg, m_scenario->originLonDeg, alt);
+    }
 }
 
 void CPreviewPage::OnSetStart()
@@ -1294,6 +1534,26 @@ void CPreviewPage::OnBoundary()
     // Same gesture works on the 3D globe: arm/disarm right-drag rectangle paint there too.
     if (m_mapLayer == MapLayer::Cesium && m_cesium.GetSafeHwnd())
         m_cesium.SetBoundaryMode(m_boundaryArmed);
+}
+
+//
+// OnFoliage — "Foliage" button: open the modal tree-type / rendering-backend
+//   picker seeded from the scenario's current selection. On Save, store the edited
+//   selection back on the scenario and mark it dirty so it persists to
+//   scenario.ini ([Foliage]) on the next save. This only records the choice — no
+//   foliage is generated or rendered here.
+//
+void CPreviewPage::OnFoliage()
+{
+    if (!m_scenario) return;
+
+    CFoliageDialog dlg(this);
+    dlg.SetConfig(m_scenario->foliage);
+    if (dlg.DoModal() != IDOK) return;
+
+    m_scenario->foliage = dlg.Config();
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_MARK_DIRTY, 0, 0);
 }
 
 void CPreviewPage::OnBoundaryPainted(double latMinDeg, double latMaxDeg,
@@ -1391,6 +1651,99 @@ void CPreviewPage::OnBuildTerrain()
         CString msg;
         msg.Format(_T("Failed to launch the re-tile script (error %Id)."), (INT_PTR)h);
         MessageBox(msg, _T("Build 3D Terrain"), MB_OK | MB_ICONERROR);
+    }
+}
+
+//
+// OnBuildFoliage — bake the streamed i3dm tree tileset for the painted terrain box.
+//   Mirrors OnBuildTerrain: needs a painted box + at least one tree type selected, then
+//   ShellExecutes build_foliage.cmd, which samples the DEM, land-masks, and writes the
+//   i3dm tileset served at http://localhost:8088/foliage/tileset.json. Bakes a placeholder
+//   cone until real tree .glb's are wired into the script.
+//
+void CPreviewPage::OnBuildFoliage()
+{
+    if (!m_scenario || !m_scenario->terrainBoundsValid)
+    {
+        MessageBox(_T("Paint a terrain boundary and Build 3D Terrain first:\n\ni3dm foliage samples ")
+                   _T("its tree heights from the built 3D terrain's DEM, so the terrain must exist."),
+                   _T("Build i3dm Foliage"), MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    const FoliageConfig& fol = m_scenario->foliage;
+    if (!(fol.oak || fol.bigTrees || fol.palm))
+    {
+        MessageBox(_T("No tree type selected.\n\nClick \"Foliage\" and tick Oak / Big Trees / Palm first."),
+                   _T("Build i3dm Foliage"), MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    CString cmdPath = ResolveDisBrowserScript(_T("build_foliage.cmd"));
+    if (::GetFileAttributes(cmdPath) == INVALID_FILE_ATTRIBUTES)
+    {
+        CString msg;
+        msg.Format(_T("Cannot find the foliage bake script:\n%s\n\nSet the DISBrowser project folder on the Run tab."),
+                   (LPCTSTR)cmdPath);
+        MessageBox(msg, _T("Build i3dm Foliage"), MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    CString confirm;
+    confirm.Format(_T("Bake the i3dm tree tileset for:\n\n")
+                   _T("  lat  %.4f .. %.4f\n  lon  %.4f .. %.4f\n\n")
+                   _T("Samples tree heights from the built DEM, land-masks the ocean, and writes\n")
+                   _T("the streamed i3dm tileset. Runs the WSL/Docker pipeline. Continue?"),
+                   m_scenario->terrainLatMinDeg, m_scenario->terrainLatMaxDeg,
+                   m_scenario->terrainLonMinDeg, m_scenario->terrainLonMaxDeg);
+    if (MessageBox(confirm, _T("Build i3dm Foliage"), MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
+        return;
+
+    // build_foliage.cmd latMin latMax lonMin lonMax --count N --min-land M
+    CString args;
+    args.Format(_T("%.6f %.6f %.6f %.6f --count 20000 --min-land 0.5"),
+                m_scenario->terrainLatMinDeg, m_scenario->terrainLatMaxDeg,
+                m_scenario->terrainLonMinDeg, m_scenario->terrainLonMaxDeg);
+
+    HINSTANCE h = ::ShellExecute(GetSafeHwnd(), _T("open"), cmdPath, args, nullptr, SW_SHOWNORMAL);
+    if ((INT_PTR)h <= 32)
+    {
+        CString msg;
+        msg.Format(_T("Failed to launch the foliage bake script (error %Id)."), (INT_PTR)h);
+        MessageBox(msg, _T("Build i3dm Foliage"), MB_OK | MB_ICONERROR);
+    }
+}
+
+//
+// OnPurgeTerrain — wipe ALL downloaded terrain (every landscape) after a strong
+//   confirmation, then start fresh. Runs retile_terrain.cmd --purge --yes; the
+//   GUI Yes/No is the real gate, so --yes skips the script's console prompt.
+//
+void CPreviewPage::OnPurgeTerrain()
+{
+    CString cmdPath = ResolveDisBrowserScript(_T("retile_terrain.cmd"));
+    if (::GetFileAttributes(cmdPath) == INVALID_FILE_ATTRIBUTES)
+    {
+        CString msg;
+        msg.Format(_T("Cannot find the re-tile script:\n%s\n\nSet the DISBrowser project folder on the Run tab."),
+                   (LPCTSTR)cmdPath);
+        MessageBox(msg, _T("Purge Terrain"), MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    if (MessageBox(_T("Delete ALL downloaded 3D terrain?\n\n")
+                   _T("This wipes every DEM tile and the entire served tile tree for EVERY ")
+                   _T("landscape (Cesium falls back to a bare globe until you build again). ")
+                   _T("This cannot be undone."),
+                   _T("Purge Terrain"), MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+        return;
+
+    HINSTANCE h = ::ShellExecute(GetSafeHwnd(), _T("open"), cmdPath, _T("--purge --yes"),
+                                 nullptr, SW_SHOWNORMAL);
+    if ((INT_PTR)h <= 32)
+    {
+        CString msg;
+        msg.Format(_T("Failed to launch the purge (error %Id)."), (INT_PTR)h);
+        MessageBox(msg, _T("Purge Terrain"), MB_OK | MB_ICONERROR);
     }
 }
 
@@ -1497,7 +1850,8 @@ void CPreviewPage::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT lpDIS)
     const bool isSetStart = (nIDCtl == IDC_BTN_PREVIEW_SET_START);
     const bool isBoundary = (nIDCtl == IDC_BTN_PREVIEW_BOUNDARY);
     const bool isSrvStart = (nIDCtl == IDC_BTN_PREVIEW_TERRAIN_START);
-    if ((!isSetStart && !isBoundary && !isSrvStart) || !lpDIS)
+    const bool isShowOrig = (nIDCtl == IDC_BTN_PREVIEW_SHOW_ORIGIN);
+    if ((!isSetStart && !isBoundary && !isSrvStart && !isShowOrig) || !lpDIS)
     {
         CHelpAwarePage::OnDrawItem(nIDCtl, lpDIS);
         return;
@@ -1515,19 +1869,22 @@ void CPreviewPage::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT lpDIS)
     CFont* oldFont = hf ? dc->SelectObject(CFont::FromHandle(hf)) : nullptr;
     const int oldBk = dc->SetBkMode(TRANSPARENT);
 
-    // Label + a trailing green hint glyph while the mode is armed / server is up.
+    // Label + a trailing green hint glyph while the mode is armed / server is up /
+    // origin marker shown.
     const bool  showHint = isSetStart ? m_startPickArmed
                          : isBoundary ? m_boundaryArmed
+                         : isShowOrig ? m_showOrigin
                                       : m_terrainServerUp;
     CString base = isSetStart ? _T("Set Start")
                  : isBoundary ? _T("Boundary")
+                 : isShowOrig ? _T("Show Origin")
                  : (m_terrainServerUp ? _T("Terrain Server") : _T("Start Terrain Server"));
-    CString hint = isSetStart ? _T(" ?") : _T(" \x2713");   // U+2713 check for Boundary/Server
+    CString hint = isSetStart ? _T(" ?") : _T(" \x2713");   // U+2713 check for Boundary/Server/Origin
 
-    // The Boundary / Server check is drawn in a bold font so it reads clearly.
+    // The Boundary / Server / Origin check is drawn in a bold font so it reads clearly.
     CFont  boldFont;
     CFont* boldPtr = nullptr;
-    if ((isBoundary || isSrvStart) && showHint && hf)
+    if ((isBoundary || isSrvStart || isShowOrig) && showHint && hf)
     {
         LOGFONT lf; ::ZeroMemory(&lf, sizeof(lf));
         if (::GetObject(hf, sizeof(lf), &lf))
@@ -1647,12 +2004,66 @@ void CPreviewPage::DragEntityTo(size_t idx, double enuE, double enuN)
                 SetEllipseStartBearing(idx, static_cast<size_t>(segIdx), seg, enuE, enuN);
         }
         else
+        {
             SetSegmentStartEnu(seg, enuE, enuN, up);
+
+            // Moving the START changes the leg length, so its travel time must be
+            // re-derived from speed — otherwise the window goes stale and a take-off
+            // leg's acceleration curve breaks (it rockets straight to cruise instead
+            // of easing in). Mirror DragLineEnd: take-off uses the 2*dist/speed accel
+            // window (so the smoothstep ramp reaches EXACTLY cruise at the end); a
+            // normal Line uses dist/speed. Then cascade-retime the following legs.
+            if (seg.type == MotionType::Line && seg.coordMode == CoordMode::Local &&
+                seg.speedMps > 0.0)
+            {
+                const double dx = seg.endLocalX - seg.startLocalX;
+                const double dy = seg.endLocalY - seg.startLocalY;
+                const double dz = seg.endLocalZ - seg.startLocalZ;
+                const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+                if (dist > 0.0)
+                    seg.endSecond = seg.startSecond +
+                        (seg.accelerateFromStop
+                             ? (MotionSampler::TakeoffWindowFactor() * dist / seg.speedMps)
+                             : (dist / seg.speedMps));
+                RechainFollowingTimes(ent, static_cast<size_t>(segIdx));
+            }
+        }
     }
+
+    // Remember this drop so EndEntityDrag can log the drop ENU alongside the
+    // resulting streamed position (entity-drag-drop diagnostic).
+    m_dragDiagIdx  = static_cast<int>(idx);
+    m_dragDiagEnuE = enuE;
+    m_dragDiagEnuN = enuN;
 
     RebuildPathsCache();
     RebuildRenderState();
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+}
+
+void CPreviewPage::DragZoneTo(size_t idx, double centerE, double centerN)
+{
+    if (!m_scenario || idx >= m_scenario->level.zones.size()) return;
+    LevelZone& z = m_scenario->level.zones[idx];
+
+    // Move the whole box: keep its width/height, recenter on (centerE, centerN).
+    const double halfE = 0.5 * (z.eastMaxM  - z.eastMinM);
+    const double halfN = 0.5 * (z.northMaxM - z.northMinM);
+    z.eastMinM  = centerE - halfE;
+    z.eastMaxM  = centerE + halfE;
+    z.northMinM = centerN - halfN;
+    z.northMaxM = centerN + halfN;
+
+    RebuildRenderState();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+}
+
+void CPreviewPage::EndZoneDrag()
+{
+    // Commit: reload the other tabs from the shared model and flag dirty so the
+    // moved zone persists into the .ini on Save (mirrors EndEntityDrag).
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
 }
 
 void CPreviewPage::EndEntityDrag()
@@ -1662,6 +2073,74 @@ void CPreviewPage::EndEntityDrag()
     // (synchronous) matches the WM_APP_MARK_DIRTY convention used elsewhere.
     if (CWnd* top = GetTopLevelParent())
         top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+
+    // ---- Entity drag-drop diagnostic (appends to error.log) --------------------
+    // Logs the DROP point (screen->ENU, so |drop| tells us how far from origin the
+    // user actually released) against the AUTHORITATIVE t=0 pose the DIS stream will
+    // send (MotionSampler::SamplePose at t=0). If the drop is ~0 but the streamed
+    // pose is 25 km, the storage path is wrong; if the drop itself is 25 km, the
+    // release landed on mis-georeferenced tiles / the wrong spot.
+    if (m_scenario && m_dragDiagIdx >= 0 &&
+        static_cast<size_t>(m_dragDiagIdx) < m_scenario->entities.size())
+    {
+        const Entity& e = m_scenario->entities[static_cast<size_t>(m_dragDiagIdx)];
+        const double oLat = m_scenario->originLatDeg;
+        const double oLon = m_scenario->originLonDeg;
+        const double oAlt = m_scenario->originAltM;
+
+        const double dropE = m_dragDiagEnuE, dropN = m_dragDiagEnuN;
+        const double dropDist = std::sqrt(dropE * dropE + dropN * dropN);
+
+        // Authoritative streamed pose at t=0 (what DISBrowser will actually receive).
+        const SampledPose p0 = MotionSampler::SamplePose(e, *m_scenario, 0.0);
+        double sE = 0, sN = 0, sU = 0, sLat = 0, sLon = 0, sAlt = 0;
+        CoordTransforms::EcefToLocalEnuDeg(p0.ecefX, p0.ecefY, p0.ecefZ,
+                                           oLat, oLon, oAlt, sE, sN, sU);
+        CoordTransforms::EcefToGeodeticDeg(p0.ecefX, p0.ecefY, p0.ecefZ, sLat, sLon, sAlt);
+        const double sDist = std::sqrt(sE * sE + sN * sN);
+
+        // Which field the drag wrote: the first ENABLED segment's start, else the
+        // entity's static initial pose (mirror of DragEntityTo's own branch choice).
+        int segIdx = -1;
+        for (size_t k = 0; k < e.motionSegments.size(); ++k)
+            if (e.motionSegments[k].enabled) { segIdx = static_cast<int>(k); break; }
+
+        char buf[1400];
+        if (segIdx >= 0)
+        {
+            const MotionSegment& s = e.motionSegments[static_cast<size_t>(segIdx)];
+            _snprintf_s(buf, sizeof(buf), _TRUNCATE,
+                "ENTITY DROP '%s' idx=%d -> wrote seg %d start\n"
+                "  drop ENU   = E %.1f  N %.1f m   (|drop| %.1f m = %.2f km from origin)\n"
+                "  origin     = lat %.6f  lon %.6f  alt %.1f\n"
+                "  t=0 STREAM = ECEF(%.1f,%.1f,%.1f) -> ENU E %.1f N %.1f U %.1f  = %.2f km ; geo lat %.6f lon %.6f\n"
+                "  seg.start  = local(%.1f,%.1f,%.1f)  ecef(%.1f,%.1f,%.1f)  lat %.6f lon %.6f  mode=%d",
+                e.name.c_str(), m_dragDiagIdx, segIdx,
+                dropE, dropN, dropDist, dropDist / 1000.0,
+                oLat, oLon, oAlt,
+                p0.ecefX, p0.ecefY, p0.ecefZ, sE, sN, sU, sDist / 1000.0, sLat, sLon,
+                s.startLocalX, s.startLocalY, s.startLocalZ,
+                s.startEcefX, s.startEcefY, s.startEcefZ,
+                s.startLat, s.startLon, static_cast<int>(s.coordMode));
+        }
+        else
+        {
+            _snprintf_s(buf, sizeof(buf), _TRUNCATE,
+                "ENTITY DROP '%s' idx=%d -> wrote entity initial\n"
+                "  drop ENU   = E %.1f  N %.1f m   (|drop| %.1f m = %.2f km from origin)\n"
+                "  origin     = lat %.6f  lon %.6f  alt %.1f\n"
+                "  t=0 STREAM = ECEF(%.1f,%.1f,%.1f) -> ENU E %.1f N %.1f U %.1f  = %.2f km ; geo lat %.6f lon %.6f\n"
+                "  ent.init   = local(%.1f,%.1f,%.1f)  ecef(%.1f,%.1f,%.1f)  lat %.6f lon %.6f",
+                e.name.c_str(), m_dragDiagIdx,
+                dropE, dropN, dropDist, dropDist / 1000.0,
+                oLat, oLon, oAlt,
+                p0.ecefX, p0.ecefY, p0.ecefZ, sE, sN, sU, sDist / 1000.0, sLat, sLon,
+                e.localX, e.localY, e.localZ,
+                e.ecefX, e.ecefY, e.ecefZ, e.lat, e.lon);
+        }
+        LOG(buf);
+        m_dragDiagIdx = -1;
+    }
 }
 
 void CPreviewPage::DuplicateEntity(size_t idx)
@@ -1826,6 +2305,696 @@ void CPreviewPage::OnNewEntity()
         top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
 }
 
+// ============================ Camera system ============================
+
+//
+// GetCameras / MutableCameras — the scenario's camera schedule (or nullptr when
+//   no scenario is loaded). The timeline reads via the const form and edits
+//   frame boundaries via the mutable form.
+//
+const std::vector<CameraFrame>* CPreviewPage::GetCameras() const
+{
+    return m_scenario ? &m_scenario->cameras : nullptr;
+}
+std::vector<CameraFrame>* CPreviewPage::MutableCameras()
+{
+    return m_scenario ? &m_scenario->cameras : nullptr;
+}
+
+//
+// NormalizeCameraSchedule — keep every frame a valid, in-range box: clamp
+//   begin/end into [0, EffectivePreviewDuration()], enforce a minimum width, sort
+//   by start time, and push any overlaps apart so boxes never overlap. Frames may
+//   still leave gaps (the operator arranges them freely); we only guarantee they
+//   stay ordered and non-overlapping.
+//
+void CPreviewPage::NormalizeCameraSchedule()
+{
+    if (!m_scenario) return;
+    auto& cams = m_scenario->cameras;
+    if (cams.empty()) return;
+
+    const double D = EffectivePreviewDuration();
+    constexpr double kMinW = 1.0;   // a box can't be narrower than this
+    for (CameraFrame& c : cams)
+    {
+        if (c.beginSecond < 0.0) c.beginSecond = 0.0;
+        if (c.beginSecond > D)   c.beginSecond = D;
+        if (c.endSecond   > D)   c.endSecond   = D;
+        if (c.endSecond < c.beginSecond + kMinW)
+            c.endSecond = c.beginSecond + kMinW;
+        if (c.endSecond > D)     // min width would spill past the end -> pull left
+        {
+            c.endSecond   = D;
+            c.beginSecond = D - kMinW;
+            if (c.beginSecond < 0.0) c.beginSecond = 0.0;
+        }
+    }
+
+    // Stable so an equal-start tie keeps vector order — the timeline places a
+    // reordered (dragged-to-front) frame ahead of its tie group and relies on
+    // that order surviving here.
+    std::stable_sort(cams.begin(), cams.end(),
+              [](const CameraFrame& a, const CameraFrame& b)
+              { return a.beginSecond < b.beginSecond; });
+
+    // De-overlap: walk left-to-right and shove any box that starts before its
+    // predecessor ends to begin exactly at that end (keeping its width). Clamp to
+    // the duration so a cascade can't spill past the timeline. This is the model
+    // guarantee that camera boxes are never permitted to overlap.
+    for (size_t i = 1; i < cams.size(); ++i)
+    {
+        const double prevEnd = cams[i - 1].endSecond;
+        if (cams[i].beginSecond < prevEnd)
+        {
+            const double w = cams[i].endSecond - cams[i].beginSecond;
+            cams[i].beginSecond = prevEnd;
+            cams[i].endSecond   = prevEnd + w;
+            if (cams[i].endSecond > D)
+            {
+                cams[i].endSecond   = D;
+                cams[i].beginSecond = std::max(0.0, D - w);
+            }
+        }
+    }
+}
+
+//
+// OnCamScaleChange — the time-scale dropdown changed: apply the new seconds-per-
+//   reference-distance to the timeline (boxes grow/shrink), resync the scroll bar
+//   to the new content width, and repaint the strip.
+//
+void CPreviewPage::OnCamScaleChange()
+{
+    CComboBox* sc = (CComboBox*)GetDlgItem(IDC_COMBO_CAM_SCALE);
+    if (!sc) return;
+    int sel = sc->GetCurSel();
+    if (sel < 0 || sel >= (int)_countof(kCamScales)) sel = kCamScaleDefault;
+    m_timeline.SetTimeScale(kCamScales[sel].seconds);
+    m_timeline.SetScrollOffset(0);           // re-home the view on a zoom change
+    UpdateCameraScrollBar();
+    if (m_timeline.GetSafeHwnd()) m_timeline.Invalidate(FALSE);
+}
+
+//
+// UpdateCameraScrollBar — size the camera-strip horizontal scroll bar to the
+//   schedule's full pixel width at the current scale. The page (thumb) is the
+//   visible strip width; the bar is disabled when everything already fits.
+//
+void CPreviewPage::UpdateCameraScrollBar()
+{
+    CScrollBar* sb = (CScrollBar*)GetDlgItem(IDC_CAMERA_HSCROLL);
+    if (!sb || !m_timeline.GetSafeHwnd()) return;
+
+    CRect rc; m_timeline.GetClientRect(&rc);
+    const int clientW  = std::max<int>(rc.Width(), 1);
+    const int contentW = std::max(m_timeline.ContentWidthPx(), clientW);
+
+    int pos = m_timeline.GetScrollOffset();
+    const int maxPos = std::max(0, contentW - clientW);
+    if (pos > maxPos) pos = maxPos;
+    m_timeline.SetScrollOffset(pos);
+
+    SCROLLINFO si = {};
+    si.cbSize = sizeof(si);
+    si.fMask  = SIF_RANGE | SIF_PAGE | SIF_POS | SIF_DISABLENOSCROLL;
+    si.nMin   = 0;
+    si.nMax   = contentW - 1;      // range is 0..contentW-1
+    si.nPage  = clientW;           // thumb covers the visible width
+    si.nPos   = pos;
+    sb->SetScrollInfo(&si, TRUE);
+    sb->EnableWindow(contentW > clientW);
+}
+
+//
+// AddCameraFrame — insert `f` as a free-floating box of a sensible default width,
+//   dropped into a VISIBLE, non-overlapping gap so it always appears where the
+//   operator is looking. Placing it in a real gap matters: NormalizeCameraSchedule
+//   only shoves boxes that overlap their predecessor, so a gap-placed box stays
+//   put instead of being cascaded off-screen (the New-Cam-shows-nothing regression,
+//   which surfaced once the schedule sort became stable). The box remains fully
+//   movable and resizable afterward.
+//
+void CPreviewPage::AddCameraFrame(CameraFrame&& f)
+{
+    if (!m_scenario) return;
+    auto& cams = m_scenario->cameras;
+    const double D = EffectivePreviewDuration();
+
+    // Cache the target's catalogued size here rather than at each of the three
+    // creation sites, so no path can produce a frame with an unresolved target.
+    CameraTargetExtents::Apply(*m_scenario, f);
+
+    // Default width = one tenth of the time currently visible in the strip (the
+    // parent camera-duration control), so a fresh box is a readable slice at any
+    // zoom. Fall back to a tenth of the full duration before the strip is realized.
+    const double vis = m_timeline.VisibleSpanSeconds();
+    double width = (vis > 0.0 ? vis : D) * 0.1;
+    if (width > D)    width = D;
+    if (width <= 0.0) width = 1.0;
+
+    // The window currently on screen: [visLo, visHi]. When the strip isn't realized
+    // yet, treat the whole [0, D] as visible.
+    double visLo = 0.0, visHi = D;
+    if (vis > 0.0)
+    {
+        const double pps = m_timeline.PxPerSecond();
+        visLo = (pps > 0.0) ? m_timeline.GetScrollOffset() / pps : 0.0;
+        visHi = visLo + vis;
+    }
+    if (visLo < 0.0) visLo = 0.0;
+    if (visHi > D)   visHi = D;
+    if (visHi <= visLo) visHi = D;              // degenerate — fall back to full range
+
+    // Preferred anchor: the playhead when it's on screen (drop the box where the
+    // operator is looking), otherwise the left edge of the visible window.
+    double anchor = m_previewTimeSec;
+    if (anchor < visLo || anchor > visHi) anchor = visLo;
+
+    // Existing occupied intervals, begin-sorted (cams are already normalized).
+    std::vector<std::pair<double, double>> busy;
+    busy.reserve(cams.size());
+    for (const CameraFrame& c : cams) busy.emplace_back(c.beginSecond, c.endSecond);
+    std::sort(busy.begin(), busy.end());
+
+    // Largest width that can fit in the visible window at all (shrink for a tight zoom).
+    if (width > visHi - visLo) width = std::max(1.0, visHi - visLo);
+
+    // Slide a candidate slot rightward from the anchor, hopping over any box it
+    // overlaps, until it fits with no overlap inside [visLo, visHi].
+    auto firstFreeFrom = [&](double from) -> double
+    {
+        double b = std::max(from, visLo);
+        bool moved = true;
+        while (moved)
+        {
+            moved = false;
+            if (b + width > visHi) return -1.0;      // ran past the visible window
+            for (const auto& iv : busy)
+                if (b < iv.second && iv.first < b + width)   // overlaps this box
+                {
+                    b = iv.second;                    // hop to its end and retry
+                    moved = true;
+                    break;
+                }
+        }
+        return b;
+    };
+
+    double begin = firstFreeFrom(anchor);
+    if (begin < 0.0) begin = firstFreeFrom(visLo);   // retry scanning the whole window
+    if (begin < 0.0)                                 // window fully packed — accept a
+        begin = std::min(anchor, std::max(0.0, D - width));  // clamped anchor; Normalize tidies
+    if (begin < 0.0) begin = 0.0;
+
+    f.beginSecond = begin;
+    f.endSecond   = std::min(D, begin + width);
+    cams.push_back(std::move(f));
+    NormalizeCameraSchedule();   // clamp + sort + de-overlap (leaves gap-placed boxes put)
+}
+
+//
+// PopulateCameraCombos — (re)fill the Entity, Camera-preset, Target and
+//   Transition dropdowns. Entity/Target item-data hold the DIS EntityID; the
+//   preset combo's item-data is the index into theApp.CameraPresets().
+//
+void CPreviewPage::PopulateCameraCombos()
+{
+    if (!m_scenario) return;
+
+    auto nameOf = [](const Entity& e) -> CString {
+        const std::string& s = e.marking.empty() ? e.name : e.marking;
+        CString nm(CA2W(s.c_str()));
+        CString out; out.Format(_T("%s [%u]"), (LPCTSTR)nm, static_cast<unsigned>(e.entityId));
+        return out;
+    };
+
+    if (CComboBox* ent = (CComboBox*)GetDlgItem(IDC_COMBO_CAM_ENTITY))
+    {
+        ent->ResetContent();
+        for (const Entity& e : m_scenario->entities)
+        {
+            const int ix = ent->AddString(nameOf(e));
+            ent->SetItemData(ix, e.entityId);
+        }
+        if (ent->GetCount() > 0) ent->SetCurSel(0);
+    }
+    if (CComboBox* tgt = (CComboBox*)GetDlgItem(IDC_COMBO_CAM_TARGET))
+    {
+        tgt->ResetContent();
+        const int z = tgt->AddString(_T("(focus on source)"));
+        tgt->SetItemData(z, 0);
+        for (const Entity& e : m_scenario->entities)
+        {
+            const int ix = tgt->AddString(nameOf(e));
+            tgt->SetItemData(ix, e.entityId);
+        }
+        tgt->SetCurSel(0);
+    }
+    if (CComboBox* pre = (CComboBox*)GetDlgItem(IDC_COMBO_CAM_PRESET))
+    {
+        pre->ResetContent();
+        const auto& presets = theApp.CameraPresets().Presets();
+        for (size_t i = 0; i < presets.size(); ++i)
+        {
+            CString label(CA2W(presets[i].DisplayLabel().c_str()));
+            const int ix = pre->AddString(label);
+            pre->SetItemData(ix, static_cast<DWORD_PTR>(i));
+        }
+        if (pre->GetCount() > 0) pre->SetCurSel(0);
+    }
+    if (CComboBox* trn = (CComboBox*)GetDlgItem(IDC_COMBO_CAM_TRANSITION))
+    {
+        if (trn->GetCount() == 0)   // fixed two-item list; seed once
+        {
+            trn->AddString(_T("Crossfade / Blend"));   // index 0
+            trn->AddString(_T("Hard cut"));            // index 1
+        }
+        if (trn->GetCurSel() < 0) trn->SetCurSel(0);
+    }
+}
+
+//
+// OnNewCamera — "New Cam" button: drop a Stationary camera box in the upper-left
+//   of the current view and register a matching frame on the timeline.
+//
+std::string CPreviewPage::NextStationaryCameraLabel() const
+{
+    if (!m_scenario) return "Camera 1";
+    const auto& cams = m_scenario->cameras;
+    auto taken = [&cams](const std::string& s)
+    {
+        for (const CameraFrame& c : cams)
+            if (c.label == s) return true;
+        return false;
+    };
+    for (int n = 1; ; ++n)
+    {
+        std::string label = "Camera " + std::to_string(n);
+        if (!taken(label)) return label;
+    }
+}
+
+void CPreviewPage::OnNewCamera()
+{
+    if (!m_scenario) return;
+
+    CameraFrame f;
+    f.kind = CameraKind::Stationary;
+
+    // Upper-left region of the current view (fallback: up-and-left of center).
+    double east = m_centerEnuE - 500.0, north = m_centerEnuN + 500.0;
+    if (m_canvas.GetSafeHwnd())
+    {
+        CRect rc; m_canvas.GetClientRect(&rc);
+        if (rc.Width() > 0 && rc.Height() > 0)
+        {
+            const int px = rc.left + rc.Width()  / 10;   // ~10% across
+            const int py = rc.top  + rc.Height() / 10;   // ~10% down
+            double e = 0.0, n = 0.0;
+            if (m_canvas.UnprojectToEnu(CPoint(px, py), e, n)) { east = e; north = n; }
+        }
+    }
+    f.vantEastM = east; f.vantNorthM = north; f.vantUpM = 0.0;
+    // Unique "Camera N": pick the lowest N whose label isn't already in use.
+    // Deriving it from cameras.size()+1 collides after a delete-then-add (e.g.
+    // deleting one of six leaves size 5, and "Camera 6" is regenerated as a
+    // duplicate), which is exactly the two-"Camera 6" case the operator hit.
+    f.label = NextStationaryCameraLabel();
+
+    AddCameraFrame(std::move(f));
+
+    RebuildRenderState();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+    if (m_timeline.GetSafeHwnd()) m_timeline.Invalidate(FALSE);
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+}
+
+//
+// OnAddCamera — "Add" button: build an Entity camera from the dropdown row
+//   (entity + Cameras.ini preset + target + transition) and register a timeline
+//   frame for it.
+//
+void CPreviewPage::OnAddCamera()
+{
+    if (!m_scenario) return;
+
+    CComboBox* ent = (CComboBox*)GetDlgItem(IDC_COMBO_CAM_ENTITY);
+    CComboBox* pre = (CComboBox*)GetDlgItem(IDC_COMBO_CAM_PRESET);
+    CComboBox* tgt = (CComboBox*)GetDlgItem(IDC_COMBO_CAM_TARGET);
+    CComboBox* trn = (CComboBox*)GetDlgItem(IDC_COMBO_CAM_TRANSITION);
+    if (!ent || !pre) return;
+
+    const int ei = ent->GetCurSel();
+    if (ei < 0) { AfxMessageBox(_T("Select an entity for the camera.")); return; }
+
+    const auto& presets = theApp.CameraPresets().Presets();
+    const int pi = pre->GetCurSel();
+    if (pi < 0 || presets.empty())
+    {
+        AfxMessageBox(_T("No camera presets are available (config\\Cameras.ini)."));
+        return;
+    }
+    const size_t pidx = static_cast<size_t>(pre->GetItemData(pi));
+    if (pidx >= presets.size()) return;
+
+    CameraFrame f;
+    f.kind           = CameraKind::Entity;
+    f.sourceEntityId = static_cast<uint16_t>(ent->GetItemData(ei));
+    f.presetType     = presets[pidx].type;
+    f.presetAngle    = presets[pidx].angle;
+    f.targetEntityId = (tgt && tgt->GetCurSel() >= 0)
+                       ? static_cast<uint16_t>(tgt->GetItemData(tgt->GetCurSel())) : 0;
+    f.transition     = (trn && trn->GetCurSel() == 1)
+                       ? CameraTransition::HardCut : CameraTransition::CrossfadeBlend;
+    // Match the dialog path: a camera with an authored envelope enforces it by default.
+    f.limitsEnabled  = presets[pidx].LimitsAvailable();
+
+    std::string ename;
+    for (const Entity& e : m_scenario->entities)
+        if (e.entityId == f.sourceEntityId) { ename = e.marking.empty() ? e.name : e.marking; break; }
+    f.label = ename + " / " + presets[pidx].DisplayLabel();
+
+    AddCameraFrame(std::move(f));
+
+    RebuildRenderState();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+    if (m_timeline.GetSafeHwnd()) m_timeline.Invalidate(FALSE);
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+}
+
+//
+// CameraPresetCount / CameraPresetLabel — expose the loaded Cameras.ini presets
+//   to the canvas so it can build the entity-dot "New Camera" submenu without
+//   reaching into theApp directly.
+//
+size_t CPreviewPage::CameraPresetCount() const
+{
+    return theApp.CameraPresets().Presets().size();
+}
+
+CString CPreviewPage::CameraPresetLabel(size_t i) const
+{
+    const auto& presets = theApp.CameraPresets().Presets();
+    if (i >= presets.size()) return CString();
+    return CString(CA2W(presets[i].DisplayLabel().c_str()));
+}
+
+//
+// AddEntityCameraFrame — mount an Entity camera on entity `entityIdx` using
+//   Cameras.ini preset `presetIndex`, tracking `targetEntityId` (0 = focus on
+//   source) with the given `transition` and zoom, then add it as a timeline frame.
+//
+void CPreviewPage::AddEntityCameraFrame(size_t entityIdx, size_t presetIndex,
+                                        uint16_t targetEntityId,
+                                        CameraTransition transition,
+                                        bool zoomEnabled, double zoomFovDeg,
+                                        bool dynamicZoom, double zoomFillPct,
+                                        bool limitsEnabled)
+{
+    if (!m_scenario || entityIdx >= m_scenario->entities.size()) return;
+    const auto& presets = theApp.CameraPresets().Presets();
+    if (presetIndex >= presets.size()) return;
+
+    const Entity& src = m_scenario->entities[entityIdx];
+
+    CameraFrame f;
+    f.kind           = CameraKind::Entity;
+    f.sourceEntityId = src.entityId;
+    f.presetType     = presets[presetIndex].type;
+    f.presetAngle    = presets[presetIndex].angle;
+    f.targetEntityId = targetEntityId;
+    f.transition     = transition;
+    f.zoomEnabled    = zoomEnabled;
+    f.zoomFovDeg     = zoomFovDeg;
+    f.dynamicZoom    = dynamicZoom;
+    f.zoomFillPct    = zoomFillPct;
+    f.limitsEnabled  = limitsEnabled;
+
+    const std::string ename = src.marking.empty() ? src.name : src.marking;
+    f.label = ename + " / " + presets[presetIndex].DisplayLabel();
+
+    AddCameraFrame(std::move(f));
+
+    RebuildRenderState();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+    if (m_timeline.GetSafeHwnd()) m_timeline.Invalidate(FALSE);
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+}
+
+//
+// NewEntityCameraViaDialog — entity-dot "New Camera..." path: pop the modal that
+//   lets the operator choose the camera preset, the tracked target, the zoom and
+//   the transition (source is the clicked entity), then create the frame on OK.
+//
+void CPreviewPage::NewEntityCameraViaDialog(size_t entityIdx)
+{
+    if (!m_scenario || entityIdx >= m_scenario->entities.size()) return;
+
+    if (theApp.CameraPresets().Presets().empty())
+    {
+        AfxMessageBox(_T("No camera presets are available (config\\Cameras.ini)."));
+        return;
+    }
+
+    const Entity& src = m_scenario->entities[entityIdx];
+    const std::string sname = src.marking.empty() ? src.name : src.marking;
+    CString srcLabel;
+    srcLabel.Format(_T("%s [%u]"),
+                    (LPCTSTR)CString(CA2W(sname.c_str())),
+                    static_cast<unsigned>(src.entityId));
+
+    CEntityCameraDialog dlg(this);
+    dlg.SetContext(m_scenario, src.entityId, srcLabel);
+    if (dlg.DoModal() != IDOK) return;
+
+    AddEntityCameraFrame(entityIdx, dlg.PresetIndex(),
+                         dlg.TargetEntityId(), dlg.Transition(),
+                         dlg.ZoomEnabled(), dlg.ZoomFovDeg(),
+                         dlg.DynamicZoom(), dlg.ZoomFillPct(),
+                         dlg.LimitsEnabled());
+}
+
+//
+// DragCameraTo — live-move a Stationary camera's vantage during a canvas drag.
+//
+void CPreviewPage::DragCameraTo(size_t frameIdx, double enuE, double enuN)
+{
+    if (!m_scenario || frameIdx >= m_scenario->cameras.size()) return;
+    CameraFrame& c = m_scenario->cameras[frameIdx];
+    if (c.kind != CameraKind::Stationary) return;
+    c.vantEastM = enuE;
+    c.vantNorthM = enuN;
+    RebuildRenderState();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+}
+
+//
+// EndCameraDrag — commit a finished camera-box drag (reload tabs + mark dirty).
+//
+void CPreviewPage::EndCameraDrag()
+{
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+}
+
+//
+// SetCameraTarget — set frame `frameIdx`'s tracked entity (0 = focus on source).
+//
+void CPreviewPage::SetCameraTarget(size_t frameIdx, uint16_t targetEntityId)
+{
+    if (!m_scenario || frameIdx >= m_scenario->cameras.size()) return;
+    CameraFrame& f = m_scenario->cameras[frameIdx];
+    f.targetEntityId = targetEntityId;
+    // A new target is a new size — dynamic zoom would otherwise keep framing the
+    // old entity's dimensions.
+    CameraTargetExtents::Apply(*m_scenario, f);
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+}
+
+//
+// SetCameraTransition — set the transition used entering frame `frameIdx`.
+//
+void CPreviewPage::SetCameraTransition(size_t frameIdx, CameraTransition t)
+{
+    if (!m_scenario || frameIdx >= m_scenario->cameras.size()) return;
+    m_scenario->cameras[frameIdx].transition = t;
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+}
+
+//
+// SetCameraZoomEnabled — master zoom toggle for frame `frameIdx`. Off restores
+//   the legacy behaviour (preset FOV for Entity frames, engine default otherwise).
+//
+void CPreviewPage::SetCameraZoomEnabled(size_t frameIdx, bool on)
+{
+    if (!m_scenario || frameIdx >= m_scenario->cameras.size()) return;
+    m_scenario->cameras[frameIdx].zoomEnabled = on;
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+}
+
+//
+// SetCameraDynamicZoom — auto-fit the target instead of holding a fixed FOV.
+//
+void CPreviewPage::SetCameraDynamicZoom(size_t frameIdx, bool on)
+{
+    if (!m_scenario || frameIdx >= m_scenario->cameras.size()) return;
+    m_scenario->cameras[frameIdx].dynamicZoom = on;
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+}
+
+//
+// SetCameraGimbalLimits — enforce the mounted preset's travel envelope for this frame.
+//   Off restores the legacy behaviour: the camera aims wherever the target is, however
+//   far off-boresight that would really be.
+//
+void CPreviewPage::SetCameraGimbalLimits(size_t frameIdx, bool on)
+{
+    if (!m_scenario || frameIdx >= m_scenario->cameras.size()) return;
+    m_scenario->cameras[frameIdx].limitsEnabled = on;
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+}
+
+//
+// SetCameraZoomFov — static FOV override (degrees), clamped to the authoring range.
+//
+void CPreviewPage::SetCameraZoomFov(size_t frameIdx, double fovDeg)
+{
+    if (!m_scenario || frameIdx >= m_scenario->cameras.size()) return;
+    if (fovDeg < kZoomFovMinDeg) fovDeg = kZoomFovMinDeg;
+    if (fovDeg > kZoomFovMaxDeg) fovDeg = kZoomFovMaxDeg;
+    m_scenario->cameras[frameIdx].zoomFovDeg = fovDeg;
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+}
+
+//
+// SetCameraZoomFill — how much of the frame a dynamic fit should fill (percent).
+//
+void CPreviewPage::SetCameraZoomFill(size_t frameIdx, double fillPct)
+{
+    if (!m_scenario || frameIdx >= m_scenario->cameras.size()) return;
+    if (fillPct < kZoomFillMinPct) fillPct = kZoomFillMinPct;
+    if (fillPct > kZoomFillMaxPct) fillPct = kZoomFillMaxPct;
+    m_scenario->cameras[frameIdx].zoomFillPct = fillPct;
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+}
+
+//
+// RefreshCameraTargetExtents — re-resolve every frame's cached target dimensions.
+//   Cheap, and it catches entity TYPES retyped on the Asset/Entity Editor tab
+//   after the camera was authored (the frame stores a size, not a type).
+//
+void CPreviewPage::RefreshCameraTargetExtents()
+{
+    if (!m_scenario) return;
+    for (CameraFrame& f : m_scenario->cameras)
+        CameraTargetExtents::Apply(*m_scenario, f);
+}
+
+//
+// DeleteCamera — remove frame `frameIdx` and re-tile the remaining schedule.
+//
+void CPreviewPage::DeleteCamera(size_t frameIdx)
+{
+    if (!m_scenario || frameIdx >= m_scenario->cameras.size()) return;
+    m_scenario->cameras.erase(m_scenario->cameras.begin() + frameIdx);
+    NormalizeCameraSchedule();
+    RebuildRenderState();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+    if (m_timeline.GetSafeHwnd()) m_timeline.Invalidate(FALSE);
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+}
+
+//
+// EntityCameraCount — how many Entity cameras are mounted on the entity at
+//   `entityIdx` (frames whose sourceEntityId matches the entity's DIS id).
+//
+size_t CPreviewPage::EntityCameraCount(size_t entityIdx) const
+{
+    if (!m_scenario || entityIdx >= m_scenario->entities.size()) return 0;
+    const uint16_t id = m_scenario->entities[entityIdx].entityId;
+    size_t n = 0;
+    for (const CameraFrame& c : m_scenario->cameras)
+        if (c.kind == CameraKind::Entity && c.sourceEntityId == id) ++n;
+    return n;
+}
+
+//
+// DeleteCamerasForEntity — remove every Entity camera mounted on the entity at
+//   `entityIdx` (its timeline boxes go with them), then re-tile the schedule.
+//
+void CPreviewPage::DeleteCamerasForEntity(size_t entityIdx)
+{
+    if (!m_scenario || entityIdx >= m_scenario->entities.size()) return;
+    const uint16_t id = m_scenario->entities[entityIdx].entityId;
+
+    auto& cams = m_scenario->cameras;
+    const size_t before = cams.size();
+    cams.erase(std::remove_if(cams.begin(), cams.end(),
+                              [id](const CameraFrame& c) {
+                                  return c.kind == CameraKind::Entity &&
+                                         c.sourceEntityId == id;
+                              }),
+               cams.end());
+    if (cams.size() == before) return;   // nothing mounted on this entity
+
+    NormalizeCameraSchedule();
+    RebuildRenderState();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+    if (m_timeline.GetSafeHwnd()) m_timeline.Invalidate(FALSE);
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+}
+
+//
+// ScrubToTime — move the playback time from a timeline click; sync the slider,
+//   drop trail history, and repaint the canvas + strip.
+//
+void CPreviewPage::ScrubToTime(double t)
+{
+    const double D = EffectivePreviewDuration();
+    if (t < 0.0) t = 0.0;
+    if (t > D)   t = D;
+    m_previewTimeSec = t;
+    m_trails.clear();
+    UpdateSliderFromTime();
+    RebuildRenderState();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+    if (m_timeline.GetSafeHwnd()) m_timeline.Invalidate(FALSE);
+}
+
+//
+// OnTimelineFrameEditing — live repaint during a timeline box move/resize (only
+//   times change; camera positions are unaffected, so the strip alone repaints).
+//
+void CPreviewPage::OnTimelineFrameEditing()
+{
+    if (m_timeline.GetSafeHwnd()) m_timeline.Invalidate(FALSE);
+}
+
+//
+// OnTimelineEdited — commit a timeline box move/resize: clamp/sort the schedule
+//   and mark the scenario dirty so it persists on Save.
+//
+void CPreviewPage::OnTimelineEdited()
+{
+    NormalizeCameraSchedule();
+    if (m_timeline.GetSafeHwnd()) m_timeline.Invalidate(FALSE);
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+}
+
 //
 // DeleteEntity — remove entity `idx` (never the last one), refresh caches, and
 //   reload the other tabs.
@@ -1871,12 +3040,8 @@ void CPreviewPage::PlotLineCourse(size_t idx)
     }
 
     // Speed from the entity TYPE (cruise), same catalog lookup the Motion page
-    // uses; fall back to 100 m/s when the type isn't catalogued.
-    double speed = 0.0;
-    const AirframeProfile prof = theApp.Catalog().Profile(
-        e.kind, e.domain, e.category, e.subcategory);
-    if (prof.valid && prof.cruiseSpeedMps > 0.0) speed = prof.cruiseSpeedMps;
-    if (speed <= 0.0) speed = 100.0;
+    // uses; falls back to 10 m/s (and logs an error) when the type isn't catalogued.
+    double speed = SeedCruiseSpeedMps(&e);
 
     // The course stays level at the entity's current altitude/depth (its
     // conveyance medium), so generating it never moves the entity vertically.
@@ -1944,13 +3109,9 @@ void CPreviewPage::PlotTakeoffLine(size_t idx)
             east, north, up);
     }
 
-    // Cruise (the speed reached at the END of the take-off roll); fall back to
-    // 100 m/s when the type isn't catalogued.
-    double speed = 0.0;
-    const AirframeProfile prof = theApp.Catalog().Profile(
-        e.kind, e.domain, e.category, e.subcategory);
-    if (prof.valid && prof.cruiseSpeedMps > 0.0) speed = prof.cruiseSpeedMps;
-    if (speed <= 0.0) speed = 100.0;
+    // Cruise (the speed reached at the END of the take-off roll); falls back to
+    // 10 m/s (and logs an error) when the type isn't catalogued.
+    double speed = SeedCruiseSpeedMps(&e);
 
     // Straight starter roll along the entity's heading, at the current altitude
     // (a take-off roll stays on the runway; the operator climbs on the NEXT leg
@@ -1965,7 +3126,7 @@ void CPreviewPage::PlotTakeoffLine(size_t idx)
     seg.coordMode         = CoordMode::Local;
     seg.accelerateFromStop = true;   // start stopped, accelerate to `speed`
     seg.startSecond       = 0.0;
-    seg.endSecond         = (speed > 0.0) ? (2.0 * initLen / speed) : 60.0;
+    seg.endSecond         = (speed > 0.0) ? (MotionSampler::TakeoffWindowFactor() * initLen / speed) : 60.0;
     seg.speedMps          = speed;
     seg.startLocalX       = east;
     seg.startLocalY       = north;
@@ -2009,11 +3170,7 @@ void CPreviewPage::PlotEllipseCourse(size_t idx, bool clockwise)
             east, north, up);
     }
 
-    double speed = 0.0;
-    const AirframeProfile prof = theApp.Catalog().Profile(
-        e.kind, e.domain, e.category, e.subcategory);
-    if (prof.valid && prof.cruiseSpeedMps > 0.0) speed = prof.cruiseSpeedMps;
-    if (speed <= 0.0) speed = 100.0;
+    double speed = SeedCruiseSpeedMps(&e);
 
     // Default orbit: a ~2 km circle just south of the entity (entity sits at its
     // north point), with the two foci straddling the center on the E-W axis so
@@ -2126,11 +3283,7 @@ void CPreviewPage::PlotEntityEllipse(size_t idx, bool clockwise)
             eE, eN, eU);
     }
 
-    double speed = 0.0;
-    const AirframeProfile prof = theApp.Catalog().Profile(
-        e.kind, e.domain, e.category, e.subcategory);
-    if (prof.valid && prof.cruiseSpeedMps > 0.0) speed = prof.cruiseSpeedMps;
-    if (speed <= 0.0) speed = 100.0;
+    double speed = SeedCruiseSpeedMps(&e);
 
     // Foci straddle the target E-W (so both are grabbable); the orbit's altitude
     // is the driven entity's (BuildEllipseFrame keeps it when re-centering).
@@ -2244,9 +3397,63 @@ void CPreviewPage::DragEllipseShapeHandle(size_t entityIdx, size_t segIdx,
         }
     }
 
+    // Keep any legs following this orbit time-contiguous too.
+    RechainFollowingTimes(ent, segIdx);
+
     RebuildPathsCache();
     RebuildRenderState();
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+}
+
+//
+// RechainFollowingTimes — after a segment's endSecond changes, walk forward and
+//   re-glue every following enabled segment so the whole course stays TIME-
+//   contiguous. Each leg's start is pinned to the previous leg's end; a Line's
+//   own end is recomputed from its geometry & speed (take-off legs use the
+//   2*dist/speed acceleration window), while other leg types (ellipse, etc.)
+//   preserve their existing duration. Editing an early leg used to re-glue only
+//   the IMMEDIATE next leg, leaving downstream legs with stale start times — the
+//   resulting inter-segment time gap froze the entity in place (the "several
+//   second pause between the take-off and the next line"). Cascading closes it.
+//
+void CPreviewPage::RechainFollowingTimes(Entity& e, size_t fromIdx)
+{
+    // `fromIdx` is the last leg whose timing is already correct; it becomes the
+    // anchor. Walk forward, pinning each subsequent ENABLED leg's start to the
+    // previous enabled leg's end. (Pointers stay valid — the vector isn't resized.)
+    const MotionSegment* prev = nullptr;
+    if (fromIdx < e.motionSegments.size() && e.motionSegments[fromIdx].enabled)
+        prev = &e.motionSegments[fromIdx];
+
+    for (size_t k = fromIdx + 1; k < e.motionSegments.size(); ++k)
+    {
+        MotionSegment& cur = e.motionSegments[k];
+        if (!cur.enabled) continue;
+        if (!prev) { prev = &cur; continue; }   // nothing before it to chain to
+
+        const double dur = cur.endSecond - cur.startSecond;   // preserved for non-Line legs
+        cur.startSecond = prev->endSecond;
+        if (cur.type == MotionType::Line && cur.coordMode == CoordMode::Local &&
+            cur.speedMps > 0.0)
+        {
+            const double dx = cur.endLocalX - cur.startLocalX;
+            const double dy = cur.endLocalY - cur.startLocalY;
+            const double dz = cur.endLocalZ - cur.startLocalZ;
+            const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+            if (dist > 0.0)
+                cur.endSecond = cur.startSecond +
+                    (cur.accelerateFromStop
+                         ? (MotionSampler::TakeoffWindowFactor() * dist / cur.speedMps)
+                         : (dist / cur.speedMps));
+            else
+                cur.endSecond = cur.startSecond + (dur > 0.0 ? dur : 0.0);
+        }
+        else
+        {
+            cur.endSecond = cur.startSecond + (dur > 0.0 ? dur : 0.0);
+        }
+        prev = &cur;
+    }
 }
 
 void CPreviewPage::DragLineEnd(size_t entityIdx, size_t segIdx, double enuE, double enuN)
@@ -2261,17 +3468,25 @@ void CPreviewPage::DragLineEnd(size_t entityIdx, size_t segIdx, double enuE, dou
     seg.endLocalX = enuE;
     seg.endLocalY = enuN;
 
+    // The drag manipulates the Local ENU rep; re-derive this end's ECEF and
+    // Lat/Lon/Alt from it so the Motion tab shows the moved point in ANY
+    // coordinate mode (not just Local) and the sampler resolves what's drawn.
+    MotionSampler::SyncSegmentEndpoint(seg, /*isEnd*/true, CoordMode::Local,
+        m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM);
+
     // Keep travel time consistent with the type's cruise speed over the new
     // distance, so the entity still arrives at the end at endSecond. A take-off
-    // leg accelerates from 0 to `speedMps`, so its average speed is half cruise
-    // and it needs twice the time (2*dist/speed) to reach cruise at the end.
+    // leg accelerates from 0 to `speedMps` along the jet tanh profile, so it needs
+    // C(k)*dist/speed (MotionSampler::TakeoffWindowFactor) to reach cruise at the end.
     const double dx = seg.endLocalX - seg.startLocalX;
     const double dy = seg.endLocalY - seg.startLocalY;
     const double dz = seg.endLocalZ - seg.startLocalZ;
     const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
     if (seg.speedMps > 0.0 && dist > 0.0)
         seg.endSecond = seg.startSecond +
-            (seg.accelerateFromStop ? (2.0 * dist / seg.speedMps) : (dist / seg.speedMps));
+            (seg.accelerateFromStop
+                 ? (MotionSampler::TakeoffWindowFactor() * dist / seg.speedMps)
+                 : (dist / seg.speedMps));
 
     // Keep a chained next leg glued to this moving end so the multi-leg course
     // stays connected (drag a junction -> the following leg's start follows).
@@ -2283,6 +3498,10 @@ void CPreviewPage::DragLineEnd(size_t entityIdx, size_t segIdx, double enuE, dou
             nxt.startLocalX = seg.endLocalX;
             nxt.startLocalY = seg.endLocalY;
             nxt.startLocalZ = seg.endLocalZ;
+            // Same Local->all-reps sync for the glued start, so the following
+            // leg's begin point reads correctly in the Motion tab too.
+            MotionSampler::SyncSegmentEndpoint(nxt, /*isEnd*/false, CoordMode::Local,
+                m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM);
             nxt.startSecond = seg.endSecond;
             const double nx = nxt.endLocalX - nxt.startLocalX;
             const double ny = nxt.endLocalY - nxt.startLocalY;
@@ -2313,6 +3532,11 @@ void CPreviewPage::DragLineEnd(size_t entityIdx, size_t segIdx, double enuE, dou
             nxt.endSecond   = nxt.startSecond + (dur > 0.0 ? dur : 0.0);
         }
     }
+
+    // Cascade the re-timing through every leg after the immediate next one, so a
+    // multi-leg course can't be left with a frozen time-gap downstream.
+    if (segIdx + 1 < e.motionSegments.size())
+        RechainFollowingTimes(e, segIdx + 1);
 
     RebuildPathsCache();
     RebuildRenderState();
@@ -2728,6 +3952,7 @@ void CPreviewPage::RefreshEntitySpeed(size_t idx)
 void CPreviewPage::OnDestTimeToggle()
 {
     m_showDestTime = IsDlgButtonChecked(IDC_CHK_PREVIEW_DESTTIME) == BST_CHECKED;
+    PersistToggles();
     if (CWnd* lc = GetDlgItem(IDC_LIST_PREVIEW_DESTTIME))
         lc->ShowWindow(m_showDestTime ? SW_SHOW : SW_HIDE);
     if (m_showDestTime) RefreshDestTimeList();
@@ -3070,17 +4295,31 @@ bool CPreviewPage::FollowCenterOffset(const MotionSegment& s,
                                       double& outDE, double& outDN) const
 {
     outDE = outDN = 0.0;
+    if (!m_scenario) return false;
     if (s.type != MotionType::Ellipse || s.followEntityId < 0) return false;
     const int ti = FindEntityIndexById(s.followEntityId);
-    if (ti < 0 || static_cast<size_t>(ti) >= m_state.poses.size()) return false;
-    if (!m_state.poses[ti].enabled) return false;
+    if (ti < 0 || static_cast<size_t>(ti) >= m_scenario->entities.size()) return false;
+    const Entity& target = m_scenario->entities[static_cast<size_t>(ti)];
+    if (!target.enabled) return false;
+
+    // Anchor on the target at the HANDOFF time (clamped into the segment) -- the
+    // SAME instant AppendFollowEllipsePath re-centers the drawn orbit. Using the
+    // raw scrub time here instead left the focus handles floating off the drawn
+    // orbit while authoring, so you couldn't grab them to resize it.
+    const double tRecenter =
+        std::min(std::max(m_previewTimeSec, s.startSecond), s.endSecond);
+    const SampledPose tp = MotionSampler::SamplePose(target, *m_scenario, tRecenter);
+    double te, tn, tu;
+    CoordTransforms::EcefToLocalEnuDeg(
+        tp.ecefX, tp.ecefY, tp.ecefZ,
+        m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM, te, tn, tu);
 
     double f1E, f1N, f2E, f2N;
     FocusToEnu(s, /*focus2*/ false, f1E, f1N);
     FocusToEnu(s, /*focus2*/ true,  f2E, f2N);
     const double midE = 0.5 * (f1E + f2E), midN = 0.5 * (f1N + f2N);
-    outDE = m_state.poses[ti].enuE - midE;
-    outDN = m_state.poses[ti].enuN - midN;
+    outDE = te - midE;
+    outDN = tn - midN;
     return true;
 }
 
@@ -3094,8 +4333,18 @@ void CPreviewPage::AppendFollowEllipsePath(size_t entityIdx, const MotionSegment
     if (ti < 0) return;
     const Entity& target = m_scenario->entities[static_cast<size_t>(ti)];
 
-    // Re-center the loop on the target's position at the current preview time.
-    const SampledPose tp = MotionSampler::SamplePose(target, *m_scenario, m_previewTimeSec);
+    // Re-center the loop on the target's position, but CLAMP the sample time into
+    // this segment's window. Before the handoff (authoring at t=0, or scrubbed onto
+    // an earlier leg) we must anchor on the target at the HANDOFF time
+    // (s.startSecond == prev.endSecond) -- that's the instant SnapEllipse sized the
+    // orbit to pass through & start at the line end. Sampling the target at the raw
+    // scrub time instead drew the orbit off the line end, so the entity's polyline
+    // rendered a phantom connector ("second line") over to a mis-placed orbit whose
+    // foci handles no longer matched (making it un-resizable). During the orbit
+    // (startSecond..endSecond) it still follows the target live.
+    const double tRecenter =
+        std::min(std::max(m_previewTimeSec, s.startSecond), s.endSecond);
+    const SampledPose tp = MotionSampler::SamplePose(target, *m_scenario, tRecenter);
     const double ov[3] = { tp.ecefX, tp.ecefY, tp.ecefZ };
     const MotionSampler::EllipseFrame f =
         MotionSampler::BuildEllipseFrame(s, m_scenario, /*withArcTable*/ false, ov);
@@ -3126,7 +4375,7 @@ void CPreviewPage::FitScenario()
 {
     if (!m_scenario || m_scenario->entities.empty())
     {
-        m_zoomMetersPerPx = 1.0;
+        m_zoomMetersPerPx = kFreshViewMetersPerPx;   // fresh/empty: frame the origin
         m_centerEnuE = m_centerEnuN = 0.0;
         return;
     }
@@ -3148,6 +4397,9 @@ void CPreviewPage::FitScenario()
                 pose.ecefX, pose.ecefY, pose.ecefZ,
                 m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM,
                 east, north, up);
+            // Skip positions absurdly far from the origin (phantom default entity /
+            // relocated-away scenario) so the fit doesn't zoom into a phantom point.
+            if (std::hypot(east, north) > kFitMaxOffsetM) continue;
             if (east < minE) minE = east;
             if (east > maxE) maxE = east;
             if (north < minN) minN = north;
@@ -3181,7 +4433,9 @@ void CPreviewPage::FitScenario()
 
     if (minE > maxE || minN > maxN)
     {
-        m_zoomMetersPerPx = 1.0;
+        // Every entity was skipped as far-flung (phantom / relocated-away origin):
+        // frame the origin at the comfortable default so the map still shows.
+        m_zoomMetersPerPx = kFreshViewMetersPerPx;
         m_centerEnuE = m_centerEnuN = 0.0;
         return;
     }
@@ -3218,6 +4472,7 @@ void CPreviewPage::RebuildRenderState()
     m_state.paths.clear();
     m_state.trails.clear();
     m_state.ellipseStarts.clear();
+    m_state.cameras.clear();
 
     m_state.zoomMetersPerPx = m_zoomMetersPerPx;
     m_state.centerEnuE      = m_centerEnuE;
@@ -3229,6 +4484,7 @@ void CPreviewPage::RebuildRenderState()
     m_state.showPaths       = m_showPaths;
     m_state.showOrientation = m_showOrientation;
     m_state.showLegend      = m_showLegend;
+    m_state.showOrigin      = m_showOrigin;
 
     // Map backdrop: layer + online flag from the page; geographic anchor from
     // the scenario origin so tiles line up with the ENU entity positions.
@@ -3241,6 +4497,7 @@ void CPreviewPage::RebuildRenderState()
     // Terrain overlay: copy the scenario's land/ocean footprints into the
     // render state (only drawn when the [Level] section enabled them).
     m_state.showLevel  = m_showTerrain && m_scenario && m_scenario->level.enabled;
+    m_state.showZones  = m_showZones   && m_scenario && m_scenario->level.enabled;
     m_state.levelLand  = {};
     m_state.levelOcean = {};
     if (m_scenario)
@@ -3288,7 +4545,7 @@ void CPreviewPage::RebuildRenderState()
     for (size_t i = 0; i < n; ++i)
     {
         const Entity& e = m_scenario->entities[i];
-        if (!e.enabled) { PreviewEntityPose off; off.enabled = false; m_state.poses.push_back(off); continue; }
+        if (!e.enabled) { PreviewEntityPose off; off.enabled = false; off.entityId = e.entityId; m_state.poses.push_back(off); continue; }
 
         const SampledPose pose = MotionSampler::SamplePose(e, *m_scenario, m_previewTimeSec);
         double east, north, up;
@@ -3303,6 +4560,7 @@ void CPreviewPage::RebuildRenderState()
         ep.enuU       = up;
         ep.headingDeg = pose.headingDeg;
         ep.forceId    = e.forceId;
+        ep.entityId   = e.entityId;
         ep.name       = e.marking.empty() ? e.name : e.marking;
         m_state.poses.push_back(std::move(ep));
 
@@ -3317,6 +4575,33 @@ void CPreviewPage::RebuildRenderState()
     }
 
     m_lastTrailTime = m_previewTimeSec;
+
+    // DIAGNOSTIC readout: the (primary) selected entity's live ENU position and
+    // straight-line distance from the origin, plus its lat/lon (ENU->geodetic).
+    // Click an entity and read exactly where the editor thinks it is — this is the
+    // definitive check for "on the runway vs. 28 km out".
+    m_state.selectedReadout.clear();
+    if (!m_selected.empty())
+    {
+        const size_t si = *m_selected.begin();
+        if (si < m_state.poses.size() && m_state.poses[si].enabled)
+        {
+            const PreviewEntityPose& p = m_state.poses[si];
+            const double distKm = std::sqrt(p.enuE * p.enuE + p.enuN * p.enuN) / 1000.0;
+            double X, Y, Z, lat, lon, alt;
+            CoordTransforms::LocalEnuToEcefDeg(p.enuE, p.enuN, p.enuU,
+                m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM, X, Y, Z);
+            CoordTransforms::EcefToGeodeticDeg(X, Y, Z, lat, lon, alt);
+            const CA2W wname(p.name.c_str());
+            wchar_t buf[256];
+            swprintf_s(buf,
+                L"%s   E=%.1f  N=%.1f m   %.2f km from origin   (lat %.6f, lon %.6f)%s",
+                wname.m_psz ? wname.m_psz : L"(entity)",
+                p.enuE, p.enuN, distKm, lat, lon,
+                m_selected.size() > 1 ? L"   [+more]" : L"");
+            m_state.selectedReadout = buf;
+        }
+    }
 
     m_state.paths  = m_pathsCache;
     m_state.trails = m_trails;
@@ -3387,6 +4672,34 @@ void CPreviewPage::RebuildRenderState()
                 m_state.focusHandles.push_back(h);
             }
         }
+    }
+
+    // Camera vantage boxes. Stationary cameras sit at their authored ENU vantage;
+    // Entity cameras are pinned to their source entity's current sampled pose
+    // (skipped when the source is missing/disabled).
+    for (size_t ci = 0; ci < m_scenario->cameras.size(); ++ci)
+    {
+        const CameraFrame& c = m_scenario->cameras[ci];
+        PreviewCameraBox box;
+        box.frameIdx = ci;
+        box.label    = c.label;
+        if (c.kind == CameraKind::Stationary)
+        {
+            box.stationary = true;
+            box.enuE = c.vantEastM;
+            box.enuN = c.vantNorthM;
+        }
+        else
+        {
+            const int si = FindEntityIndexById(c.sourceEntityId);
+            if (si < 0 || static_cast<size_t>(si) >= m_state.poses.size() ||
+                !m_state.poses[si].enabled)
+                continue;   // source gone/disabled -> don't draw
+            box.stationary = false;
+            box.enuE = m_state.poses[si].enuE;
+            box.enuN = m_state.poses[si].enuN;
+        }
+        m_state.cameras.push_back(std::move(box));
     }
 
     // Group-selection flags (parallel to poses/entities).

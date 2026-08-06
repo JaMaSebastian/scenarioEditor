@@ -32,6 +32,11 @@ public:
 
     void SetScenario(Scenario* scenario) { m_scenario = scenario; }
 
+    // The full path of the currently-open scenario.ini (owned by the main dialog).
+    // "Configure Unreal" derives this scenario's <scenario>-camera.ini from it and
+    // writes that path into DISBrowser's Startup.ini. Empty until first Save/Open.
+    void SetScenarioPath(const CString& path) { m_scenarioPath = path; }
+
     //
     // WriteTo / ReadFrom — bind the page's controls to an OutputConfig (pull
     // control values out / push config values in).
@@ -76,6 +81,7 @@ private:
 
 private:
     Scenario* m_scenario = nullptr;
+    CString   m_scenarioPath;   // full path of the open scenario.ini (from the dialog)
 
     // Run tab is a dark theme: black page background + white label text, with
     // edit boxes kept white-on-black. Brushes are handed back from OnCtlColor.

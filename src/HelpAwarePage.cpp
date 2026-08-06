@@ -17,7 +17,7 @@
 //
 BOOL CHelpAwarePage::OnInitDialog()
 {
-    CDialogEx::OnInitDialog();
+    CScrollablePage::OnInitDialog();
 
     if (m_helpTooltip.Create(this, TTS_ALWAYSTIP | TTS_NOPREFIX))
     {
@@ -38,7 +38,7 @@ BOOL CHelpAwarePage::PreTranslateMessage(MSG* pMsg)
 {
     if (m_tooltipReady)
         m_helpTooltip.RelayEvent(pMsg);
-    return CDialogEx::PreTranslateMessage(pMsg);
+    return CScrollablePage::PreTranslateMessage(pMsg);
 }
 
 //

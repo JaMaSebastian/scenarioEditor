@@ -58,6 +58,18 @@ struct Settings
     // and re-saves these instead of any hardcoded default layout.
     std::vector<int> deployColumnWidths;
 
+    // [Preview] — Preview-tab display toggles, persisted so the checkbox states
+    // survive across sessions. Defaults mirror CPreviewPage's member defaults.
+    bool previewShowLabels      = true;
+    bool previewShowTrails      = true;
+    bool previewShowPaths       = true;
+    bool previewShowOrientation = false;
+    bool previewShowTerrain     = true;
+    bool previewShowZones       = true;
+    bool previewShowLegend      = false;
+    bool previewShowProperties  = false;   // "Show Properties" (destination-time grid)
+    bool previewMoveEntities    = false;   // "Move entities" with the map
+
     // [Places] — named map locations for the Preview tab's Location drop-down.
     std::vector<MapPlace> mapPlaces;
 };

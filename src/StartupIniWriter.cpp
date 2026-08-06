@@ -61,6 +61,8 @@ bool StartupIniWriter::Write(const std::wstring& disBrowserProjectDir,
                              bool   terrainBoundsValid,
                              double terrainLatMinDeg, double terrainLatMaxDeg,
                              double terrainLonMinDeg, double terrainLonMaxDeg,
+                             const std::wstring& cameraScheduleAbsPath,
+                             const FoliageHandoff& foliage,
                              std::wstring&        outError)
 {
     if (disBrowserProjectDir.empty())
@@ -145,6 +147,51 @@ bool StartupIniWriter::Write(const std::wstring& disBrowserProjectDir,
         {
             DWORD wrote = 0;
             ::WriteFile(h, kUrlLines, static_cast<DWORD>(strlen(kUrlLines)), &wrote, nullptr);
+            ::CloseHandle(h);
+        }
+    }
+
+    // Scenario camera track — appended as a raw TRAILING section (after any Cesium
+    // lines) so WPP never re-parses/mangles the quoted URLs above. Written for EVERY
+    // level: DISBrowser's ApplyStartupOverride reads [ScenarioCameras] ScheduleFile
+    // regardless of the selected level and points its director at this file. Forward
+    // slashes match the DISBrowser.ini convention; an empty value writes a bare
+    // ScheduleFile= that actively clears any stale schedule on the runtime.
+    {
+        std::wstring sched = cameraScheduleAbsPath;
+        for (wchar_t& c : sched) if (c == L'\\') c = L'/';
+        const std::wstring block = L"[ScenarioCameras]\r\nScheduleFile=" + sched + L"\r\n";
+        const int n = ::WideCharToMultiByte(CP_UTF8, 0, block.c_str(),
+                                            static_cast<int>(block.size()), nullptr, 0, nullptr, nullptr);
+        std::string utf8(n, '\0');
+        ::WideCharToMultiByte(CP_UTF8, 0, block.c_str(), static_cast<int>(block.size()),
+                              &utf8[0], n, nullptr, nullptr);
+        HANDLE h = ::CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr,
+                                 OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h != INVALID_HANDLE_VALUE)
+        {
+            DWORD wrote = 0;
+            ::WriteFile(h, utf8.data(), static_cast<DWORD>(utf8.size()), &wrote, nullptr);
+            ::CloseHandle(h);
+        }
+    }
+
+    // Foliage selection — trailing raw [Foliage] section (ASCII keys), emitted only
+    // when a tree type is chosen. DISBrowser scatters these across the terrain box.
+    if (foliage.oak || foliage.bigTrees || foliage.palm)
+    {
+        std::string block = "[Foliage]\r\n";
+        block += std::string("Oak=")      + (foliage.oak      ? "1" : "0") + "\r\n";
+        block += std::string("BigTrees=") + (foliage.bigTrees ? "1" : "0") + "\r\n";
+        block += std::string("Palm=")     + (foliage.palm     ? "1" : "0") + "\r\n";
+        block += "PalmKind="   + foliage.palmKind   + "\r\n";
+        block += "RenderMode=" + foliage.renderMode + "\r\n";
+        HANDLE h = ::CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr,
+                                 OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h != INVALID_HANDLE_VALUE)
+        {
+            DWORD wrote = 0;
+            ::WriteFile(h, block.data(), static_cast<DWORD>(block.size()), &wrote, nullptr);
             ::CloseHandle(h);
         }
     }

@@ -140,6 +140,30 @@ namespace
             }
         }
     }
+
+    // ResolveSelection — what a freshly-cascaded combo should select: the wire
+    // ID it already held, when the new list still offers it, else fallbackId.
+    //
+    // Without this every re-cascade snapped the combo back to its hardcoded
+    // default, so touching Kind, Domain, or Category silently rewrote the
+    // Subcategory to 1 — which under Platform.Air.Fighter is the F-16, not the
+    // F/A-18 (Subcategory 3). The Name field is free text and does not follow,
+    // so the entity ended up labelled "F/A-18 Hornet" while its DIS type said
+    // something else entirely, and DISBrowser (which resolves the mesh from the
+    // tuple, not the Name) drew the wrong airframe.
+    uint16_t ResolveSelection(const std::vector<CatalogEntry>& entries,
+                              int currentId, uint16_t fallbackId)
+    {
+        if (currentId >= 0)
+        {
+            for (const CatalogEntry& e : entries)
+            {
+                if (static_cast<int>(e.id) == currentId)
+                    return static_cast<uint16_t>(currentId);
+            }
+        }
+        return fallbackId;   // current pick isn't valid in the new cascade
+    }
 }
 
 BEGIN_MESSAGE_MAP(CAssetEntityEditorPage, CHelpAwarePage)
@@ -526,8 +550,10 @@ void CAssetEntityEditorPage::RepopulateDomains()
 {
     if (!m_catalog) return;
     const uint8_t kindId = static_cast<uint8_t>(ComboNumericValue(IDC_COMBO_ENTITY_KIND, 1) & 0xFF);
+    const std::vector<CatalogEntry>& domains = m_catalog->Domains(kindId);
+    const int current = ComboNumericValue(IDC_COMBO_ENTITY_DOMAIN, -1);   // read before the reset
     FillCombo((CComboBox*)GetDlgItem(IDC_COMBO_ENTITY_DOMAIN),
-              m_catalog->Domains(kindId), /*defaultDomain*/ 2);
+              domains, ResolveSelection(domains, current, /*defaultDomain*/ 2));
 }
 
 //
@@ -538,8 +564,10 @@ void CAssetEntityEditorPage::RepopulateCategories()
     if (!m_catalog) return;
     const uint8_t kindId   = static_cast<uint8_t>(ComboNumericValue(IDC_COMBO_ENTITY_KIND,   1) & 0xFF);
     const uint8_t domainId = static_cast<uint8_t>(ComboNumericValue(IDC_COMBO_ENTITY_DOMAIN, 2) & 0xFF);
+    const std::vector<CatalogEntry>& cats = m_catalog->Categories(kindId, domainId);
+    const int current = ComboNumericValue(IDC_COMBO_ENTITY_CATEGORY, -1);   // read before the reset
     FillCombo((CComboBox*)GetDlgItem(IDC_COMBO_ENTITY_CATEGORY),
-              m_catalog->Categories(kindId, domainId), /*defaultCategory*/ 1);
+              cats, ResolveSelection(cats, current, /*defaultCategory*/ 1));
 }
 
 //
@@ -552,9 +580,10 @@ void CAssetEntityEditorPage::RepopulateSubcategories()
     const uint8_t kindId     = static_cast<uint8_t>(ComboNumericValue(IDC_COMBO_ENTITY_KIND,     1) & 0xFF);
     const uint8_t domainId   = static_cast<uint8_t>(ComboNumericValue(IDC_COMBO_ENTITY_DOMAIN,   2) & 0xFF);
     const uint8_t categoryId = static_cast<uint8_t>(ComboNumericValue(IDC_COMBO_ENTITY_CATEGORY, 1) & 0xFF);
+    const std::vector<CatalogEntry>& subs = m_catalog->Subcategories(kindId, domainId, categoryId);
+    const int current = ComboNumericValue(IDC_COMBO_ENTITY_SUBCATEGORY, -1);   // read before the reset
     FillCombo((CComboBox*)GetDlgItem(IDC_COMBO_ENTITY_SUBCATEGORY),
-              m_catalog->Subcategories(kindId, domainId, categoryId),
-              /*defaultSubcategory*/ 1);
+              subs, ResolveSelection(subs, current, /*defaultSubcategory*/ 1));
 }
 
 //

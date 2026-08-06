@@ -17,6 +17,7 @@
 struct Entity;
 struct Scenario;
 struct MotionSegment;
+enum class CoordMode : uint8_t;
 
 // Resolved entity pose at a given scenario time. ECEF position is always
 // populated (DIS wire frame, §15.6); orientation is geodetic-local
@@ -110,4 +111,34 @@ namespace MotionSampler
     // Inverse arc length: given a distance measured FROM theta0 along the
     // sweep direction, return the parametric angle theta.
     double InvertArcLength(const EllipseFrame& f, double sFromStart);
+
+    // ----- Segment endpoint representation sync -----
+
+    // A Line segment's start/end each store THREE coordinate representations
+    // (Local ENU offsets, ECEF, geodetic Lat/Lon/Alt); the sampler and the
+    // Motion tab both pick one per `s.coordMode`. Editors that touch only one
+    // rep (the Preview drag writes Local; the Motion tab writes the coordMode
+    // rep) leave the other two stale, so the Motion tab shows wrong/unchanged
+    // numbers and the sampler can resolve a different point than the one drawn.
+    //
+    // SyncSegmentEndpoint re-derives all three reps of one endpoint from the
+    // rep named by `fromMode`, pivoting through ECEF, using the scenario origin
+    // for the Local frame. Call it after any single-rep edit to keep the three
+    // representations consistent. `isEnd` selects the end triple; false selects
+    // the start triple.
+    void SyncSegmentEndpoint(MotionSegment& s, bool isEnd, CoordMode fromMode,
+                             double originLatDeg, double originLonDeg,
+                             double originAltM);
+
+    // ----- Take-off (accelerateFromStop) acceleration profile -----
+    // A take-off Line starts at a full stop and accelerates along a jet profile:
+    // strong push at brake release that tapers as drag builds (physics
+    // dv/dt = A - B*v^2 → velocity ~ tanh(k*u); see EvaluateSegment). TakeoffTaperK()
+    // is the shape constant k. TakeoffWindowFactor() is C(k) = k*tanh(k)/ln(cosh(k)),
+    // the multiplier a take-off window MUST use — endSecond = start + C(k)*length/speed
+    // — so the entity reaches EXACTLY cruise at the end. Keep every take-off window
+    // site (PlotTakeoffLine / RechainFollowingTimes / DragLineEnd) on this factor and
+    // in sync with the easing in MotionSampler.cpp (and dis-service's copy).
+    double TakeoffTaperK();
+    double TakeoffWindowFactor();
 }

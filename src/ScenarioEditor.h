@@ -13,6 +13,7 @@
 
 #include "pch.h"
 #include "EntityTypeCatalog.h"
+#include "CameraPresetCatalog.h"
 #include "PlaysCatalog.h"
 #include "SettingsIO.h"
 
@@ -61,12 +62,19 @@ public:
     PlaysCatalog&       MutablePlays() { return m_plays; }
     const std::wstring& PlaysPath() const { return m_playsPath; }
 
+    // Saved camera-view presets loaded once from config\Cameras.ini (resolved
+    // like the catalog). Read-only; feeds the Preview-tab "Camera" dropdown.
+    const CameraPresetCatalog& CameraPresets() const { return m_cameraPresets; }
+    const std::wstring& CameraPresetsPath() const { return m_cameraPresetsPath; }
+
 private:
     EntityTypeCatalog  m_catalog;
+    CameraPresetCatalog m_cameraPresets;
     PlaysCatalog       m_plays;
     ::Settings         m_settings;
     std::wstring       m_settingsPath;
     std::wstring       m_catalogPath;
+    std::wstring       m_cameraPresetsPath;
     std::wstring       m_playsPath;
 };
 

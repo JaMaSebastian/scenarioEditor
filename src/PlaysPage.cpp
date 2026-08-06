@@ -92,6 +92,12 @@ BOOL CPlaysPage::OnInitDialog()
 {
     CHelpAwarePage::OnInitDialog();
 
+    // This page scrolls itself: the accordion is reflowed around m_scrollY and
+    // rows below the viewport are positioned past the client edge on purpose.
+    // The base class's automatic bars would measure those as overflow and stack
+    // a second scrollbar on top of ours, so opt out.
+    EnableAutoScroll(false);
+
     // Bold, slightly larger font for the selected play's name in the client area.
     LOGFONT lf = { 0 };
     if (GetFont()) GetFont()->GetLogFont(&lf);

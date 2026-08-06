@@ -20,6 +20,19 @@
 // file-based coupling between ScenarioEditor and DISBrowser; entity motion still flows over DIS/UDP.
 namespace StartupIniWriter
 {
+    // Preview-tab Foliage selection, handed to DISBrowser as a trailing [Foliage]
+    // block. Kept as plain strings so this header stays decoupled from Scenario.h;
+    // palmKind = "All"|"Tall"|"Straight", renderMode = "InEngine"|"i3dm"|"BlenderGIS".
+    // The block is emitted only when at least one tree type is selected.
+    struct FoliageHandoff
+    {
+        bool        oak      = false;
+        bool        bigTrees = false;
+        bool        palm     = false;
+        std::string palmKind   = "All";
+        std::string renderMode = "InEngine";
+    };
+
     // levelToken   : "Generic" | "Beach" | "Forest" | "Main" | "Hanger" | "GodView"
     // basemap      : "Satellite" | "Topographic" | "Cesium 3D (self-hosted)" | "None"
     //                (only consumed when level == "Generic"; the Cesium option -> Map=Custom + terrain URLs)
@@ -28,6 +41,9 @@ namespace StartupIniWriter
     // terrainBoundsValid + the lat/lon box are the painted 3D-terrain boundary (Preview tab). When
     // valid and level == "Generic" they are emitted as [Generic] TerrainBoundsLatMin/LatMax/LonMin/LonMax
     // so DISBrowser knows the terrain extent. Pass terrainBoundsValid=false to omit them.
+    // cameraScheduleAbsPath : absolute path to this scenario's <scenario>-camera.ini, emitted as
+    //   [ScenarioCameras] ScheduleFile for EVERY level (DISBrowser's director reads it regardless of
+    //   the selected level). Pass an empty string to actively clear any stale schedule on the runtime.
     bool Write(const std::wstring& disBrowserProjectDir,
                const std::string&  levelToken,
                const std::string&  basemap,
@@ -36,5 +52,7 @@ namespace StartupIniWriter
                bool   terrainBoundsValid,
                double terrainLatMinDeg, double terrainLatMaxDeg,
                double terrainLonMinDeg, double terrainLonMaxDeg,
+               const std::wstring& cameraScheduleAbsPath,
+               const FoliageHandoff& foliage,
                std::wstring&        outError);
 }

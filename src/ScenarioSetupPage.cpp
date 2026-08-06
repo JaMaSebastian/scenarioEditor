@@ -53,7 +53,20 @@ BEGIN_MESSAGE_MAP(CScenarioSetupPage, CHelpAwarePage)
     ON_BN_CLICKED(IDC_RADIO_PHYS_VALIDATE, &CScenarioSetupPage::OnPhysModeRadio)
     ON_BN_CLICKED(IDC_RADIO_PHYS_LIMIT,    &CScenarioSetupPage::OnPhysModeRadio)
     ON_BN_CLICKED(IDC_CHK_SPEED_MULT,      &CScenarioSetupPage::OnSpeedMultiplierToggle)
+    ON_BN_CLICKED(IDC_BTN_CLEAR_ORIGIN,    &CScenarioSetupPage::OnClearOrigin)
 END_MESSAGE_MAP()
+
+//
+// OnClearOrigin — "Clear Origin": blank the three origin fields. On flush (WriteTo)
+//   an all-blank origin reverts the scenario to provisional/uncommitted, keeping the
+//   current lat/lon only as the default map-view anchor.
+//
+void CScenarioSetupPage::OnClearOrigin()
+{
+    SetDlgItemText(IDC_EDIT_ORIGIN_LAT, _T(""));
+    SetDlgItemText(IDC_EDIT_ORIGIN_LON, _T(""));
+    SetDlgItemText(IDC_EDIT_ORIGIN_ALT, _T(""));
+}
 
 //
 // OnDefaultCoordModeChanged — live-commit the selected default coord mode into
@@ -138,12 +151,11 @@ BOOL CScenarioSetupPage::OnInitDialog()
     SetDlgItemInt(IDC_EDIT_SITE_ID,        1, FALSE);
     SetDlgItemInt(IDC_EDIT_APPLICATION_ID, 1, FALSE);
 
-    // Seed the scenario origin: San Francisco at sea level on WGS-84. This
-    // matches the Asset page's Lat/Lon/Alt default, so Local-mode entities
-    // start at (0,0,0) and produce the same ECEF as the LatLonAlt default.
-    SetDlgItemText(IDC_EDIT_ORIGIN_LAT, _T("37.7749"));
-    SetDlgItemText(IDC_EDIT_ORIGIN_LON, _T("-122.4194"));
-    SetDlgItemText(IDC_EDIT_ORIGIN_ALT, _T("0.0"));
+    // Origin starts blank (provisional/unset) — ReadFrom fills it in for a committed
+    // scenario, and it commits on save. Empty until then so the operator sees it's unset.
+    SetDlgItemText(IDC_EDIT_ORIGIN_LAT, _T(""));
+    SetDlgItemText(IDC_EDIT_ORIGIN_LON, _T(""));
+    SetDlgItemText(IDC_EDIT_ORIGIN_ALT, _T(""));
 
     // Physical Model Defaults — default to Ignore + multiplier=1.0 disabled.
     CheckDlgButton(IDC_RADIO_PHYS_IGNORE,   BST_CHECKED);
@@ -196,10 +208,27 @@ void CScenarioSetupPage::WriteTo(Scenario& scenario) const
 
     scenario.protocolVersion = IsDlgButtonChecked(IDC_RADIO_DIS_V6) ? 6 : 7;
 
-    // Origin drives Local-ENU ↔ ECEF conversion on the Asset page.
-    scenario.originLatDeg = ReadDoubleText(*this, IDC_EDIT_ORIGIN_LAT, scenario.originLatDeg);
-    scenario.originLonDeg = ReadDoubleText(*this, IDC_EDIT_ORIGIN_LON, scenario.originLonDeg);
-    scenario.originAltM   = ReadDoubleText(*this, IDC_EDIT_ORIGIN_ALT, scenario.originAltM);
+    // Origin drives Local-ENU ↔ ECEF conversion on the Asset page. All three fields
+    // blank = provisional/unset (keep the current lat/lon as the default view anchor,
+    // origin stays uncommitted); any field typed = an explicit manual commit.
+    {
+        CString latT, lonT, altT;
+        GetDlgItemText(IDC_EDIT_ORIGIN_LAT, latT);
+        GetDlgItemText(IDC_EDIT_ORIGIN_LON, lonT);
+        GetDlgItemText(IDC_EDIT_ORIGIN_ALT, altT);
+        const bool allBlank = latT.IsEmpty() && lonT.IsEmpty() && altT.IsEmpty();
+        if (allBlank)
+        {
+            scenario.originSet = false;   // provisional / cleared — keep the view anchor
+        }
+        else
+        {
+            scenario.originLatDeg = ReadDoubleText(*this, IDC_EDIT_ORIGIN_LAT, scenario.originLatDeg);
+            scenario.originLonDeg = ReadDoubleText(*this, IDC_EDIT_ORIGIN_LON, scenario.originLonDeg);
+            scenario.originAltM   = ReadDoubleText(*this, IDC_EDIT_ORIGIN_ALT, scenario.originAltM);
+            scenario.originSet    = true;
+        }
+    }
 
     // Default coord mode combo: 0=Lat/Lon/Alt, 1=Local, 2=ECEF.
     if (const CComboBox* cb = (const CComboBox*)GetDlgItem(IDC_COMBO_DEFAULT_COORD_MODE))
@@ -253,9 +282,20 @@ void CScenarioSetupPage::ReadFrom(const Scenario& scenario)
     SetDlgItemInt(IDC_EDIT_SITE_ID,        scenario.siteId,        FALSE);
     SetDlgItemInt(IDC_EDIT_APPLICATION_ID, scenario.applicationId, FALSE);
 
-    SetDlgItemText(IDC_EDIT_ORIGIN_LAT, FormatDoubleTrim(scenario.originLatDeg));
-    SetDlgItemText(IDC_EDIT_ORIGIN_LON, FormatDoubleTrim(scenario.originLonDeg));
-    SetDlgItemText(IDC_EDIT_ORIGIN_ALT, FormatDoubleTrim(scenario.originAltM));
+    // Origin: blank while provisional (not yet committed) so the operator sees it's
+    // unset until the scenario is saved; show the committed values otherwise.
+    if (scenario.originSet)
+    {
+        SetDlgItemText(IDC_EDIT_ORIGIN_LAT, FormatDoubleTrim(scenario.originLatDeg));
+        SetDlgItemText(IDC_EDIT_ORIGIN_LON, FormatDoubleTrim(scenario.originLonDeg));
+        SetDlgItemText(IDC_EDIT_ORIGIN_ALT, FormatDoubleTrim(scenario.originAltM));
+    }
+    else
+    {
+        SetDlgItemText(IDC_EDIT_ORIGIN_LAT, _T(""));
+        SetDlgItemText(IDC_EDIT_ORIGIN_LON, _T(""));
+        SetDlgItemText(IDC_EDIT_ORIGIN_ALT, _T(""));
+    }
 
     SetDlgItemText(IDC_EDIT_DURATION_SECONDS,     FormatDoubleTrim(scenario.durationSeconds));
     SetDlgItemText(IDC_EDIT_DEFAULT_UPDATE_RATE,  FormatDoubleTrim(scenario.defaultUpdateRateHz));

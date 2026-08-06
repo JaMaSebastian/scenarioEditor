@@ -79,12 +79,13 @@ BOOL CScenarioEditorApp::InitInstance()
         exeDir.resize(slash + 1);
 
     // Resolve the catalog to the canonical source copy: the first ANCESTOR of
-    // the exe dir that contains EntityTypeCatalog.ini (the repo root,
-    // ...\ScenarioEditor\EntityTypeCatalog.ini — the same file the DISBrowser
-    // UE project reads via Hanger.ini's EntityCatalog path). We start one level
-    // ABOVE the exe dir so the build-output copy sitting next to the exe is
-    // skipped, not matched. Falls back to the exe-dir copy for a shipped
-    // standalone where no such ancestor exists.
+    // the exe dir whose config\ subdirectory contains EntityTypeCatalog.ini
+    // (the repo copy, ...\ScenarioEditor\config\EntityTypeCatalog.ini — the same
+    // file the DISBrowser UE project reads via Hanger.ini's EntityCatalog path).
+    // We start one level ABOVE the exe dir so the flat build-output copy sitting
+    // next to the exe is skipped, not matched. Falls back to the exe-dir copy for
+    // a shipped standalone where no such ancestor exists (the post-build step
+    // copies config\*.ini flat next to the exe).
     auto fileExists = [](const std::wstring& p) -> bool {
         const DWORD attrs = ::GetFileAttributesW(p.c_str());
         return attrs != INVALID_FILE_ATTRIBUTES &&
@@ -103,7 +104,7 @@ BOOL CScenarioEditorApp::InitInstance()
             break;
         dir.resize(upSlash + 1);
 
-        const std::wstring candidate = dir + L"EntityTypeCatalog.ini";
+        const std::wstring candidate = dir + L"config\\EntityTypeCatalog.ini";
         if (fileExists(candidate))
         {
             m_catalogPath = candidate;
@@ -114,6 +115,31 @@ BOOL CScenarioEditorApp::InitInstance()
     sprintf_s(szError, sizeof(szError), "Catalog path: %S", m_catalogPath.c_str());
     LOG(szError);
     m_catalog.LoadFromIni(m_catalogPath);
+
+    // Camera-view presets resolve exactly like the catalog: first ancestor
+    // config\Cameras.ini, else the flat exe-dir copy.
+    m_cameraPresetsPath = exeDir + L"Cameras.ini";       // standalone fallback
+    {
+        std::wstring cdir = exeDir;
+        for (int up = 0; up < 8; ++up)
+        {
+            if (!cdir.empty() && (cdir.back() == L'\\' || cdir.back() == L'/'))
+                cdir.pop_back();
+            const size_t upSlash = cdir.find_last_of(L"\\/");
+            if (upSlash == std::wstring::npos)
+                break;
+            cdir.resize(upSlash + 1);
+            const std::wstring candidate = cdir + L"config\\Cameras.ini";
+            if (fileExists(candidate))
+            {
+                m_cameraPresetsPath = candidate;
+                break;
+            }
+        }
+    }
+    sprintf_s(szError, sizeof(szError), "Camera presets path: %S", m_cameraPresetsPath.c_str());
+    LOG(szError);
+    m_cameraPresets.LoadFromIni(m_cameraPresetsPath);
 
     m_settingsPath = exeDir + L"settings.ini";
     SettingsIO::Load(m_settings, m_settingsPath);

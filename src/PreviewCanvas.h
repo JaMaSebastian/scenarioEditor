@@ -36,7 +36,22 @@ struct PreviewEntityPose
     double      headingDeg = 0.0;
     uint8_t     forceId = 1;
     bool        enabled = true;   // disabled entities are not pickable/draggable
+    uint16_t    entityId = 0;     // DIS EntityID (for the camera "Target" submenu)
     std::string name;
+};
+
+// A camera vantage marker drawn on the canvas. Stationary cameras sit at their
+// authored ENU vantage and are draggable; Entity cameras are pinned to their
+// source entity's current pose (drawn faintly, not draggable). frameIdx indexes
+// Scenario::cameras. Flattened into the render state so the canvas can draw/pick
+// without holding the scenario.
+struct PreviewCameraBox
+{
+    bool        stationary = true;  // false = Entity camera (follows its source)
+    double      enuE = 0.0;
+    double      enuN = 0.0;
+    size_t      frameIdx = 0;       // index into Scenario::cameras
+    std::string label;
 };
 
 // One pickable ellipse orbit: its sampled ENU polyline plus center (foci
@@ -114,6 +129,7 @@ struct PreviewRenderState
     std::vector<bool>                          selected;      // group-selection flag per entity
     std::vector<bool>                          selectError;   // refresh-failed -> draw ring red
     std::vector<PreviewFocusHandle>            focusHandles;  // draggable ellipse foci (orange dots)
+    std::vector<PreviewCameraBox>              cameras;       // camera vantage boxes (pink)
 
     double  zoomMetersPerPx = 1.0;
     double  centerEnuE      = 0.0;
@@ -126,6 +142,8 @@ struct PreviewRenderState
     bool    showPaths       = true;
     bool    showOrientation = false;
     bool    showLegend      = false;  // size/direction legend overlay
+    bool    showOrigin      = false;  // draw a red X at the scenario origin (ENU 0,0)
+    std::wstring selectedReadout;     // diagnostic: selected entity's ENU + km-from-origin (HUD)
 
     // Map backdrop: georeferenced raster tiles drawn under everything. Anchored
     // to the scenario origin so it lines up with the ENU entity positions.
@@ -136,7 +154,8 @@ struct PreviewRenderState
     double   originAltM   = 0.0;
 
     // Background terrain overlay (off unless the scenario carries a [Level]).
-    bool             showLevel = true;
+    bool             showLevel = true;   // land/ocean footprint box (Show > "Terrain")
+    bool             showZones = true;   // named sub-region boxes (Show > "Zones"), toggled independently
     PreviewLevelRect levelLand;
     PreviewLevelRect levelOcean;
     std::vector<PreviewLevelZone> levelZones;   // named sub-regions, drawn over terrain
@@ -207,9 +226,15 @@ private:
     int  HitTestLineSegment(CPoint pxPt) const;
     // Nearest ellipse focus handle to a physical-pixel point, or -1.
     int  HitTestFocus(CPoint pxPt) const;
+    // Stationary camera box under a physical-pixel point, or -1. Returns an index
+    // into state.cameras (Stationary boxes only; Entity boxes aren't draggable).
+    int  HitTestCamera(CPoint pxPt) const;
     // Nearest ellipse shape handle (orange dot on the curve at the orbit start)
     // to a physical-pixel point, or -1. Returns an index into state.ellipses.
     int  HitTestEllipseShape(CPoint pxPt) const;
+    // Topmost enabled level ZONE box (e.g. Palm Forest) containing a physical-pixel
+    // point, or -1. Index into state.levelZones. Only hits when zones are visible.
+    int  HitTestZone(CPoint pxPt) const;
     // Convert a physical-pixel client point to DIPs (the space ProjectEnu draws in).
     D2D1_POINT_2F ClientToDip(CPoint px) const;
 
@@ -248,6 +273,19 @@ private:
     bool    m_draggingAnchor   = false;
     int     m_dragAnchorEntity = -1;
     int     m_dragAnchorSeg    = -1;
+
+    // Stationary-camera box drag state — the camera FRAME index being moved
+    // (stable across render-state rebuilds).
+    bool    m_draggingCamera   = false;
+    int     m_dragCameraFrame  = -1;
+
+    // Level-zone box drag state — the zone index being moved, plus the ENU offset
+    // from the grab point to the zone center so the box tracks the cursor without
+    // jumping. Grabs anywhere inside a visible zone box.
+    bool    m_draggingZone = false;
+    int     m_dragZoneIdx  = -1;
+    double  m_zoneGrabOffE = 0.0;
+    double  m_zoneGrabOffN = 0.0;
 
     // Right-drag rubber-band group selection.
     bool    m_rbActive = false;

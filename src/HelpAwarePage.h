@@ -1,9 +1,11 @@
 //=============================================================================
 //  HelpAwarePage.h
 //-----------------------------------------------------------------------------
-//  Declares CHelpAwarePage, a CDialogEx base class that turns a per-field help
-//  table into hover tooltips on the dialog's controls, plus the FFieldHelp
-//  descriptor struct that subclasses supply.
+//  Declares CHelpAwarePage, a base class that turns a per-field help table into
+//  hover tooltips on the dialog's controls, plus the FFieldHelp descriptor
+//  struct that subclasses supply. Derives from CScrollablePage, so every page
+//  built on it also scrolls instead of clipping when the host window is too
+//  small to show the whole template.
 //
 //  Author:        Matt Sebastian
 //  Date started:  2026-05-21
@@ -11,6 +13,7 @@
 #pragma once
 
 #include "pch.h"
+#include "ScrollablePage.h"
 
 //-----------------------------------------------------------------------------
 // FFieldHelp — one control's help entry
@@ -28,11 +31,12 @@ struct FFieldHelp
 // CHelpAwarePage — dialog base with field-level tooltip help
 //   Builds a CToolTipCtrl from the subclass-provided FFieldHelp table on init
 //   and can toggle those tooltips on/off; subclasses implement GetFieldHelpTable.
+//   Scrolling behaviour comes from CScrollablePage.
 //-----------------------------------------------------------------------------
-class CHelpAwarePage : public CDialogEx
+class CHelpAwarePage : public CScrollablePage
 {
 public:
-    CHelpAwarePage(UINT idd, CWnd* pParent) : CDialogEx(idd, pParent) {}
+    CHelpAwarePage(UINT idd, CWnd* pParent) : CScrollablePage(idd, pParent) {}
 
     // Enable/disable the field tooltips at runtime.
     void SetHelpActive(bool active);

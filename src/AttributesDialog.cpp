@@ -13,6 +13,7 @@
 #include "AttributesDialog.h"
 #include "Scenario.h"
 #include "ScenarioWorker.h"   // WM_APP_MARK_DIRTY
+#include "ScrollablePage.h"   // FitWindowToMonitorWorkArea()
 
 namespace
 {
@@ -81,6 +82,12 @@ BOOL CAttributesDialog::OnInitDialog()
     CDialogEx::OnInitDialog();
 
     m_hAccel = ::LoadAccelerators(AfxGetResourceHandle(), MAKEINTRESOURCE(IDR_MAIN_ACCEL));
+
+    // The template is 740x460 dialog units at 12pt — taller than the work area
+    // of a small or scaled display, which would put the Close button (pinned to
+    // the client bottom) off-screen. Fit to the monitor we're opening on; the
+    // hosted pages scroll their own content once they get less room.
+    FitWindowToMonitorWorkArea(this, /*center*/ true);
 
     m_tabCtrl.InsertItem(0, _T("Scenario Setup"));
     m_tabCtrl.InsertItem(1, _T("Asset / Entity Editor"));

@@ -3,8 +3,9 @@
 //-----------------------------------------------------------------------------
 //  Implements scenario validation: structural checks (scenario/origin/entity/
 //  motion field consistency, duplicate ID detection, PDU + bandwidth estimates)
-//  plus optional catalog-driven physical-model envelope checks (speed, turn
-//  rate, G load, climb/descent rate, and altitude bounds per airframe profile).
+//  plus optional catalog-driven checks: Name-vs-DIS-type consistency and
+//  physical-model envelope checks (speed, turn rate, G load, climb/descent
+//  rate, and altitude bounds per airframe profile).
 //
 //  Author:        Matt Sebastian
 //  Date started:  2026-05-21
@@ -13,6 +14,7 @@
 #include "Scenario.h"
 #include "EntityTypeCatalog.h"
 
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <set>
@@ -87,6 +89,86 @@ namespace
         if (e.overrideSpeedMultiplier) return e.speedMultiplier;
         if (s.speedMultiplierEnabled)  return s.speedMultiplier;
         return 1.0;
+    }
+
+    //
+    // LowerTrim — lowercased copy of `v` with surrounding whitespace removed,
+    // for case-insensitive name comparison.
+    //
+    std::string LowerTrim(const std::string& v)
+    {
+        size_t b = 0, e = v.size();
+        while (b < e && std::isspace(static_cast<unsigned char>(v[b])))     ++b;
+        while (e > b && std::isspace(static_cast<unsigned char>(v[e - 1]))) --e;
+        std::string out = v.substr(b, e - b);
+        for (char& c : out)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return out;
+    }
+
+    // Check that the entity's free-text Name doesn't contradict its DIS type
+    // tuple. The Name is editor-only text with nothing tying it to
+    // Kind/Domain/Category/Subcategory, while DISBrowser picks the mesh from
+    // the wire tuple alone — so a Name that matches a catalogued platform on a
+    // DIFFERENT tuple means the Preview label and the rendered model disagree
+    // (the "Entity.1" bug: an entity named "F/A-18 Hornet" carrying the F-16's
+    // tuple 1.2.1.1, which at the time drew a nose-aft MQ-9 Reaper). The
+    // scenario data is left untouched — this only surfaces the conflict.
+    void CheckNameTypeMismatch(const Entity& e, const EntityTypeCatalog& cat, Report& r)
+    {
+        const std::string want = LowerTrim(e.name);
+        if (want.empty())
+            return;
+
+        // Walk the catalogued Kind/Domain/Category space once, collecting
+        // subcategories whose display name equals the entity's Name. If the
+        // entity's OWN tuple is among them, Name and type agree — done.
+        struct NameHit { uint8_t k, d, c; uint16_t sc; };
+        NameHit firstOther{};
+        bool haveOther = false;
+        for (const CatalogEntry& k : cat.Kinds())
+            for (const CatalogEntry& d : cat.Domains(static_cast<uint8_t>(k.id)))
+                for (const CatalogEntry& c : cat.Categories(static_cast<uint8_t>(k.id),
+                                                            static_cast<uint8_t>(d.id)))
+                    for (const CatalogEntry& sc : cat.Subcategories(static_cast<uint8_t>(k.id),
+                                                                    static_cast<uint8_t>(d.id),
+                                                                    static_cast<uint8_t>(c.id)))
+                    {
+                        if (LowerTrim(sc.name) != want)
+                            continue;
+                        if (k.id == e.kind && d.id == e.domain &&
+                            c.id == e.category && sc.id == e.subcategory)
+                            return;   // Name matches the tuple actually set.
+                        if (!haveOther)
+                        {
+                            firstOther = { static_cast<uint8_t>(k.id),
+                                           static_cast<uint8_t>(d.id),
+                                           static_cast<uint8_t>(c.id),
+                                           sc.id };
+                            haveOther = true;
+                        }
+                    }
+        if (!haveOther)
+            return;   // Name isn't a catalogued platform — free text, no opinion.
+
+        // What the entity's current tuple resolves to, for the message.
+        std::string current = "no catalogued platform";
+        for (const CatalogEntry& sc : cat.Subcategories(e.kind, e.domain, e.category))
+            if (sc.id == e.subcategory) { current = "\"" + sc.name + "\""; break; }
+
+        char buf[320];
+        std::snprintf(buf, sizeof(buf),
+                      "Name matches catalog platform \"%s\" (%u.%u.%u.%u) but the DIS type "
+                      "set here is %u.%u.%u.%u (%s). DISBrowser picks the model from the "
+                      "type tuple, not the Name, so this entity will not render as a %s.",
+                      e.name.c_str(),
+                      static_cast<unsigned>(firstOther.k),  static_cast<unsigned>(firstOther.d),
+                      static_cast<unsigned>(firstOther.c),  static_cast<unsigned>(firstOther.sc),
+                      static_cast<unsigned>(e.kind),        static_cast<unsigned>(e.domain),
+                      static_cast<unsigned>(e.category),    static_cast<unsigned>(e.subcategory),
+                      current.c_str(),
+                      e.name.c_str());
+        Add(r, Severity::Warning, EntitySubject(e), buf);
     }
 
     // Run envelope checks for one entity. Adds Issues to `r` per violation.
@@ -306,8 +388,8 @@ Report Validator::Validate(const Scenario& s)
         Add(r, Severity::Error, "Origin", "Origin longitude must be in [-180, 180].");
 
     // ---- Entities ----
-    if (s.entities.empty())
-        Add(r, Severity::Error, "Scenario", "No entities defined.");
+    // An empty scenario is a valid blank sheet (a brand-new document), not an error:
+    // it just produces no PDUs. Entity-level checks below simply iterate zero times.
 
     std::set<std::tuple<uint16_t, uint16_t, uint16_t>> seenIds;
     int enabledCount = 0;
@@ -398,7 +480,9 @@ Report Validator::Validate(const Scenario& s)
         }
     }
 
-    if (enabledCount == 0)
+    // Warn only when the scenario HAS entities but none are enabled (probably
+    // unintended). A brand-new empty scenario is a valid blank sheet — no message.
+    if (!s.entities.empty() && enabledCount == 0)
         Add(r, Severity::Warning, "Scenario",
             "No enabled entities — Playback will emit zero PDUs.");
 
@@ -418,10 +502,15 @@ Report Validator::Validate(const Scenario& s, const EntityTypeCatalog& catalog)
 {
     Report r = Validate(s);
 
-    // Physical-model envelope checks layered on top of the structural pass.
     for (const Entity& e : s.entities)
     {
         if (!e.enabled) continue;
+
+        // Name-vs-type consistency runs regardless of the physical-model
+        // mode — Ignore only opts out of envelope checks.
+        CheckNameTypeMismatch(e, catalog, r);
+
+        // Physical-model envelope checks layered on top of the structural pass.
         const PhysicalModelMode mode = ResolvePhysMode(e, s);
         if (mode == PhysicalModelMode::Ignore) continue;
         CheckEnvelope(e, s, catalog, r);

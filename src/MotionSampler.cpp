@@ -18,6 +18,11 @@
 
 namespace
 {
+    // Take-off (accelerateFromStop) acceleration shape constant. Velocity follows
+    // tanh(k*u): bigger k = harder initial push + flatter approach to cruise. Must
+    // match dis-service's kTakeoffTaper so both apps fly the same profile.
+    constexpr double kTakeoffTaper = 3.0;
+
     double Lerp(double a, double b, double u) { return a + (b - a) * u; }
 
     // Resolve a segment's start position to ECEF + geodetic lat/lon/alt,
@@ -407,14 +412,25 @@ static SampledPose EvaluateSegmentImpl(const MotionSegment& s, double u,
             {
                 end = ResolveEnd(s, scenario);
             }
-            // Take-off: start stopped and accelerate at a constant rate to the
-            // segment speed. Under constant acceleration the fraction of the line
-            // covered by time-fraction u is u^2 (distance ~ 1/2 a t^2), so the
-            // instantaneous speed grows linearly from 0 to the end speed. A normal
-            // line uses the linear lerp (constant speed). geometricMode passes u
-            // in [0,1] too, but a Line is a straight chord so the traced polyline
-            // is identical either way.
-            const double up = s.accelerateFromStop ? (u * u) : u;
+            // Take-off: a jet acceleration profile — strong push at brake release
+            // that TAPERS as speed builds, flattening as it reaches cruise. This is
+            // the physics model dv/dt = A - B*v^2, whose solution from a standstill is
+            // a velocity ~ tanh(k*u). Its normalized integral gives the position
+            // fraction  up(u) = ln(cosh(k*u)) / ln(cosh(k))  (k = kTakeoffTaper), so
+            // up(0)=0 (full stop), up(1)=1 (end of the roll), acceleration is MAX at
+            // u=0 and eases toward 0 as v -> cruise. The take-off window is sized
+            // C(k)*length/speed with C(k) = k*tanh(k)/ln(cosh(k)) = TakeoffWindowFactor()
+            // (see PlotTakeoffLine / RechainFollowingTimes / DragLineEnd) so the entity
+            // reaches EXACTLY cruise at the end for a smooth hand-off to the next leg.
+            // A normal (non-take-off) Line uses the linear lerp (constant speed);
+            // geometricMode passes u in [0,1] too, but a Line is a straight chord so
+            // the traced polyline is identical either way.
+            double up;
+            if (s.accelerateFromStop)
+                up = std::log(std::cosh(kTakeoffTaper * u)) /
+                     std::log(std::cosh(kTakeoffTaper));
+            else
+                up = u;
             const double lat = Lerp(start.lat, end.lat, up);
             const double lon = Lerp(start.lon, end.lon, up);
             const double alt = Lerp(start.alt, end.alt, up);
@@ -689,4 +705,76 @@ static SampledPose SamplePoseImpl(const Entity& entity, const Scenario& scenario
 
     return EvaluateSegmentImpl(*active, u, scn, false, allowFollow,
                                hasDynEnd ? lineEnd : nullptr);
+}
+
+//
+// SyncSegmentEndpoint — re-derive all three coordinate representations of one
+// Line endpoint (start or end) from the rep named by `fromMode`, pivoting
+// through ECEF so Local / ECEF / LatLonAlt stay consistent after a single-rep
+// edit. See the header for why both editors need this.
+//
+void MotionSampler::SyncSegmentEndpoint(MotionSegment& s, bool isEnd,
+                                        CoordMode fromMode,
+                                        double originLatDeg, double originLonDeg,
+                                        double originAltM)
+{
+    // 1) Resolve the authoritative rep to a single ECEF point.
+    double X = 0.0, Y = 0.0, Z = 0.0;
+    switch (fromMode)
+    {
+        case CoordMode::Local:
+            CoordTransforms::LocalEnuToEcefDeg(
+                isEnd ? s.endLocalX : s.startLocalX,
+                isEnd ? s.endLocalY : s.startLocalY,
+                isEnd ? s.endLocalZ : s.startLocalZ,
+                originLatDeg, originLonDeg, originAltM,
+                X, Y, Z);
+            break;
+        case CoordMode::ECEF:
+            X = isEnd ? s.endEcefX : s.startEcefX;
+            Y = isEnd ? s.endEcefY : s.startEcefY;
+            Z = isEnd ? s.endEcefZ : s.startEcefZ;
+            break;
+        case CoordMode::LatLonAlt:
+        default:
+            CoordTransforms::GeodeticToEcefDeg(
+                isEnd ? s.endLat : s.startLat,
+                isEnd ? s.endLon : s.startLon,
+                isEnd ? s.endAlt : s.startAlt,
+                X, Y, Z);
+            break;
+    }
+
+    // 2) Fan the ECEF point back out into all three reps.
+    double localE = 0.0, localN = 0.0, localU = 0.0;
+    CoordTransforms::EcefToLocalEnuDeg(X, Y, Z,
+        originLatDeg, originLonDeg, originAltM, localE, localN, localU);
+    double lat = 0.0, lon = 0.0, alt = 0.0;
+    CoordTransforms::EcefToGeodeticDeg(X, Y, Z, lat, lon, alt);
+
+    if (isEnd)
+    {
+        s.endEcefX = X; s.endEcefY = Y; s.endEcefZ = Z;
+        s.endLocalX = localE; s.endLocalY = localN; s.endLocalZ = localU;
+        s.endLat = lat; s.endLon = lon; s.endAlt = alt;
+    }
+    else
+    {
+        s.startEcefX = X; s.startEcefY = Y; s.startEcefZ = Z;
+        s.startLocalX = localE; s.startLocalY = localN; s.startLocalZ = localU;
+        s.startLat = lat; s.startLon = lon; s.startAlt = alt;
+    }
+}
+
+//
+// TakeoffTaperK / TakeoffWindowFactor — expose the take-off acceleration shape
+//   constant and its window multiplier so every take-off window site sizes the
+//   leg consistently with the tanh easing above (see EvaluateSegment).
+//
+double MotionSampler::TakeoffTaperK() { return kTakeoffTaper; }
+
+double MotionSampler::TakeoffWindowFactor()
+{
+    const double k = kTakeoffTaper;
+    return k * std::tanh(k) / std::log(std::cosh(k));   // C(k) = k*tanh(k)/ln(cosh(k))
 }

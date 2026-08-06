@@ -17,6 +17,7 @@
 #include "Validator.h"
 #include "CoordTransforms.h"
 #include "MotionSampler.h"
+#include "SpeedSeed.h"        // SeedCruiseSpeedMps — catalog cruise / 10 m/s default
 #include "FormatUtil.h"
 
 #include <cmath>
@@ -603,7 +604,7 @@ void CMotionPathEditorPage::LoadEllipseFromSegment(const MotionSegment& s)
         {
         case CoordMode::Local:
         {
-            double up;
+        //    double up;
             CoordTransforms::EcefToLocalEnuDeg(
                 p.ecefX, p.ecefY, p.ecefZ,
                 m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM,
@@ -687,18 +688,10 @@ void CMotionPathEditorPage::SeedEllipseDefaultsIfBlank(MotionSegment& s)
     // circle at the scenario origin.
     if (s.lengthMeters <= 0.0) s.lengthMeters = 1000.0;
 
-    // Speed from airframe cruise (same lookup as before).
+    // Speed from airframe cruise; if the type isn't catalogued, default to
+    // 10 m/s and log an error (see SeedCruiseSpeedMps).
     if (s.speedMps <= 0.0)
-    {
-        if (Entity* e = ActiveEntity())
-        {
-            const AirframeProfile prof = theApp.Catalog().Profile(
-                e->kind, e->domain, e->category, e->subcategory);
-            if (prof.valid && prof.cruiseSpeedMps > 0.0)
-                s.speedMps = prof.cruiseSpeedMps;
-        }
-        if (s.speedMps <= 0.0) s.speedMps = 100.0;
-    }
+        s.speedMps = SeedCruiseSpeedMps(ActiveEntity());
 
     // startBearingDeg defaults to 0 (North) — fine, no override.
 }
@@ -788,6 +781,18 @@ void CMotionPathEditorPage::CommitLineToSegment(MotionSegment& s)
     if (s.type == MotionType::Line)
         commitTriple(s, true);
 
+    // The user edited exactly one rep (the coordMode rep shown in the row);
+    // fan it out to the other two so the segment stays self-consistent and the
+    // Preview (which draws from Local) reflects a Lat/Lon- or ECEF-mode edit.
+    if (m_scenario)
+    {
+        MotionSampler::SyncSegmentEndpoint(s, /*isEnd*/false, s.coordMode,
+            m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM);
+        if (s.type == MotionType::Line)
+            MotionSampler::SyncSegmentEndpoint(s, /*isEnd*/true, s.coordMode,
+                m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM);
+    }
+
     s.startHeadingDeg = ReadDoubleText(*this, IDC_EDIT_LINE_START_H, s.startHeadingDeg);
     s.startPitchDeg   = ReadDoubleText(*this, IDC_EDIT_LINE_START_P, s.startPitchDeg);
     s.startRollDeg    = ReadDoubleText(*this, IDC_EDIT_LINE_START_R, s.startRollDeg);
@@ -865,20 +870,11 @@ void CMotionPathEditorPage::SeedLineDefaultsIfBlank(MotionSegment& s)
             }
         }
 
-        // Seed Line speed from the active entity's airframe cruise speed
-        // (same lookup the Ellipse path uses). If a profile isn't
-        // catalogued, default to 100 m/s.
+        // Seed Line speed from the active entity's airframe cruise speed (same
+        // lookup the Ellipse path uses). If a profile isn't catalogued, default
+        // to 10 m/s and log an error (see SeedCruiseSpeedMps).
         if (s.speedMps <= 0.0)
-        {
-            if (Entity* e = ActiveEntity())
-            {
-                const AirframeProfile prof = theApp.Catalog().Profile(
-                    e->kind, e->domain, e->category, e->subcategory);
-                if (prof.valid && prof.cruiseSpeedMps > 0.0)
-                    s.speedMps = prof.cruiseSpeedMps;
-            }
-            if (s.speedMps <= 0.0) s.speedMps = 100.0;
-        }
+            s.speedMps = SeedCruiseSpeedMps(ActiveEntity());
 
         // Re-derive endSecond to match the seeded speed across the seeded
         // start→end distance, so the user sees a self-consistent setup.

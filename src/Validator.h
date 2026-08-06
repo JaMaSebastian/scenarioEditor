@@ -61,9 +61,12 @@ namespace Validator
     // consistency and computes the PDU + bandwidth estimates.
     Report Validate(const Scenario& s);
 
-    // Catalog-aware overload: in addition to the structural checks, also
-    // run physical-model envelope checks for each entity whose effective
-    // mode resolves to Validate or Limit. Skips silently when the entity's
-    // Kind/Domain/Category/Subcategory has no catalogued AirframeProfile.
+    // Catalog-aware overload: in addition to the structural checks, warns
+    // when an entity's free-text Name matches a catalogued platform on a
+    // different Kind/Domain/Category/Subcategory tuple (DISBrowser renders
+    // by tuple, so Name and model would disagree), and runs physical-model
+    // envelope checks for each entity whose effective mode resolves to
+    // Validate or Limit. Envelope checks skip silently when the entity's
+    // tuple has no catalogued AirframeProfile.
     Report Validate(const Scenario& s, const EntityTypeCatalog& catalog);
 }

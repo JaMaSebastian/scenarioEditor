@@ -47,6 +47,7 @@ protected:
     void GetFieldHelpTable(const FFieldHelp*& outArray, size_t& outCount) const override;
     afx_msg void OnDefaultCoordModeChanged();
     afx_msg void OnPhysModeRadio();
+    afx_msg void OnClearOrigin();   // blank the origin fields -> provisional/uncommitted
     afx_msg void OnSpeedMultiplierToggle();
     DECLARE_MESSAGE_MAP()
 

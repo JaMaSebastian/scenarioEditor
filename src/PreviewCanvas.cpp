@@ -13,6 +13,8 @@
 #include "pch.h"
 #include "PreviewCanvas.h"
 #include "PreviewPage.h"
+#include "Scenario.h"        // CameraTransition / CameraFrame (camera RMB menu)
+#include "CameraZoomMenu.h"  // shared "Zoom" submenu on the camera-box menu
 #include "Direct2DContext.h"
 #include "CoordTransforms.h"
 #include "ScenarioEditor.h"   // theApp.SettingsPath() -> tile cache dir
@@ -29,6 +31,7 @@ namespace
     constexpr float kAnchorDotRadiusPx = 6.0f;  // pink Line end-anchor drag handle
     constexpr float kOrientationLenPx  = 18.0f;
     constexpr float kLabelOffsetPx     = 9.0f;
+    constexpr float kCameraBoxHalfPx   = 7.0f;  // pink camera vantage square (half-extent)
 
     //
     // MakeRgb — build a Direct2D color from a 0xRRGGBB packed int (+ optional alpha).
@@ -140,6 +143,23 @@ void CPreviewCanvas::OnLButtonDown(UINT nFlags, CPoint pt)
         }
     }
 
+    // Stationary-camera box drag (pink square). Sits on top and is always
+    // draggable (not gated on the t=0 entity-drag rule).
+    if (m_owner && !m_owner->IsStartPickArmed())
+    {
+        const int c = HitTestCamera(pt);
+        if (c >= 0)
+        {
+            const PreviewRenderState& s = m_owner->GetRenderState();
+            m_draggingCamera  = true;
+            m_dragCameraFrame = static_cast<int>(s.cameras[c].frameIdx);
+            SetCapture();
+            ::SetCursor(::LoadCursor(nullptr, IDC_SIZEALL));
+            CWnd::OnLButtonDown(nFlags, pt);
+            return;
+        }
+    }
+
     // Entity drag: when the preview is stopped at t=0, grabbing a dot relocates
     // its start location instead of panning the view.
     if (m_owner && !m_owner->IsStartPickArmed() && m_owner->IsEntityDragAllowed())
@@ -153,6 +173,34 @@ void CPreviewCanvas::OnLButtonDown(UINT nFlags, CPoint pt)
             ::SetCursor(::LoadCursor(nullptr, IDC_SIZEALL));
             CWnd::OnLButtonDown(nFlags, pt);
             return;
+        }
+    }
+
+    // Level-zone box drag (lowest priority — below entities/cameras/handles so a
+    // dot on top of a zone still wins). Grab anywhere inside a visible zone box and
+    // move the whole rectangle; the grab offset keeps it from jumping.
+    if (m_owner && !m_owner->IsStartPickArmed())
+    {
+        const int zi = HitTestZone(pt);
+        if (zi >= 0)
+        {
+            const PreviewRenderState& s = m_owner->GetRenderState();
+            double e = 0.0, n = 0.0;
+            if (UnprojectToEnu(pt, e, n) &&
+                static_cast<size_t>(zi) < s.levelZones.size())
+            {
+                const PreviewLevelZone& z = s.levelZones[static_cast<size_t>(zi)];
+                const double cE = 0.5 * (z.eastMinM  + z.eastMaxM);
+                const double cN = 0.5 * (z.northMinM + z.northMaxM);
+                m_draggingZone = true;
+                m_dragZoneIdx  = zi;
+                m_zoneGrabOffE = e - cE;   // grab point relative to zone center
+                m_zoneGrabOffN = n - cN;
+                SetCapture();
+                ::SetCursor(::LoadCursor(nullptr, IDC_SIZEALL));
+                CWnd::OnLButtonDown(nFlags, pt);
+                return;
+            }
         }
     }
 
@@ -217,6 +265,27 @@ void CPreviewCanvas::OnLButtonUp(UINT nFlags, CPoint pt)
         ReleaseCapture();
         if (m_owner) m_owner->EndEntityDrag();
     }
+    else if (m_draggingCamera)
+    {
+        double e = 0.0, n = 0.0;
+        if (m_owner && m_dragCameraFrame >= 0 && UnprojectToEnu(pt, e, n))
+            m_owner->DragCameraTo(static_cast<size_t>(m_dragCameraFrame), e, n);
+        m_draggingCamera  = false;
+        m_dragCameraFrame = -1;
+        ReleaseCapture();
+        if (m_owner) m_owner->EndCameraDrag();
+    }
+    else if (m_draggingZone)
+    {
+        double e = 0.0, n = 0.0;
+        if (m_owner && m_dragZoneIdx >= 0 && UnprojectToEnu(pt, e, n))
+            m_owner->DragZoneTo(static_cast<size_t>(m_dragZoneIdx),
+                                e - m_zoneGrabOffE, n - m_zoneGrabOffN);
+        m_draggingZone = false;
+        m_dragZoneIdx  = -1;
+        ReleaseCapture();
+        if (m_owner) m_owner->EndZoneDrag();
+    }
     else if (m_dragging)
     {
         m_dragging = false;
@@ -279,6 +348,21 @@ void CPreviewCanvas::OnMouseMove(UINT nFlags, CPoint pt)
         if (UnprojectToEnu(pt, e, n))
             m_owner->DragEntityTo(static_cast<size_t>(m_dragEntityIdx), e, n);
     }
+    else if (m_draggingCamera && m_owner && m_dragCameraFrame >= 0)
+    {
+        ::SetCursor(::LoadCursor(nullptr, IDC_SIZEALL));
+        double e = 0.0, n = 0.0;
+        if (UnprojectToEnu(pt, e, n))
+            m_owner->DragCameraTo(static_cast<size_t>(m_dragCameraFrame), e, n);
+    }
+    else if (m_draggingZone && m_owner && m_dragZoneIdx >= 0)
+    {
+        ::SetCursor(::LoadCursor(nullptr, IDC_SIZEALL));
+        double e = 0.0, n = 0.0;
+        if (UnprojectToEnu(pt, e, n))
+            m_owner->DragZoneTo(static_cast<size_t>(m_dragZoneIdx),
+                                e - m_zoneGrabOffE, n - m_zoneGrabOffN);
+    }
     else if (m_dragging && m_owner)
     {
         const int dx = pt.x - m_lastDragPt.x;
@@ -334,9 +418,12 @@ void CPreviewCanvas::OnRButtonDown(UINT nFlags, CPoint pt)
         return;
     }
 
-    // Right-press on empty space begins a rubber-band group selection. On an
-    // entity dot or a course line, do nothing here -- OnRButtonUp shows the menu.
-    const bool onObject = (HitTestEntity(pt) >= 0) || (HitTestLineSegment(pt) >= 0);
+    // Right-press on empty space begins a rubber-band group selection. On a
+    // camera box, an entity dot, or a course line, do nothing here -- OnRButtonUp
+    // shows the relevant context menu. (Cameras must be included or a right-press
+    // on a camera arms the rubber-band and swallows its menu.)
+    const bool onObject = (HitTestCamera(pt) >= 0) ||
+                          (HitTestEntity(pt) >= 0) || (HitTestLineSegment(pt) >= 0);
     if (!onObject)
     {
         m_rbActive = true;
@@ -427,6 +514,92 @@ void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
         return;
     }
 
+    // Camera box right-click (sits on top of entities): Target + Transition +
+    // Zoom + Delete.
+    {
+        const int camHit = HitTestCamera(pt);
+        if (camHit >= 0 && m_owner)
+        {
+            const PreviewRenderState& s = m_owner->GetRenderState();
+            const size_t frameIdx = s.cameras[camHit].frameIdx;
+
+            const std::vector<CameraFrame>* cams = m_owner->GetCameras();
+            if (!cams || frameIdx >= cams->size()) return;
+            const CameraFrame& frame = (*cams)[frameIdx];
+
+            // kCamTargetBase..+poses.size() and the 5000 block are this menu's;
+            // the Zoom submenu owns CameraZoomMenu::kCmdFirst..kCmdLast (6000+).
+            enum { kCamTargetBase = 1,               // [base .. base+poses.size()] inclusive
+                   kCamTransCross = 5000, kCamTransHard, kCamDelete };
+
+            // "Target": (focus on source) + one item per entity.
+            CMenu target;
+            target.CreatePopupMenu();
+            target.AppendMenu(MF_STRING, kCamTargetBase, _T("(focus on source)"));
+            for (size_t i = 0; i < s.poses.size(); ++i)
+            {
+                const CA2W wname(s.poses[i].name.c_str());
+                CString label = (wname.m_psz && *wname.m_psz) ? wname.m_psz : L"(entity)";
+                target.AppendMenu(MF_STRING, kCamTargetBase + 1 + static_cast<UINT>(i), label);
+            }
+
+            // "Transition": Crossfade/Blend or Hard cut.
+            CMenu trans;
+            trans.CreatePopupMenu();
+            trans.AppendMenu(MF_STRING, kCamTransCross, _T("Crossfade / Blend"));
+            trans.AppendMenu(MF_STRING, kCamTransHard,  _T("Hard cut"));
+
+            // "Zoom": shared with the timeline's box menu.
+            CMenu zoom;
+            zoom.CreatePopupMenu();
+            CameraZoomMenu::Build(zoom, frame);
+
+            CMenu menu;
+            menu.CreatePopupMenu();
+            menu.AppendMenu(MF_POPUP, reinterpret_cast<UINT_PTR>(target.GetSafeHmenu()), _T("Target"));
+            menu.AppendMenu(MF_POPUP, reinterpret_cast<UINT_PTR>(trans.GetSafeHmenu()),  _T("Transition"));
+            menu.AppendMenu(MF_POPUP, reinterpret_cast<UINT_PTR>(zoom.GetSafeHmenu()),   _T("Camera"));
+            menu.AppendMenu(MF_SEPARATOR, 0, static_cast<LPCTSTR>(nullptr));
+            menu.AppendMenu(MF_STRING, kCamDelete, _T("Delete Camera"));
+
+            CPoint sp = pt;
+            ClientToScreen(&sp);
+            SetForegroundWindow();
+            const UINT cmd = menu.TrackPopupMenu(
+                TPM_RETURNCMD | TPM_LEFTALIGN | TPM_RIGHTBUTTON, sp.x, sp.y, this);
+            target.Detach();  // owned by `menu`
+            trans.Detach();   // owned by `menu`
+            zoom.Detach();    // owned by `menu`
+
+            if (CameraZoomMenu::Handle(cmd, *m_owner, frameIdx, frame, this))
+            {
+                // handled by the shared submenu
+            }
+            else if (cmd == kCamTargetBase)
+            {
+                m_owner->SetCameraTarget(frameIdx, 0);   // focus on source / none
+            }
+            else if (cmd > kCamTargetBase && cmd <= kCamTargetBase + s.poses.size())
+            {
+                const size_t ei = cmd - kCamTargetBase - 1;
+                m_owner->SetCameraTarget(frameIdx, s.poses[ei].entityId);
+            }
+            else if (cmd == kCamTransCross)
+            {
+                m_owner->SetCameraTransition(frameIdx, CameraTransition::CrossfadeBlend);
+            }
+            else if (cmd == kCamTransHard)
+            {
+                m_owner->SetCameraTransition(frameIdx, CameraTransition::HardCut);
+            }
+            else if (cmd == kCamDelete)
+            {
+                m_owner->DeleteCamera(frameIdx);
+            }
+            return;
+        }
+    }
+
     const int idx = HitTestEntity(pt);
     if (idx < 0)
     {
@@ -507,7 +680,7 @@ void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
     // are local; TPM_RETURNCMD hands the chosen id straight back to us.
     enum { kPlotLine = 1, kEllipseCW, kEllipseCCW, kDuplicate, kRename, kDelete,
            kSetDuration, kRefreshSpeed, kSetDelay, kEntEllipseCW, kEntEllipseCCW,
-           kChangeEntity, kTakeoffLine };
+           kChangeEntity, kTakeoffLine, kNewCamera, kDeleteCamera };
 
     CMenu ell;
     ell.CreatePopupMenu();
@@ -531,6 +704,17 @@ void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
     CMenu menu;
     menu.CreatePopupMenu();
     menu.AppendMenu(MF_POPUP, reinterpret_cast<UINT_PTR>(plot.GetSafeHmenu()), _T("Plot"));
+    // "New Camera...": opens the modal to pick preset / target / transition and
+    // mount an Entity camera on this entity (grayed when no presets are loaded).
+    const bool hasPresets = m_owner && m_owner->CameraPresetCount() > 0;
+    menu.AppendMenu(hasPresets ? MF_STRING : (MF_STRING | MF_GRAYED),
+                    kNewCamera, _T("New Camera..."));
+    // "Delete Camera": remove the camera(s) mounted on this entity (grayed when
+    // the entity has none). Each deleted camera drops its timeline box too.
+    const bool hasEntityCamera =
+        m_owner && m_owner->EntityCameraCount(static_cast<size_t>(idx)) > 0;
+    menu.AppendMenu(hasEntityCamera ? MF_STRING : (MF_STRING | MF_GRAYED),
+                    kDeleteCamera, _T("Delete Camera"));
     menu.AppendMenu(MF_STRING, kSetDuration,  _T("Set Duration..."));
     menu.AppendMenu(MF_STRING, kSetDelay,     _T("Set Delay..."));
     menu.AppendMenu(MF_STRING, kRefreshSpeed, _T("Refresh Speed"));
@@ -585,6 +769,12 @@ void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
         break;
     case kChangeEntity:
         if (m_owner) m_owner->ChangeEntity(static_cast<size_t>(idx));
+        break;
+    case kNewCamera:
+        if (m_owner) m_owner->NewEntityCameraViaDialog(static_cast<size_t>(idx));
+        break;
+    case kDeleteCamera:
+        if (m_owner) m_owner->DeleteCamerasForEntity(static_cast<size_t>(idx));
         break;
     case kDelete:
         if (m_owner) m_owner->DeleteEntity(static_cast<size_t>(idx));
@@ -889,28 +1079,35 @@ void CPreviewCanvas::DrawMap(const PreviewRenderState& s, float w, float h)
     // Safety cap: never iterate an unbounded grid (bad origin / degenerate view).
     if ((int64_t)(xMax - xMin + 1) * (yMax - yMin + 1) > 600) return;
 
+    // Each tile is drawn into the axis-aligned bounding box of its FOUR projected
+    // corners (not just the two diagonal ones). Projecting Web-Mercator tiles through
+    // the ENU tangent plane rotates them away from the origin meridian; a 2-corner
+    // rect then leaves black gaps/stagger between tiles. Using the full 4-corner bbox
+    // makes neighbouring tiles overlap on their shared edge instead of gapping — no
+    // black seams — while keeping the simple (transform-free) DrawBitmap path.
     for (int ty = yMin; ty <= yMax; ++ty)
     {
         for (int tx = xMin; tx <= xMax; ++tx)
         {
+            ID2D1Bitmap* bmp = TileBitmap(s.mapLayer, z, tx, ty);
+            if (!bmp) continue;
+
             const double lonW = MapTileService::LonAtTileX(tx,     z);
             const double lonE = MapTileService::LonAtTileX(tx + 1, z);
             const double latN = MapTileService::LatAtTileY(ty,     z);
             const double latS = MapTileService::LatAtTileY(ty + 1, z);
 
-            double e1, n1, e2, n2;
-            geoToEnu(latN, lonW, e1, n1);   // top-left
-            geoToEnu(latS, lonE, e2, n2);   // bottom-right
-            const D2D1_POINT_2F tl = ProjectEnu(e1, n1, s, w, h);
-            const D2D1_POINT_2F br = ProjectEnu(e2, n2, s, w, h);
-            const D2D1_RECT_F dst = D2D1::RectF(
-                std::min(tl.x, br.x), std::min(tl.y, br.y),
-                std::max(tl.x, br.x), std::max(tl.y, br.y));
-
-            ID2D1Bitmap* bmp = TileBitmap(s.mapLayer, z, tx, ty);
-            if (bmp)
-                m_rt->DrawBitmap(bmp, dst, 1.0f,
-                                 D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+            const double geo[4][2] = { {latN, lonW}, {latN, lonE}, {latS, lonW}, {latS, lonE} };
+            float minx = 1e30f, miny = 1e30f, maxx = -1e30f, maxy = -1e30f;
+            for (const auto& g : geo)
+            {
+                double e, n; geoToEnu(g[0], g[1], e, n);
+                const D2D1_POINT_2F p = ProjectEnu(e, n, s, w, h);
+                minx = std::min(minx, p.x); maxx = std::max(maxx, p.x);
+                miny = std::min(miny, p.y); maxy = std::max(maxy, p.y);
+            }
+            const D2D1_RECT_F dst = D2D1::RectF(minx, miny, maxx, maxy);
+            m_rt->DrawBitmap(bmp, dst, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
         }
     }
 
@@ -1051,6 +1248,70 @@ int CPreviewCanvas::HitTestEntity(CPoint pxPt) const
         if (d2 < bestDist2) { bestDist2 = d2; best = static_cast<int>(i); }
     }
     return best;
+}
+
+//
+// HitTestZone — index into state.levelZones of the topmost enabled zone box whose
+//   rectangle contains a physical-pixel point, or -1. Only hits when zones are
+//   visible (showZones). Later zones are drawn on top, so iterate in reverse.
+//
+int CPreviewCanvas::HitTestZone(CPoint pxPt) const
+{
+    if (!m_owner || !m_rt) return -1;
+    const PreviewRenderState& s = m_owner->GetRenderState();
+    if (!s.showZones || s.levelZones.empty()) return -1;
+
+    const D2D1_SIZE_F dip = m_rt->GetSize();
+    if (dip.width <= 0.0f || dip.height <= 0.0f) return -1;
+    CRect rc; GetClientRect(&rc);
+    const double scaleX = (rc.Width()  > 0) ? rc.Width()  / dip.width  : 1.0;
+    const double scaleY = (rc.Height() > 0) ? rc.Height() / dip.height : 1.0;
+    const double clickX = pxPt.x / ((scaleX > 0.0) ? scaleX : 1.0);
+    const double clickY = pxPt.y / ((scaleY > 0.0) ? scaleY : 1.0);
+
+    for (int i = static_cast<int>(s.levelZones.size()) - 1; i >= 0; --i)
+    {
+        const PreviewLevelZone& z = s.levelZones[static_cast<size_t>(i)];
+        if (!z.enabled) continue;
+        const D2D1_POINT_2F tl = ProjectEnu(z.eastMinM, z.northMaxM, s, dip.width, dip.height);
+        const D2D1_POINT_2F br = ProjectEnu(z.eastMaxM, z.northMinM, s, dip.width, dip.height);
+        const double left   = std::min(tl.x, br.x), right  = std::max(tl.x, br.x);
+        const double top    = std::min(tl.y, br.y), bottom = std::max(tl.y, br.y);
+        if (clickX >= left && clickX <= right && clickY >= top && clickY <= bottom)
+            return i;
+    }
+    return -1;
+}
+
+//
+// HitTestCamera — index into state.cameras of the Stationary camera box whose
+//   square contains a physical-pixel point, or -1. Entity cameras aren't picked
+//   (they track their source and can't be dragged). Topmost (last) wins.
+//
+int CPreviewCanvas::HitTestCamera(CPoint pxPt) const
+{
+    if (!m_owner || !m_rt) return -1;
+    const PreviewRenderState& s = m_owner->GetRenderState();
+    if (s.cameras.empty()) return -1;
+
+    const D2D1_SIZE_F dip = m_rt->GetSize();
+    if (dip.width <= 0.0f || dip.height <= 0.0f) return -1;
+    CRect rc; GetClientRect(&rc);
+    const double scaleX = (rc.Width()  > 0) ? rc.Width()  / dip.width  : 1.0;
+    const double scaleY = (rc.Height() > 0) ? rc.Height() / dip.height : 1.0;
+    const double clickX = pxPt.x / ((scaleX > 0.0) ? scaleX : 1.0);
+    const double clickY = pxPt.y / ((scaleY > 0.0) ? scaleY : 1.0);
+
+    const double half = kCameraBoxHalfPx + 3.0;   // a little grab slack
+    for (size_t i = s.cameras.size(); i-- > 0; )   // topmost first
+    {
+        if (!s.cameras[i].stationary) continue;
+        const D2D1_POINT_2F p =
+            ProjectEnu(s.cameras[i].enuE, s.cameras[i].enuN, s, dip.width, dip.height);
+        if (std::fabs(p.x - clickX) <= half && std::fabs(p.y - clickY) <= half)
+            return static_cast<int>(i);
+    }
+    return -1;
 }
 
 //
@@ -1280,10 +1541,16 @@ void CPreviewCanvas::Render(const PreviewRenderState& state)
         };
         drawRect(state.levelOcean, m_brushOcean.Get());
         drawRect(state.levelLand,  m_brushLand.Get());
+    }
 
-        // Named sub-regions (forests, exclusion boxes, …) over the terrain:
-        // tinted fill + solid outline + centered label, one reusable brush
-        // recolored per zone.
+    // Named sub-regions (forests, exclusion boxes, …) over the terrain: tinted
+    // fill + solid outline + centered label, one reusable brush recolored per
+    // zone. Gated SEPARATELY from the land/ocean footprint (state.showZones vs.
+    // state.showLevel) so the big terrain box can be hidden — e.g. to clear a
+    // runway that entities take off through — while a zone like the Palm Forest
+    // stays visible.
+    if (state.showZones)
+    {
         for (const PreviewLevelZone& z : state.levelZones)
         {
             if (!z.enabled || !m_brushZone) continue;
@@ -1623,6 +1890,38 @@ void CPreviewCanvas::Render(const PreviewRenderState& state)
         }
     }
 
+    // Camera vantage boxes (pink squares). Stationary cameras are solid; Entity
+    // cameras (pinned to their source) are drawn as a hollow outline so they read
+    // as "attached, not free". Labels sit just above each box.
+    if (m_brushLegendStar)
+    {
+        for (const PreviewCameraBox& cam : state.cameras)
+        {
+            const D2D1_POINT_2F sp = ProjectEnu(cam.enuE, cam.enuN, state, w, h);
+            const D2D1_RECT_F box = D2D1::RectF(sp.x - kCameraBoxHalfPx, sp.y - kCameraBoxHalfPx,
+                                                sp.x + kCameraBoxHalfPx, sp.y + kCameraBoxHalfPx);
+            if (cam.stationary)
+            {
+                m_rt->FillRectangle(box, m_brushLegendStar.Get());
+                m_rt->DrawRectangle(box, m_brushOutline.Get(), 1.5f);
+            }
+            else
+            {
+                m_rt->DrawRectangle(box, m_brushLegendStar.Get(), 2.0f);
+            }
+
+            if (state.showLabels && m_textFormat && !cam.label.empty())
+            {
+                const CA2W wlabel(cam.label.c_str());
+                std::wstring txt = wlabel.m_psz ? wlabel.m_psz : L"";
+                D2D1_RECT_F r = D2D1::RectF(sp.x + kCameraBoxHalfPx + 2.0f, sp.y - 8.0f,
+                                            sp.x + kCameraBoxHalfPx + 180.0f, sp.y + 10.0f);
+                m_rt->DrawTextW(txt.c_str(), static_cast<UINT32>(txt.size()),
+                                m_textFormat.Get(), r, m_brushLegendStar.Get());
+            }
+        }
+    }
+
     // HUD: bottom-left time + zoom readout.
     if (m_hudTextFormat)
     {
@@ -1632,6 +1931,17 @@ void CPreviewCanvas::Render(const PreviewRenderState& state)
         D2D1_RECT_F r = D2D1::RectF(8.0f, h - 22.0f, w - 8.0f, h - 4.0f);
         m_rt->DrawTextW(buf, static_cast<UINT32>(wcslen(buf)),
                        m_hudTextFormat.Get(), r, m_brushLabel.Get());
+    }
+
+    // DIAGNOSTIC: selected entity's ENU + distance-from-origin, just above the
+    // time/zoom line. Drawn in the red "error" brush so it stands out as a probe.
+    if (m_hudTextFormat && !state.selectedReadout.empty())
+    {
+        ID2D1Brush* rb = m_brushSelectErr ? m_brushSelectErr.Get() : m_brushLabel.Get();
+        D2D1_RECT_F r = D2D1::RectF(8.0f, h - 40.0f, w - 8.0f, h - 22.0f);
+        m_rt->DrawTextW(state.selectedReadout.c_str(),
+                        static_cast<UINT32>(state.selectedReadout.size()),
+                        m_hudTextFormat.Get(), r, rb);
     }
 
     // Rubber-band group-selection box (right-drag).
@@ -1653,6 +1963,22 @@ void CPreviewCanvas::Render(const PreviewRenderState& state)
         const D2D1_RECT_F box = D2D1::RectF((a.x < b.x ? a.x : b.x), (a.y < b.y ? a.y : b.y),
                                             (a.x < b.x ? b.x : a.x), (a.y < b.y ? b.y : a.y));
         m_rt->DrawRectangle(box, m_brushSelect.Get(), 2.5f, m_dashedStroke.Get());
+    }
+
+    // "Show Origin" marker: a big red X at the scenario origin (ENU 0,0). Drawn
+    // pixel-sized (not metres) so it stays clearly visible whether zoomed far out
+    // or all the way in, and drawn last so it sits on top of everything.
+    if (state.showOrigin && m_brushSelectErr)
+    {
+        const D2D1_POINT_2F o = ProjectEnu(0.0, 0.0, state, w, h);
+        const float r = 18.0f;   // half-arm length in pixels
+        const float sw = 3.0f;   // stroke width
+        m_rt->DrawLine(D2D1::Point2F(o.x - r, o.y - r),
+                       D2D1::Point2F(o.x + r, o.y + r), m_brushSelectErr.Get(), sw);
+        m_rt->DrawLine(D2D1::Point2F(o.x - r, o.y + r),
+                       D2D1::Point2F(o.x + r, o.y - r), m_brushSelectErr.Get(), sw);
+        // Hollow ring so the exact origin point reads clearly at any zoom.
+        m_rt->DrawEllipse(D2D1::Ellipse(o, r + 3.0f, r + 3.0f), m_brushSelectErr.Get(), 1.5f);
     }
 
     HRESULT hr = m_rt->EndDraw();

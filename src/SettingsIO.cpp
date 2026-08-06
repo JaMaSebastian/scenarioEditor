@@ -133,6 +133,17 @@ bool SettingsIO::Load(Settings& out, const std::wstring& path)
     out.unrealBasemap     = Narrow(ReadStr(L"Unreal", L"Basemap",     L"Satellite", path));
     out.unrealDynamicTiles = ReadInt(L"Unreal", L"DynamicTiles", 0, path) != 0;
 
+    // [Preview] — display toggles (default to the struct's first-run values).
+    out.previewShowLabels      = ReadInt(L"Preview", L"ShowLabels",      out.previewShowLabels      ? 1 : 0, path) != 0;
+    out.previewShowTrails      = ReadInt(L"Preview", L"ShowTrails",      out.previewShowTrails      ? 1 : 0, path) != 0;
+    out.previewShowPaths       = ReadInt(L"Preview", L"ShowPaths",       out.previewShowPaths       ? 1 : 0, path) != 0;
+    out.previewShowOrientation = ReadInt(L"Preview", L"ShowOrientation", out.previewShowOrientation ? 1 : 0, path) != 0;
+    out.previewShowTerrain     = ReadInt(L"Preview", L"ShowTerrain",     out.previewShowTerrain     ? 1 : 0, path) != 0;
+    out.previewShowZones       = ReadInt(L"Preview", L"ShowZones",       out.previewShowZones       ? 1 : 0, path) != 0;
+    out.previewShowLegend      = ReadInt(L"Preview", L"ShowLegend",      out.previewShowLegend      ? 1 : 0, path) != 0;
+    out.previewShowProperties  = ReadInt(L"Preview", L"ShowProperties",  out.previewShowProperties  ? 1 : 0, path) != 0;
+    out.previewMoveEntities    = ReadInt(L"Preview", L"MoveEntities",    out.previewMoveEntities    ? 1 : 0, path) != 0;
+
     // [Deploy] ColumnWidths — comma-separated pixel widths.
     out.deployColumnWidths.clear();
     {
@@ -208,6 +219,16 @@ bool SettingsIO::Save(const Settings& s, const std::wstring& path)
     ok &= WriteStr(L"Unreal", L"TargetLevel",   Widen(s.unrealTargetLevel).c_str(), tmp);
     ok &= WriteStr(L"Unreal", L"Basemap",       Widen(s.unrealBasemap).c_str(),     tmp);
     ok &= WriteInt(L"Unreal", L"DynamicTiles",  s.unrealDynamicTiles ? 1 : 0,       tmp);
+
+    ok &= WriteInt(L"Preview", L"ShowLabels",      s.previewShowLabels      ? 1 : 0, tmp);
+    ok &= WriteInt(L"Preview", L"ShowTrails",      s.previewShowTrails      ? 1 : 0, tmp);
+    ok &= WriteInt(L"Preview", L"ShowPaths",       s.previewShowPaths       ? 1 : 0, tmp);
+    ok &= WriteInt(L"Preview", L"ShowOrientation", s.previewShowOrientation ? 1 : 0, tmp);
+    ok &= WriteInt(L"Preview", L"ShowTerrain",     s.previewShowTerrain     ? 1 : 0, tmp);
+    ok &= WriteInt(L"Preview", L"ShowZones",       s.previewShowZones       ? 1 : 0, tmp);
+    ok &= WriteInt(L"Preview", L"ShowLegend",      s.previewShowLegend      ? 1 : 0, tmp);
+    ok &= WriteInt(L"Preview", L"ShowProperties",  s.previewShowProperties  ? 1 : 0, tmp);
+    ok &= WriteInt(L"Preview", L"MoveEntities",    s.previewMoveEntities    ? 1 : 0, tmp);
 
     if (!s.deployColumnWidths.empty())
     {
