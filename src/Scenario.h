@@ -62,6 +62,98 @@ enum class EllipseDirection : uint8_t
     CounterClockwise = 1,
 };
 
+// How a CameraFrame is anchored. Entity cameras mount a saved Cameras.ini
+// preset on a scenario entity; Stationary cameras sit at a fixed vantage point.
+enum class CameraKind : uint8_t
+{
+    Entity     = 0,  // preset mounted on sourceEntityId (from config\Cameras.ini)
+    Stationary = 1,  // fixed vantage at vantEast/North/Up (scenario-origin ENU metres)
+};
+
+// Visual transition used when the schedule switches from the previous frame's
+// camera to this one.
+enum class CameraTransition : uint8_t
+{
+    CrossfadeBlend = 0,  // dissolve/blend between the two views
+    HardCut        = 1,  // instantaneous switch
+};
+
+//-----------------------------------------------------------------------------
+// CameraFrame — one timed camera in the scenario's camera schedule
+//   Authored on the Preview tab and serialized as a [Camera.N] section inside
+//   scenario.ini by ScenarioIO. Frames tile [0, duration] contiguously (shared
+//   edges): sorted by beginSecond with front().begin==0, begin[i]==end[i-1], and
+//   back().end==duration. Entity cameras mount a Cameras.ini preset on a source
+//   entity; Stationary cameras sit at a fixed origin-ENU vantage. Either kind may
+//   track a target entity (targetEntityId==0 keeps an Entity camera focused on its
+//   own source).
+//
+//   Exactly one frame is live at a time — DISBrowser's director picks the frame
+//   whose [beginSecond, endSecond] contains the scenario clock — so the zoom
+//   fields below only ever apply to the camera whose timeline box is active.
+//-----------------------------------------------------------------------------
+struct CameraFrame
+{
+    CameraKind        kind           = CameraKind::Entity;
+
+    // ----- Entity camera (kind == Entity) -----
+    uint16_t          sourceEntityId = 0;   // entity whose preset we mount (0 = unset)
+    std::string       presetType;           // Cameras.ini <Type>  e.g. "Octopus"
+    std::string       presetAngle;          // Cameras.ini <Angle> e.g. "front"
+
+    // ----- Focus/target (both kinds) -----
+    uint16_t          targetEntityId = 0;   // entity to track; 0 = focus on source
+
+    // ----- Stationary vantage (kind == Stationary), scenario-origin ENU metres -----
+    double            vantEastM  = 0.0;
+    double            vantNorthM = 0.0;
+    double            vantUpM    = 0.0;
+
+    CameraTransition  transition   = CameraTransition::CrossfadeBlend; // vs previous frame
+    double            beginSecond  = 0.0;
+    double            endSecond    = 0.0;
+    std::string       label;                // shown on the timeline box
+
+    // ----- Zoom (both kinds; authored here, executed by DISBrowser) -----
+    // zoomEnabled off is the legacy behaviour: Entity frames keep the FOV baked
+    // into their Cameras.ini preset and Stationary frames keep the engine default.
+    bool              zoomEnabled  = false;  // master toggle for this frame
+    double            zoomFovDeg   = 90.0;   // static FOV override (used when !dynamicZoom)
+    bool              dynamicZoom  = false;  // auto-fit the target; overrides zoomFovDeg
+    double            zoomFillPct  = 85.0;   // % of the frame the target should occupy
+
+    // Target extents (metres) resolved from EntityTypeCatalog at author time so
+    // DISBrowser needs no catalog reader. 0 = the catalog had no dimensions for
+    // that type, in which case the runtime falls back to the static FOV.
+    // Refreshed by CPreviewPage::RefreshCameraTargetExtents().
+    double            targetLengthM = 0.0;
+    double            targetWidthM  = 0.0;   // wingspan / beam
+    double            targetHeightM = 0.0;
+
+    // ----- Gimbal limits (Entity frames only; authored in DISBrowser's hanger) -----
+    // Enforce the mounted preset's body-relative travel envelope while this frame is live.
+    // DISBrowser clamps only when this is on AND the preset carries LimitsEnabled=1, so a
+    // play authored before the feature is unaffected no matter what Cameras.ini later says.
+    bool              limitsEnabled = false;
+
+    // True when the catalog gave us something to fit to. Dynamic zoom is
+    // meaningless without it (DISBrowser falls back to the static FOV), so the
+    // authoring UI grays the Dynamic toggle when this is false.
+    bool HasTargetSize() const
+    {
+        return targetLengthM > 0.0 || targetWidthM > 0.0 || targetHeightM > 0.0;
+    }
+};
+
+// Zoom authoring limits, shared by the Entity Camera dialog and the canvas /
+// timeline popups so both reject the same values. The FOV range matches
+// DISBrowser's own FOV slider, so anything authored here is reachable in the
+// runtime HUD too.
+constexpr double kZoomFovMinDeg  = 5.0;
+constexpr double kZoomFovMaxDeg  = 170.0;
+constexpr double kZoomFillMinPct = 10.0;
+constexpr double kZoomFillMaxPct = 100.0;
+
 //-----------------------------------------------------------------------------
 // MotionSegment — one timed leg of an entity's trajectory
 //   Carries a start/end pose (in Lat/Lon/Alt, Local ENU, or ECEF per coordMode)
@@ -239,14 +331,14 @@ struct Entity
     double                speedMultiplier         = 1.0;
 };
 
-// Output settings — drives ScenarioWorker's sink selection at Start. v2
-// supports UDP unicast, UDP multicast, file recording, and preview (no I/O).
-// TCP is deferred to a later version per spec §23.2.
+// Output settings — drives ScenarioWorker's sink selection at Start. Supports
+// UDP unicast, UDP multicast, TCP direct connection (§17.4), file recording,
+// and preview (no I/O).
 enum class OutputMode : uint8_t
 {
     UdpUnicast     = 0,
     UdpMulticast   = 1,
-    Tcp            = 2,   // deferred; selectable in UI but rejected at Start
+    Tcp            = 2,
     FileRecording  = 3,
     PreviewOnly    = 4,
 };
@@ -266,11 +358,25 @@ struct OutputConfig
     uint16_t    unicastPort     = 3001;   // match DISBrowser Config/DISBrowser.ini [DIS] ListenPort
 
     // UDP multicast
-    std::string multicastGroup  = "239.1.2.3";
+    // 224.252.0.1 is DISBrowser's documented default and sits in the DIS
+    // administrative scope 224.252.0.0-224.255.255.255 (RFC 2365 §6.3); the
+    // low octet matches the default ExerciseID (1), which DISBrowser checks.
+    std::string multicastGroup  = "224.252.0.1";
     uint16_t    multicastPort   = 3001;   // keep aligned with DISBrowser's DIS listen port
     std::string multicastInterface = "0.0.0.0"; // 0.0.0.0 = OS default IF
     int         multicastTtl    = 1;
     bool        multicastLoopback = true;
+
+    // TCP direct connection (§9.5, §17.4). The stream carries raw DIS PDUs
+    // back to back with no extra framing: each PDU's header Length field
+    // (bytes 8-9, big-endian) delimits it, so the bytes on a TCP connection
+    // are identical to what the UDP sinks emit.
+    bool        tcpListen       = false;  // false = connect out (client), true = listen (server)
+    std::string tcpRemoteHost   = "127.0.0.1";  // client mode: where to connect
+    uint16_t    tcpRemotePort   = 3002;         // client mode: DISBrowser's [DIS] TcpListenPort
+    uint16_t    tcpListenPort   = 3002;         // server mode: local port to accept on
+    bool        tcpReconnect    = true;   // client mode: retry a dropped/refused connection
+    int         tcpTimeoutMs    = 3000;   // connect / accept timeout
 
     // File recording / replay
     std::string recordingPath;
@@ -326,6 +432,30 @@ struct LevelOverlay
     std::vector<LevelZone> zones;   // named sub-regions ([Level.Zone0], …)
 };
 
+// Which sub-set of the Coconut_Palm_Pack palms to place (only meaningful when
+// FoliageConfig::palm is true).
+enum class PalmKind : uint8_t { All = 0, Tall = 1, Straight = 2 };
+
+// How the selected tree meshes should be placed on the terrain. Chosen on the
+// Preview-tab Foliage dialog so the same scenario can be experimented with under
+// each backend. (The backends themselves are separate, larger work; this only
+// records the choice.)
+enum class FoliageRenderMode : uint8_t { InEngine = 0, I3dm = 1, BlenderGIS = 2 };
+
+//-----------------------------------------------------------------------------
+// FoliageConfig — Preview-tab "Foliage" selections, persisted in [Foliage]
+//   Which tree packs to scatter (Oak=TreePackOak, BigTrees=Landscaping_Big_Trees,
+//   Palm=Coconut_Palm_Pack), the palm sub-kind, and the rendering backend.
+//-----------------------------------------------------------------------------
+struct FoliageConfig
+{
+    bool              oak        = false;   // TreePackOak
+    bool              bigTrees   = false;   // Landscaping_Big_Trees
+    bool              palm       = false;   // Coconut_Palm_Pack
+    PalmKind          palmKind   = PalmKind::All;            // used only when palm==true
+    FoliageRenderMode renderMode = FoliageRenderMode::InEngine;
+};
+
 //-----------------------------------------------------------------------------
 // Scenario — the top-level document edited by the app and (de)serialized by ScenarioIO
 //   Aggregates identity/metadata, DIS header fields, timing defaults, the
@@ -350,10 +480,17 @@ struct Scenario
     double      defaultUpdateRateHz  = 5.0;
     CoordMode   defaultCoordMode     = CoordMode::Local;
 
-    // ----- Origin (deferred to coord-transform slice; persisted nonetheless) -----
-    double      originLatDeg   = 0.0;
-    double      originLonDeg   = 0.0;
+    // ----- Origin -----
+    // A fresh scenario's origin is PROVISIONAL (originSet=false): the lat/lon here
+    // is just the default map view (Hurlburt Field, FL) the operator navigates from;
+    // it reads blank in the UI and isn't handed to DISBrowser. Saving commits it
+    // (originSet=true), and any loaded scenario is committed. Altitude defaults to
+    // 0 m (sea level / ellipsoid) so local Z=0 matches the water surface in
+    // DISBrowser's self-hosted terrain (ocean tiles fill at height 0).
+    double      originLatDeg   = 30.4275;    // Hurlburt Field, FL — default view
+    double      originLonDeg   = -86.6893;
     double      originAltM     = 0.0;
+    bool        originSet      = false;      // false = provisional (blank in UI); true = committed
 
     // ----- 3D terrain boundary (Preview tab "Boundary" paint tool) -----
     // A geographic box the operator paints on the Preview map; it defines the DEM footprint that gets
@@ -368,15 +505,23 @@ struct Scenario
     // ----- Optional terrain overlay for the Preview tab ([Level] section) -----
     LevelOverlay level;
 
+    // ----- Foliage selections (Preview-tab "Foliage" dialog; [Foliage] section) -----
+    FoliageConfig foliage;
+
     // ----- Entities (asset tree). UI edits entities[selectedIdx]; the
-    //       sample worker fans out per-tick across all enabled entries. -----
-    std::vector<Entity> entities = { Entity{} };
+    //       sample worker fans out per-tick across all enabled entries. A fresh
+    //       scenario starts EMPTY — the operator adds entities via "New". -----
+    std::vector<Entity> entities;
 
     Entity&       entity()       { return entities.front(); }
     const Entity& entity() const { return entities.front(); }
 
     // ----- Output config (§9, §11.2 [Output] section) -----
     OutputConfig output;
+
+    // ----- Camera schedule (Preview-tab authoring; [Camera.N] in scenario.ini).
+    //       A contiguous list of CameraFrames tiling [0, duration]. Empty = none. -----
+    std::vector<CameraFrame> cameras;
 
     // ----- Physical-model defaults (§spec.mk Future Enhancements). Each
     //       entity may override or inherit these values. Phase 1 wires

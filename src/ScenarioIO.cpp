@@ -364,6 +364,64 @@ namespace
         for (const wchar_t* p = s; *p; ++p) if (*p == L'.') ++n;
         return n;
     }
+
+    // CameraSection — build the "Camera.<n>" INI section name (1-based n).
+    std::wstring CameraSection(size_t idx)
+    {
+        wchar_t buf[32];
+        swprintf_s(buf, L"Camera.%u", static_cast<unsigned>(idx + 1));
+        return buf;
+    }
+
+    // ---------- camera enum <-> name (mirror of ScenarioCameraIO) ----------
+    const wchar_t* KindName(CameraKind k)
+    {
+        return (k == CameraKind::Stationary) ? L"Stationary" : L"Entity";
+    }
+    CameraKind ParseKind(const std::wstring& v, CameraKind fb)
+    {
+        if (v == L"Stationary") return CameraKind::Stationary;
+        if (v == L"Entity")     return CameraKind::Entity;
+        return fb;
+    }
+    const wchar_t* TransName(CameraTransition t)
+    {
+        return (t == CameraTransition::HardCut) ? L"HardCut" : L"CrossfadeBlend";
+    }
+    CameraTransition ParseTrans(const std::wstring& v, CameraTransition fb)
+    {
+        if (v == L"HardCut")        return CameraTransition::HardCut;
+        if (v == L"CrossfadeBlend") return CameraTransition::CrossfadeBlend;
+        return fb;
+    }
+
+    // ---------- foliage enum <-> name ----------
+    const wchar_t* PalmKindName(PalmKind k)
+    {
+        return (k == PalmKind::Tall)     ? L"Tall"
+             : (k == PalmKind::Straight) ? L"Straight"
+                                         : L"All";
+    }
+    PalmKind ParsePalmKind(const std::wstring& v, PalmKind fb)
+    {
+        if (v == L"All")      return PalmKind::All;
+        if (v == L"Tall")     return PalmKind::Tall;
+        if (v == L"Straight") return PalmKind::Straight;
+        return fb;
+    }
+    const wchar_t* RenderModeName(FoliageRenderMode m)
+    {
+        return (m == FoliageRenderMode::I3dm)       ? L"i3dm"
+             : (m == FoliageRenderMode::BlenderGIS) ? L"BlenderGIS"
+                                                    : L"InEngine";
+    }
+    FoliageRenderMode ParseRenderMode(const std::wstring& v, FoliageRenderMode fb)
+    {
+        if (v == L"InEngine")   return FoliageRenderMode::InEngine;
+        if (v == L"i3dm")       return FoliageRenderMode::I3dm;
+        if (v == L"BlenderGIS") return FoliageRenderMode::BlenderGIS;
+        return fb;
+    }
 }
 
 //
@@ -601,10 +659,74 @@ ScenarioIO::Result ScenarioIO::Save(const Scenario& scenario,
         WriteStr   (L"Output", L"MulticastInterface", Widen(o.multicastInterface), path);
         WriteInt   (L"Output", L"TTL",               o.multicastTtl, path);
         WriteInt   (L"Output", L"LoopbackEnabled",   o.multicastLoopback ? 1 : 0, path);
+        WriteInt   (L"Output", L"TcpListen",         o.tcpListen ? 1 : 0, path);
+        WriteStr   (L"Output", L"TcpRemoteHost",     Widen(o.tcpRemoteHost), path);
+        WriteInt   (L"Output", L"TcpRemotePort",     o.tcpRemotePort, path);
+        WriteInt   (L"Output", L"TcpListenPort",     o.tcpListenPort, path);
+        WriteInt   (L"Output", L"TcpReconnect",      o.tcpReconnect ? 1 : 0, path);
+        WriteInt   (L"Output", L"TcpTimeoutMs",      o.tcpTimeoutMs, path);
         WriteStr   (L"Output", L"RecordingPath",     Widen(o.recordingPath), path);
         WriteStr   (L"Output", L"ReplayPath",        Widen(o.replayPath), path);
         WriteDouble(L"Output", L"PlaybackSpeed",     o.playbackSpeed, path);
         WriteInt   (L"Output", L"LoopEnabled",       o.loopEnabled ? 1 : 0, path);
+    }
+
+    // ---- [Camera.N] scenario camera schedule (Preview tab; played by DISBrowser) ----
+    // Lives inside scenario.ini (no separate side-file). One 1-based section per
+    // frame; DISBrowser's reader keeps only [Camera.N] sections and ignores the rest.
+    for (size_t i = 0; i < scenario.cameras.size(); ++i)
+    {
+        const CameraFrame& c = scenario.cameras[i];
+        const std::wstring S = CameraSection(i);
+        const wchar_t* C = S.c_str();
+
+        WriteStr(C, L"Kind", KindName(c.kind), path);
+        if (c.kind == CameraKind::Entity)
+        {
+            WriteInt(C, L"SourceEntityID", c.sourceEntityId, path);
+            WriteStr(C, L"PresetType",  Widen(c.presetType),  path);
+            WriteStr(C, L"PresetAngle", Widen(c.presetAngle), path);
+            // Entity-only: a stationary vantage has no airframe to be body-relative to.
+            WriteInt(C, L"LimitsEnabled", c.limitsEnabled ? 1 : 0, path);
+        }
+        else
+        {
+            WriteDouble(C, L"VantEastMeters",  c.vantEastM,  path);
+            WriteDouble(C, L"VantNorthMeters", c.vantNorthM, path);
+            WriteDouble(C, L"VantUpMeters",    c.vantUpM,    path);
+        }
+        WriteInt   (C, L"TargetEntityID", c.targetEntityId, path);
+        WriteStr   (C, L"Transition",     TransName(c.transition), path);
+        WriteDouble(C, L"BeginSecond",    c.beginSecond, path);
+        WriteDouble(C, L"EndSecond",      c.endSecond,   path);
+        WriteStr   (C, L"Label",          Widen(c.label), path);
+
+        // Zoom (both kinds). Always emitted so a play saved by this build is
+        // self-describing; DISBrowser defaults any key it can't find, and older
+        // editor builds ignore what they don't know.
+        WriteInt   (C, L"ZoomEnabled",        c.zoomEnabled ? 1 : 0, path);
+        WriteDouble(C, L"ZoomFovDeg",         c.zoomFovDeg,   path);
+        WriteInt   (C, L"DynamicZoom",        c.dynamicZoom ? 1 : 0, path);
+        WriteDouble(C, L"ZoomFillPercent",    c.zoomFillPct,  path);
+        WriteDouble(C, L"TargetLengthMeters", c.targetLengthM, path);
+        WriteDouble(C, L"TargetWidthMeters",  c.targetWidthM,  path);
+        WriteDouble(C, L"TargetHeightMeters", c.targetHeightM, path);
+    }
+
+    // ---- [Foliage] Preview-tab tree selection (Preview "Foliage" dialog) ----
+    // Only emitted when at least one tree pack is enabled so vanilla scenarios
+    // stay free of the section. RenderMode is always written when present so the
+    // chosen backend round-trips with the selection.
+    {
+        const FoliageConfig& fo = scenario.foliage;
+        if (fo.oak || fo.bigTrees || fo.palm)
+        {
+            WriteInt(L"Foliage", L"Oak",      fo.oak      ? 1 : 0, path);
+            WriteInt(L"Foliage", L"BigTrees", fo.bigTrees ? 1 : 0, path);
+            WriteInt(L"Foliage", L"Palm",     fo.palm     ? 1 : 0, path);
+            WriteStr(L"Foliage", L"PalmKind",   PalmKindName(fo.palmKind),     path);
+            WriteStr(L"Foliage", L"RenderMode", RenderModeName(fo.renderMode), path);
+        }
     }
 
     // Force the cache to disk.
@@ -786,8 +908,7 @@ ScenarioIO::Result ScenarioIO::Load(Scenario& s, const std::wstring& path)
 
         s.entities.push_back(e);
     }
-    if (s.entities.empty())
-        s.entities.push_back(Entity{}); // keep entity() valid
+    // Note: a file may legitimately carry zero entities; do NOT force-seed one.
 
     // ---- Second pass: gather motion segments under each entity. They live
     //      in Entity.<entityId>.Motion.<idx> sections. ----
@@ -897,21 +1018,106 @@ ScenarioIO::Result ScenarioIO::Load(Scenario& s, const std::wstring& path)
         o.mode             = ParseOutputMode(ReadStr(L"Output", L"Mode", L"UdpUnicast", path),
                                              OutputMode::UdpUnicast);
         o.unicastIp        = Narrow(ReadStr(L"Output", L"UnicastIP", L"127.0.0.1", path));
-        o.unicastPort      = static_cast<uint16_t>(ReadInt(L"Output", L"UnicastPort", 3000, path));
-        o.multicastGroup   = Narrow(ReadStr(L"Output", L"MulticastGroup", L"239.1.2.3", path));
-        o.multicastPort    = static_cast<uint16_t>(ReadInt(L"Output", L"MulticastPort", 3000, path));
+        // Port fallbacks must match the in-memory defaults in Scenario.h (3001,
+        // DISBrowser's [DIS] ListenPort). They used to read 3000, so any .ini
+        // written without these keys silently moved output off DISBrowser's port.
+        o.unicastPort      = static_cast<uint16_t>(ReadInt(L"Output", L"UnicastPort", 3001, path));
+        o.multicastGroup   = Narrow(ReadStr(L"Output", L"MulticastGroup", L"224.252.0.1", path));
+        o.multicastPort    = static_cast<uint16_t>(ReadInt(L"Output", L"MulticastPort", 3001, path));
         o.multicastInterface = Narrow(ReadStr(L"Output", L"MulticastInterface", L"0.0.0.0", path));
         o.multicastTtl     = static_cast<int>(ReadInt(L"Output", L"TTL", 1, path));
         o.multicastLoopback = ReadInt(L"Output", L"LoopbackEnabled", 1, path) != 0;
+        o.tcpListen        = ReadInt(L"Output", L"TcpListen", 0, path) != 0;
+        o.tcpRemoteHost    = Narrow(ReadStr(L"Output", L"TcpRemoteHost", L"127.0.0.1", path));
+        o.tcpRemotePort    = static_cast<uint16_t>(ReadInt(L"Output", L"TcpRemotePort", 3002, path));
+        o.tcpListenPort    = static_cast<uint16_t>(ReadInt(L"Output", L"TcpListenPort", 3002, path));
+        o.tcpReconnect     = ReadInt(L"Output", L"TcpReconnect", 1, path) != 0;
+        o.tcpTimeoutMs     = static_cast<int>(ReadInt(L"Output", L"TcpTimeoutMs", 3000, path));
         o.recordingPath    = Narrow(ReadStr(L"Output", L"RecordingPath", L"", path));
         o.replayPath       = Narrow(ReadStr(L"Output", L"ReplayPath",    L"", path));
         o.playbackSpeed    = ReadDouble(L"Output", L"PlaybackSpeed", 1.0, path);
         o.loopEnabled      = ReadInt(L"Output", L"LoopEnabled", 0, path) != 0;
     }
 
+    // ---- [Camera.N] scenario camera schedule (absent in older/vanilla files) ----
+    // Discover "Camera.<N>" sections (prefix "Camera." with exactly one dot) and
+    // read them in numeric index order. The caller runs NormalizeCameraSchedule()
+    // once the model is live, so no tiling/clamp is done here.
+    {
+        struct IndexedSection { unsigned idx; std::wstring name; };
+        std::vector<IndexedSection> camSections;
+        for (DWORD i = 0; i < nameLen; )
+        {
+            const wchar_t* sec = namesBuf + i;
+            const size_t len = std::wcslen(sec);
+            i += static_cast<DWORD>(len + 1);
+            if (len == 0) continue;
+            if (std::wcsncmp(sec, L"Camera.", 7) != 0) continue;
+            if (CountDots(sec) != 1) continue;
+            const unsigned idx = static_cast<unsigned>(std::wcstoul(sec + 7, nullptr, 10));
+            camSections.push_back({ idx, std::wstring(sec) });
+        }
+        std::sort(camSections.begin(), camSections.end(),
+                  [](const auto& a, const auto& b){ return a.idx < b.idx; });
+
+        for (const auto& cs : camSections)
+        {
+            const wchar_t* C = cs.name.c_str();
+            CameraFrame c;
+            c.kind = ParseKind(ReadStr(C, L"Kind", KindName(c.kind), path), c.kind);
+            if (c.kind == CameraKind::Entity)
+            {
+                c.sourceEntityId = static_cast<uint16_t>(ReadInt(C, L"SourceEntityID", 0, path));
+                c.presetType  = Narrow(ReadStr(C, L"PresetType",  L"", path));
+                c.presetAngle = Narrow(ReadStr(C, L"PresetAngle", L"", path));
+                // Absent in plays authored before gimbal limits existed; the default must
+                // match CameraFrame's own (off) or reloading an old play would change it.
+                c.limitsEnabled = ReadInt(C, L"LimitsEnabled", c.limitsEnabled ? 1 : 0, path) != 0;
+            }
+            else
+            {
+                c.vantEastM  = ReadDouble(C, L"VantEastMeters",  0.0, path);
+                c.vantNorthM = ReadDouble(C, L"VantNorthMeters", 0.0, path);
+                c.vantUpM    = ReadDouble(C, L"VantUpMeters",    0.0, path);
+            }
+            c.targetEntityId = static_cast<uint16_t>(ReadInt(C, L"TargetEntityID", 0, path));
+            c.transition = ParseTrans(ReadStr(C, L"Transition", TransName(c.transition), path),
+                                      c.transition);
+            c.beginSecond = ReadDouble(C, L"BeginSecond", 0.0, path);
+            c.endSecond   = ReadDouble(C, L"EndSecond",   0.0, path);
+            c.label = Narrow(ReadStr(C, L"Label", L"", path));
+
+            // Zoom — absent in plays saved before the feature; the default-
+            // constructed member supplies the fallback, so those load with zoom off.
+            c.zoomEnabled = ReadInt(C, L"ZoomEnabled", c.zoomEnabled ? 1 : 0, path) != 0;
+            c.zoomFovDeg  = ReadDouble(C, L"ZoomFovDeg", c.zoomFovDeg, path);
+            c.dynamicZoom = ReadInt(C, L"DynamicZoom", c.dynamicZoom ? 1 : 0, path) != 0;
+            c.zoomFillPct = ReadDouble(C, L"ZoomFillPercent",    c.zoomFillPct,  path);
+            c.targetLengthM = ReadDouble(C, L"TargetLengthMeters", c.targetLengthM, path);
+            c.targetWidthM  = ReadDouble(C, L"TargetWidthMeters",  c.targetWidthM,  path);
+            c.targetHeightM = ReadDouble(C, L"TargetHeightMeters", c.targetHeightM, path);
+
+            s.cameras.push_back(std::move(c));
+        }
+    }
+
+    // ---- [Foliage] Preview-tab tree selection (absent → struct defaults) ----
+    {
+        FoliageConfig& fo = s.foliage;
+        fo.oak        = ReadInt(L"Foliage", L"Oak",      fo.oak      ? 1 : 0, path) != 0;
+        fo.bigTrees   = ReadInt(L"Foliage", L"BigTrees", fo.bigTrees ? 1 : 0, path) != 0;
+        fo.palm       = ReadInt(L"Foliage", L"Palm",     fo.palm     ? 1 : 0, path) != 0;
+        fo.palmKind   = ParsePalmKind(ReadStr(L"Foliage", L"PalmKind", L"", path), fo.palmKind);
+        fo.renderMode = ParseRenderMode(ReadStr(L"Foliage", L"RenderMode", L"", path), fo.renderMode);
+    }
+
+    // A loaded scenario's origin is committed (not provisional). Not persisted as
+    // a key — any file we successfully read carries a real, committed origin.
+    s.originSet = true;
+
     sprintf_s(szError, sizeof(szError),
-              "ScenarioIO::Load read scenario.ini, version=%lld, entities=%zu",
-              version, s.entities.size());
+              "ScenarioIO::Load read scenario.ini, version=%lld, entities=%zu, cameras=%zu",
+              version, s.entities.size(), s.cameras.size());
     LOG(szError);
     return Result::Ok;
 }

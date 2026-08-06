@@ -195,6 +195,13 @@
 #define IDC_BTN_REPLAY_BROWSE           1427
 #define IDC_STATIC_GROUP_DIS            1428
 #define IDC_BTN_ATTRIBUTES              1429
+#define IDC_RADIO_TCP_CLIENT            1430
+#define IDC_RADIO_TCP_SERVER            1431
+#define IDC_EDIT_TCP_HOST               1432
+#define IDC_EDIT_TCP_PORT               1433
+#define IDC_EDIT_TCP_LISTEN_PORT        1434
+#define IDC_CHK_TCP_RECONNECT           1435
+#define IDC_EDIT_TCP_TIMEOUT            1436
 #define IDC_STATIC_PREVIEW_CANVAS       1500
 #define IDC_BTN_PREVIEW_START           1501
 #define IDC_BTN_PREVIEW_PAUSE           1502
@@ -215,10 +222,59 @@
 #define IDC_BTN_PREVIEW_BUILD_TERRAIN   1886
 #define IDC_BTN_PREVIEW_TERRAIN_START   1887
 #define IDC_BTN_PREVIEW_TERRAIN_STOP    1888
+#define IDC_BTN_PREVIEW_PURGE_TERRAIN   1889
+#define IDC_BTN_PREVIEW_BUILD_FOLIAGE   1938
+#define IDC_BTN_PREVIEW_SHOW_ORIGIN     1923
+#define IDC_CHK_PREVIEW_ZONES           1924
+#define IDC_BTN_PREVIEW_GOTO_ORIGIN     1927
 #define IDC_COMBO_PREVIEW_SPEED         1516
 #define IDC_CHK_PREVIEW_DESTTIME        1517
 #define IDC_LIST_PREVIEW_DESTTIME       1518
 #define IDC_BTN_PREVIEW_NEW             1519
+
+// Preview tab — camera authoring (New Camera button, camera dropdown row,
+// and the camera timeline strip). See IDD_PREVIEW_PAGE.
+#define IDC_BTN_PREVIEW_NEW_CAMERA      1912
+#define IDC_COMBO_CAM_ENTITY            1913
+#define IDC_COMBO_CAM_PRESET            1914
+#define IDC_COMBO_CAM_TARGET            1915
+#define IDC_COMBO_CAM_TRANSITION        1916
+#define IDC_BTN_CAM_ADD                 1917
+#define IDC_CAMERA_TIMELINE             1918
+// Camera-timeline zoom: time-scale dropdown + the horizontal scroll bar that
+// pans the (now zoomable) box strip. Same width as IDC_CAMERA_TIMELINE.
+#define IDC_COMBO_CAM_SCALE             1925
+#define IDC_CAMERA_HSCROLL              1926
+
+// Entity Camera dialog (RMB entity dot -> "New Camera...").
+#define IDD_ENTITY_CAMERA               310
+#define IDC_STATIC_ECAM_SOURCE          1919
+#define IDC_COMBO_ECAM_PRESET           1920
+#define IDC_COMBO_ECAM_TARGET           1921
+#define IDC_COMBO_ECAM_TRANS            1922
+// Zoom row (under Target): master toggle, static FOV override, dynamic
+// fit-the-target toggle, and the frame-fill percentage the fit aims for.
+#define IDC_CHK_ECAM_ZOOM               1939
+#define IDC_EDIT_ECAM_FOV               1940
+#define IDC_CHK_ECAM_DYNZOOM            1941
+#define IDC_EDIT_ECAM_FILL              1942
+
+// Gimbal-limits row: enforce the mounted preset's body-relative travel envelope.
+// Offerable only when that preset actually defines and enables one in Cameras.ini.
+#define IDC_CHK_ECAM_GIMBAL             1943
+
+// Foliage dialog (Preview tab "Foliage" button) + its controls.
+#define IDD_FOLIAGE                     311
+#define IDC_BTN_PREVIEW_FOLIAGE         1928
+#define IDC_CHK_FOLIAGE_OAK             1929
+#define IDC_CHK_FOLIAGE_BIGTREES        1930
+#define IDC_CHK_FOLIAGE_PALM            1931
+#define IDC_RADIO_FOLIAGE_PALM_ALL      1932
+#define IDC_RADIO_FOLIAGE_PALM_TALL     1933
+#define IDC_RADIO_FOLIAGE_PALM_STRAIGHT 1934
+#define IDC_RADIO_FOLIAGE_INENGINE      1935
+#define IDC_RADIO_FOLIAGE_I3DM          1936
+#define IDC_RADIO_FOLIAGE_BLENDERGIS    1937
 
 // Motion Path Editor — Ellipse fields (two-foci + length + speed +
 // start-bearing form).
@@ -912,15 +968,16 @@
 #define AFX_IDP_E_CANTSAVEFILETOTEMP    0xFEC5
 #define AFX_IDP_E_SEARCHTEXTNOTFOUND    0xFEC6
 #define AFX_IDP_E_REPLACEMENTSTOOLONG   0xFEC7
+#ifndef IDC_STATIC
 #define IDC_STATIC                      -1
-
+#endif
 // Next default values for new objects
 // 
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        310
+#define _APS_NEXT_RESOURCE_VALUE        312
 #define _APS_NEXT_COMMAND_VALUE         32100
-#define _APS_NEXT_CONTROL_VALUE         1912
+#define _APS_NEXT_CONTROL_VALUE         1944
 #define _APS_NEXT_SYMED_VALUE           34000
 #endif
 #endif

@@ -78,8 +78,8 @@
       <AdditionalDependencies>Ws2_32.lib;d2d1.lib;dwrite.lib;winmm.lib;OpenDIS7.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>copy /Y "$(ProjectDir)EntityTypeCatalog.ini" "$(OutDir)EntityTypeCatalog.ini"</Command>
-      <Message>Copying EntityTypeCatalog.ini next to the exe</Message>
+      <Command>copy /Y "$(ProjectDir)config\*.ini" "$(OutDir)"</Command>
+      <Message>Copying config\*.ini next to the exe</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -110,8 +110,8 @@
       <AdditionalDependencies>Ws2_32.lib;d2d1.lib;dwrite.lib;winmm.lib;OpenDIS7.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>copy /Y "$(ProjectDir)EntityTypeCatalog.ini" "$(OutDir)EntityTypeCatalog.ini"</Command>
-      <Message>Copying EntityTypeCatalog.ini next to the exe</Message>
+      <Command>copy /Y "$(ProjectDir)config\*.ini" "$(OutDir)"</Command>
+      <Message>Copying config\*.ini next to the exe</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -121,6 +121,7 @@
     <ClInclude Include="src\Resource.h" />
     <ClInclude Include="src\ScenarioEditor.h" />
     <ClInclude Include="src\ScenarioEditorDialog.h" />
+    <ClInclude Include="src\ScrollablePage.h" />
     <ClInclude Include="src\HelpAwarePage.h" />
     <ClInclude Include="src\ScenarioSetupPage.h" />
     <ClInclude Include="src\AssetEntityEditorPage.h" />
@@ -133,6 +134,11 @@
     <ClInclude Include="src\DeployPage.h" />
     <ClInclude Include="src\PreviewPage.h" />
     <ClInclude Include="src\PreviewCanvas.h" />
+    <ClInclude Include="src\CameraTimeline.h" />
+    <ClInclude Include="src\CameraPresetCatalog.h" />
+    <ClInclude Include="src\CameraZoomMenu.h" />
+    <ClInclude Include="src\CameraTargetExtents.h" />
+    <ClInclude Include="src\ScenarioCameraIO.h" />
     <ClInclude Include="src\EntityTypePickerDialog.h" />
     <ClInclude Include="src\MapTileService.h" />
     <ClInclude Include="src\CesiumView.h" />
@@ -140,11 +146,14 @@
     <ClInclude Include="src\Scenario.h" />
     <ClInclude Include="src\PduBuilder.h" />
     <ClInclude Include="src\UdpSender.h" />
+    <ClInclude Include="src\TcpSender.h" />
     <ClInclude Include="src\ScenarioIO.h" />
     <ClInclude Include="src\EntityTypeCatalog.h" />
     <ClInclude Include="src\CoordTransforms.h" />
     <ClInclude Include="src\ScenarioWorker.h" />
     <ClInclude Include="src\MotionSampler.h" />
+    <ClInclude Include="src\SpeedSeed.h" />
+    <ClInclude Include="src\ScenarioPaths.h" />
     <ClInclude Include="src\DisrecFormat.h" />
     <ClInclude Include="src\DisrecWriter.h" />
     <ClInclude Include="src\DisrecReader.h" />
@@ -154,6 +163,8 @@
     <ClInclude Include="src\FormatUtil.h" />
     <ClInclude Include="src\CatalogEditorDialog.h" />
     <ClInclude Include="src\CatalogAddDialog.h" />
+    <ClInclude Include="src\EntityCameraDialog.h" />
+    <ClInclude Include="src\FoliageDialog.h" />
     <ClInclude Include="log.h" />
   </ItemGroup>
   <ItemGroup>
@@ -162,6 +173,7 @@
     </ClCompile>
     <ClCompile Include="src\ScenarioEditor.cpp" />
     <ClCompile Include="src\ScenarioEditorDialog.cpp" />
+    <ClCompile Include="src\ScrollablePage.cpp" />
     <ClCompile Include="src\HelpAwarePage.cpp" />
     <ClCompile Include="src\ScenarioSetupPage.cpp" />
     <ClCompile Include="src\AssetEntityEditorPage.cpp" />
@@ -174,14 +186,22 @@
     <ClCompile Include="src\DeployPage.cpp" />
     <ClCompile Include="src\PreviewPage.cpp" />
     <ClCompile Include="src\PreviewCanvas.cpp" />
+    <ClCompile Include="src\CameraTimeline.cpp" />
+    <ClCompile Include="src\CameraPresetCatalog.cpp" />
+    <ClCompile Include="src\CameraZoomMenu.cpp" />
+    <ClCompile Include="src\CameraTargetExtents.cpp" />
+    <ClCompile Include="src\ScenarioCameraIO.cpp" />
     <ClCompile Include="src\EntityTypePickerDialog.cpp" />
     <ClCompile Include="src\MapTileService.cpp" />
     <ClCompile Include="src\CesiumView.cpp" />
     <ClCompile Include="src\CatalogEditorDialog.cpp" />
     <ClCompile Include="src\CatalogAddDialog.cpp" />
+    <ClCompile Include="src\EntityCameraDialog.cpp" />
+    <ClCompile Include="src\FoliageDialog.cpp" />
     <ClCompile Include="src\Direct2DContext.cpp" />
     <ClCompile Include="src\PduBuilder.cpp" />
     <ClCompile Include="src\UdpSender.cpp" />
+    <ClCompile Include="src\TcpSender.cpp" />
     <ClCompile Include="src\ScenarioIO.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -195,6 +215,7 @@
     <ClCompile Include="src\MotionSampler.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="src\SpeedSeed.cpp" />
     <ClCompile Include="src\DisrecWriter.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -219,7 +240,10 @@
     <None Include="packages.config" />
     <None Include="README.md" />
     <None Include="spec.mk" />
-    <None Include="EntityTypeCatalog.ini" />
+    <None Include="config\EntityTypeCatalog.ini" />
+    <None Include="config\EntityTypeCatalog.proposed.ini" />
+    <None Include="config\Cameras.ini" />
+    <None Include="plays\harburtField.ini" />
     <None Include="src\toolbar.bmp" />
     <None Include="src\make_toolbar_bmp.py" />
   </ItemGroup>

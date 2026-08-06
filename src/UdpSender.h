@@ -40,6 +40,11 @@ public:
     int Send(const std::string& host, uint16_t port,
              const void* data, size_t length);
 
+    // Human-readable reason the last Send returned 0, or empty if the last
+    // Send succeeded. Lets callers (e.g. the Network > Test Multicast Send
+    // command) report *why* a send failed instead of just "0 bytes".
+    const std::string& LastError() const { return m_lastError; }
+
     void Close();
 
 private:
@@ -49,4 +54,5 @@ private:
     std::string m_multicastIface = "0.0.0.0";
     bool        m_multicastLoop  = true;
     bool        m_multicastApplied = false;
+    std::string m_lastError;
 };

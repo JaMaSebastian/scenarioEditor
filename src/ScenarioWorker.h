@@ -15,6 +15,7 @@
 #include "DisrecWriter.h"
 #include "Scenario.h"
 #include "UdpSender.h"
+#include "TcpSender.h"
 
 #include <windows.h>
 
@@ -101,5 +102,6 @@ private:
     std::atomic<bool>   m_pause{false};
     std::thread         m_thread;
     UdpSender           m_udp;
+    TcpSender           m_tcp;
     DisrecWriter        m_recorder;
 };

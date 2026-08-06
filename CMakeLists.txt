@@ -21,6 +21,7 @@ add_executable(ScenarioEditor WIN32
     src/pch.cpp
     src/ScenarioEditor.cpp
     src/ScenarioEditorDialog.cpp
+    src/ScrollablePage.cpp
     src/HelpAwarePage.cpp
     src/ScenarioSetupPage.cpp
     src/AssetEntityEditorPage.cpp
@@ -34,19 +35,28 @@ add_executable(ScenarioEditor WIN32
     src/DeployPage.cpp
     src/PreviewPage.cpp
     src/PreviewCanvas.cpp
+    src/CameraTimeline.cpp
+    src/CameraPresetCatalog.cpp
+    src/CameraZoomMenu.cpp
+    src/CameraTargetExtents.cpp
+    src/ScenarioCameraIO.cpp
     src/EntityTypePickerDialog.cpp
     src/MapTileService.cpp
     src/CesiumView.cpp
     src/CatalogEditorDialog.cpp
     src/CatalogAddDialog.cpp
+    src/EntityCameraDialog.cpp
+    src/FoliageDialog.cpp
     src/Direct2DContext.cpp
     src/PduBuilder.cpp
     src/UdpSender.cpp
+    src/TcpSender.cpp
     src/ScenarioIO.cpp
     src/EntityTypeCatalog.cpp
     src/CoordTransforms.cpp
     src/ScenarioWorker.cpp
     src/MotionSampler.cpp
+    src/SpeedSeed.cpp
     src/DisrecWriter.cpp
     src/DisrecReader.cpp
     src/SettingsIO.cpp

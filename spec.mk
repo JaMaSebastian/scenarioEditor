@@ -2989,12 +2989,14 @@ Playback speed: 0.25x, 0.5x, 1x, 2x, 10x
 
 TCP support may be started in Version 2 if time permits, but UDP unicast, UDP multicast, file recording, and file replay should be prioritized first.
 
+**Status update (2026-08-05): TCP direct connection is now implemented** (§9.5, §17.4) in both client and server roles — see `TcpSender`. The stream carries raw DIS PDUs back to back with no added framing; each PDU's header Length field delimits it, so the bytes match what the UDP sinks emit. The companion receive path exists in DISBrowser (`FDISTCPListener`, `[DIS] TcpEnabled` / `TcpListenPort`), with DISBrowser as the server and ScenarioEditor's client mode dialling in.
+
 ### 23.3 Later Version Scope
 
 Later versions may add:
 
 ```text
-TCP direct connection support completion
+TCP multi-client fan-out (server role currently accepts one client — §17.4)
 Create Entity PDU
 Remove Entity PDU
 Fire PDU

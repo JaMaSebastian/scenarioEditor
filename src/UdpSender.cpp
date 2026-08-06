@@ -64,6 +64,8 @@ void UdpSender::SetMulticastOptions(int ttl, const std::string& iface, bool loop
 int UdpSender::Send(const std::string& host, uint16_t port,
                     const void* data, size_t length)
 {
+    m_lastError.clear();
+
     if (!m_wsaStarted)
     {
         WSADATA wsa{};
@@ -71,6 +73,7 @@ int UdpSender::Send(const std::string& host, uint16_t port,
         if (rc != 0)
         {
             sprintf_s(szError, sizeof(szError), "WSAStartup failed: %d", rc);
+            m_lastError = szError;
             LOG(szError);
             return 0;
         }
@@ -84,6 +87,7 @@ int UdpSender::Send(const std::string& host, uint16_t port,
         {
             sprintf_s(szError, sizeof(szError),
                       "UDP socket() failed: %d", ::WSAGetLastError());
+            m_lastError = szError;
             LOG(szError);
             return 0;
         }
@@ -96,7 +100,10 @@ int UdpSender::Send(const std::string& host, uint16_t port,
     if (::InetPtonA(AF_INET, host.c_str(), &addr.sin_addr) != 1)
     {
         sprintf_s(szError, sizeof(szError),
-                  "UDP InetPton('%s') failed", host.c_str());
+                  // ASCII only: this string reaches a MessageBox via CA2T, which
+                  // converts through the ANSI codepage and mangles non-ASCII.
+                  "UDP InetPton('%s') failed - not a valid IPv4 address", host.c_str());
+        m_lastError = szError;
         LOG(szError);
         return 0;
     }
@@ -105,20 +112,70 @@ int UdpSender::Send(const std::string& host, uint16_t port,
     {
         const SOCKET s = ToSocket(m_socket);
 
+        // TTL is a single byte on the wire; reject out-of-range values here so
+        // setsockopt doesn't fail opaquely on e.g. a UI-entered 9999.
+        if (m_multicastTtl < 0 || m_multicastTtl > 255)
+        {
+            m_lastError = "multicast TTL out of range (must be 0..255)";
+            sprintf_s(szError, sizeof(szError),
+                      "UDP multicast TTL %d out of range (0..255)", m_multicastTtl);
+            LOG(szError);
+            return 0;
+        }
+
         const DWORD ttl  = static_cast<DWORD>(m_multicastTtl);
         const DWORD loop = m_multicastLoop ? 1u : 0u;
-        ::setsockopt(s, IPPROTO_IP, IP_MULTICAST_TTL,
-                     reinterpret_cast<const char*>(&ttl), sizeof(ttl));
-        ::setsockopt(s, IPPROTO_IP, IP_MULTICAST_LOOP,
-                     reinterpret_cast<const char*>(&loop), sizeof(loop));
 
-        // Bind the outgoing interface if the user named one explicitly.
-        if (!m_multicastIface.empty() && m_multicastIface != "0.0.0.0")
+        if (::setsockopt(s, IPPROTO_IP, IP_MULTICAST_TTL,
+                         reinterpret_cast<const char*>(&ttl), sizeof(ttl)) == SOCKET_ERROR)
         {
-            in_addr ifaddr{};
-            if (::InetPtonA(AF_INET, m_multicastIface.c_str(), &ifaddr) == 1)
-                ::setsockopt(s, IPPROTO_IP, IP_MULTICAST_IF,
-                             reinterpret_cast<const char*>(&ifaddr), sizeof(ifaddr));
+            const int err = ::WSAGetLastError();
+            sprintf_s(szError, sizeof(szError),
+                      "setsockopt(IP_MULTICAST_TTL=%d) failed: %d", m_multicastTtl, err);
+            m_lastError = szError;
+            LOG(szError);
+            return 0;
+        }
+
+        if (::setsockopt(s, IPPROTO_IP, IP_MULTICAST_LOOP,
+                         reinterpret_cast<const char*>(&loop), sizeof(loop)) == SOCKET_ERROR)
+        {
+            const int err = ::WSAGetLastError();
+            sprintf_s(szError, sizeof(szError),
+                      "setsockopt(IP_MULTICAST_LOOP=%u) failed: %d", loop, err);
+            m_lastError = szError;
+            LOG(szError);
+            return 0;
+        }
+
+        // Select the outgoing interface. The socket outlives a single run, so
+        // an explicit reset to INADDR_ANY is required when the user clears the
+        // field back to 0.0.0.0 — merely skipping the call would leave the
+        // socket pinned to whichever NIC a previous run selected.
+        in_addr ifaddr{};
+        ifaddr.s_addr = INADDR_ANY;
+        if (!m_multicastIface.empty() && m_multicastIface != "0.0.0.0" &&
+            ::InetPtonA(AF_INET, m_multicastIface.c_str(), &ifaddr) != 1)
+        {
+            sprintf_s(szError, sizeof(szError),
+                      "UDP multicast interface '%s' is not a valid IPv4 address",
+                      m_multicastIface.c_str());
+            m_lastError = szError;
+            LOG(szError);
+            return 0;
+        }
+
+        if (::setsockopt(s, IPPROTO_IP, IP_MULTICAST_IF,
+                         reinterpret_cast<const char*>(&ifaddr), sizeof(ifaddr)) == SOCKET_ERROR)
+        {
+            const int err = ::WSAGetLastError();
+            sprintf_s(szError, sizeof(szError),
+                      // ASCII only - see note above; this surfaces in a MessageBox.
+                      "setsockopt(IP_MULTICAST_IF=%s) failed: %d - no such local interface?",
+                      m_multicastIface.c_str(), err);
+            m_lastError = szError;
+            LOG(szError);
+            return 0;
         }
 
         sprintf_s(szError, sizeof(szError),
@@ -140,6 +197,7 @@ int UdpSender::Send(const std::string& host, uint16_t port,
         sprintf_s(szError, sizeof(szError),
                   "UDP sendto(%s:%u, %zu B) failed: %d",
                   host.c_str(), port, length, ::WSAGetLastError());
+        m_lastError = szError;
         LOG(szError);
         return 0;
     }

@@ -271,13 +271,32 @@ void ScenarioWorker::RunReplay()
         return;
     }
 
-    // Replay always sends over UDP; multicast/unicast picked from OutputConfig.
+    // Replay goes out over the network; unicast/multicast/TCP per OutputConfig.
+    // FileRecording and PreviewOnly have no network endpoint of their own, so
+    // they fall back to unicast rather than silently sending nowhere.
     std::string destHost; uint16_t destPort = 0;
+    bool sinkTcp = false;
     switch (out.mode) {
         case OutputMode::UdpMulticast:
             destHost = out.multicastGroup; destPort = out.multicastPort;
             m_udp.SetMulticastOptions(out.multicastTtl, out.multicastInterface,
                                        out.multicastLoopback);
+            break;
+        case OutputMode::Tcp:
+            sinkTcp = true;
+            m_tcp.Configure(out.tcpListen, out.tcpRemoteHost, out.tcpRemotePort,
+                            out.tcpListenPort, out.tcpReconnect, out.tcpTimeoutMs);
+            if (!m_tcp.Connect())
+            {
+                sprintf_s(szError, sizeof(szError),
+                          "ScenarioWorker: replay TCP connect failed (%s): %s",
+                          m_tcp.DescribeEndpoint().c_str(),
+                          m_tcp.LastError().c_str());
+                LOG(szError);
+                if (m_uiHwnd) ::PostMessageW(m_uiHwnd, WM_APP_PLAYBACK_ERROR, 2, 0);
+                PostStatus(m_uiHwnd, PlaybackState::Stopped);
+                return;
+            }
             break;
         case OutputMode::UdpUnicast:
         default:
@@ -309,8 +328,9 @@ void ScenarioWorker::RunReplay()
             if (target > now)
                 std::this_thread::sleep_for(target - now);
 
-            const int sent = m_udp.Send(destHost, destPort,
-                                         bytes.data(), bytes.size());
+            const int sent = sinkTcp
+                ? m_tcp.Send(bytes.data(), bytes.size())
+                : m_udp.Send(destHost, destPort, bytes.data(), bytes.size());
             if (sent > 0) {
                 ++pduCount;
                 if (m_uiHwnd) {
@@ -325,6 +345,7 @@ void ScenarioWorker::RunReplay()
         }
     } while (out.loopEnabled && !m_stop.load(std::memory_order_relaxed));
 
+    if (sinkTcp) m_tcp.Close();
     PostStatus(m_uiHwnd, PlaybackState::Stopped);
     sprintf_s(szError, sizeof(szError),
               "ScenarioWorker replay finished after %llu PDUs at %.2fx",
@@ -333,7 +354,7 @@ void ScenarioWorker::RunReplay()
 }
 
 //
-// RunGeneration — resolves the output sink (UDP uni/multicast, file recording,
+// RunGeneration — resolves the output sink (UDP uni/multicast, TCP, file recording,
 //   or preview), builds per-entity tracks, then runs the emission loop: samples
 //   each due track, builds/serializes an Entity State PDU, sends or records it,
 //   and handles pause, looping, duration limits, and timing. The nested
@@ -348,6 +369,7 @@ void ScenarioWorker::RunGeneration()
     // Resolve dest endpoint + multicast options from OutputConfig.
     std::string destHost; uint16_t destPort = 0;
     bool sinkUdp = true;
+    bool sinkTcp = false;
     switch (out.mode) {
         case OutputMode::UdpUnicast:
             destHost = out.unicastIp;   destPort = out.unicastPort; break;
@@ -357,14 +379,25 @@ void ScenarioWorker::RunGeneration()
                                        out.multicastLoopback);
             break;
         case OutputMode::Tcp:
-            // Deferred per spec §23.2. Fall back to no-op for now so the
-            // worker doesn't crash, but report Error so the user sees why.
-            sprintf_s(szError, sizeof(szError),
-                      "ScenarioWorker: TCP output not yet implemented (§23.2 deferred)");
-            LOG(szError);
-            if (m_uiHwnd) ::PostMessageW(m_uiHwnd, WM_APP_PLAYBACK_ERROR, 2, 0);
-            PostStatus(m_uiHwnd, PlaybackState::Stopped);
-            return;
+            sinkUdp = false;
+            sinkTcp = true;
+            destHost.clear();
+            m_tcp.Configure(out.tcpListen, out.tcpRemoteHost, out.tcpRemotePort,
+                            out.tcpListenPort, out.tcpReconnect, out.tcpTimeoutMs);
+            // Fail-fast per §17.7: a socket that cannot be established is
+            // unrecoverable, so surface it now rather than after N failed PDUs.
+            if (!m_tcp.Connect())
+            {
+                sprintf_s(szError, sizeof(szError),
+                          "ScenarioWorker: TCP connect failed (%s): %s",
+                          m_tcp.DescribeEndpoint().c_str(),
+                          m_tcp.LastError().c_str());
+                LOG(szError);
+                if (m_uiHwnd) ::PostMessageW(m_uiHwnd, WM_APP_PLAYBACK_ERROR, 2, 0);
+                PostStatus(m_uiHwnd, PlaybackState::Stopped);
+                return;
+            }
+            break;
         case OutputMode::FileRecording:
             sinkUdp = false;
             destHost.clear();
@@ -439,6 +472,10 @@ void ScenarioWorker::RunGeneration()
         {
             sent = m_udp.Send(destHost, destPort, bytes.data(), bytes.size());
         }
+        else if (sinkTcp)
+        {
+            sent = m_tcp.Send(bytes.data(), bytes.size());
+        }
         else if (out.mode == OutputMode::FileRecording && m_recorder.IsOpen())
         {
             const uint64_t tsUs = static_cast<uint64_t>(
@@ -452,8 +489,10 @@ void ScenarioWorker::RunGeneration()
         if (sent > 0) { ++pduCount; return true; }
 
         sprintf_s(szError, sizeof(szError),
-                  "ScenarioWorker: send failed after %llu PDUs",
-                  static_cast<unsigned long long>(pduCount));
+                  "ScenarioWorker: send failed after %llu PDUs%s%s",
+                  static_cast<unsigned long long>(pduCount),
+                  sinkTcp ? " - " : "",
+                  sinkTcp ? m_tcp.LastError().c_str() : "");
         LOG(szError);
         if (m_uiHwnd) ::PostMessageW(m_uiHwnd, WM_APP_PLAYBACK_ERROR, 1, 0);
         return false;
@@ -567,6 +606,9 @@ void ScenarioWorker::RunGeneration()
 
     timeEndPeriod(1);
     m_recorder.Close();
+    // Close the TCP link so the receiver sees a clean EOF rather than a
+    // half-open connection lingering until the next run.
+    if (sinkTcp) m_tcp.Close();
     PostStatus(m_uiHwnd, PlaybackState::Stopped);
 
     sprintf_s(szError, sizeof(szError),

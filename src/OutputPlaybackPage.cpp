@@ -26,7 +26,7 @@ namespace
     const FFieldHelp kFields[] = {
         { IDC_RADIO_MODE_UDP_UNICAST,   _T("Send PDUs to a single host via UDP."), true },
         { IDC_RADIO_MODE_UDP_MULTICAST, _T("Send PDUs to a multicast group via UDP."), true },
-        { IDC_RADIO_MODE_TCP,           _T("Send PDUs over a direct TCP connection. (Deferred in V2 per spec §23.2.)"), true },
+        { IDC_RADIO_MODE_TCP,           _T("Send PDUs over a direct TCP connection - reliable, ordered, one peer."), true },
         { IDC_RADIO_MODE_FILE_RECORDING,_T("Write PDUs to a .disrec recording file instead of the network."), true },
         { IDC_RADIO_MODE_PREVIEW_ONLY,  _T("Render in the Preview tab only - no network traffic."), true },
 
@@ -37,6 +37,13 @@ namespace
         { IDC_EDIT_UDP_MULTICAST_TTL,   _T("Multicast TTL (hops). 1 = LAN-only."), false },
         { IDC_EDIT_UDP_MULTICAST_IFACE, _T("Local IPv4 of the outgoing interface, or 0.0.0.0 for OS default."), false },
         { IDC_CHK_UDP_MULTICAST_LOOP,   _T("Deliver our own multicast PDUs back to local sockets (useful for self-testing)."), false },
+        { IDC_RADIO_TCP_CLIENT,         _T("TCP client: dial out to a receiver that is already listening."), true },
+        { IDC_RADIO_TCP_SERVER,         _T("TCP server: listen on a local port and wait for one receiver to connect."), true },
+        { IDC_EDIT_TCP_HOST,            _T("Client mode: IPv4 address of the receiver (DISBrowser's host)."), true },
+        { IDC_EDIT_TCP_PORT,            _T("Client mode: receiver's TCP port. Must match DISBrowser's [DIS] TcpListenPort."), true },
+        { IDC_EDIT_TCP_LISTEN_PORT,     _T("Server mode: local TCP port to accept a receiver on."), false },
+        { IDC_EDIT_TCP_TIMEOUT,         _T("How long to wait for the connection (client) or a client (server), in ms."), false },
+        { IDC_CHK_TCP_RECONNECT,        _T("Client mode: re-dial once if the connection drops mid-run."), false },
 
         { IDC_EDIT_RECORDING_PATH,      _T(".disrec file path that the recorder will write to."), false },
         { IDC_BTN_RECORDING_BROWSE,     _T("Pick a recording output path."), false },
@@ -240,6 +247,14 @@ void COutputPlaybackPage::ReadFrom(const OutputConfig& o)
     SetDlgItemText(IDC_EDIT_UDP_MULTICAST_IFACE, CA2T(o.multicastInterface.c_str()));
     CheckDlgButton(IDC_CHK_UDP_MULTICAST_LOOP, o.multicastLoopback ? BST_CHECKED : BST_UNCHECKED);
 
+    CheckDlgButton(IDC_RADIO_TCP_CLIENT, o.tcpListen ? BST_UNCHECKED : BST_CHECKED);
+    CheckDlgButton(IDC_RADIO_TCP_SERVER, o.tcpListen ? BST_CHECKED : BST_UNCHECKED);
+    SetDlgItemText(IDC_EDIT_TCP_HOST,        CA2T(o.tcpRemoteHost.c_str()));
+    SetDlgItemInt (IDC_EDIT_TCP_PORT,        o.tcpRemotePort, FALSE);
+    SetDlgItemInt (IDC_EDIT_TCP_LISTEN_PORT, o.tcpListenPort, FALSE);
+    SetDlgItemInt (IDC_EDIT_TCP_TIMEOUT,     o.tcpTimeoutMs,  FALSE);
+    CheckDlgButton(IDC_CHK_TCP_RECONNECT, o.tcpReconnect ? BST_CHECKED : BST_UNCHECKED);
+
     SetDlgItemText(IDC_EDIT_RECORDING_PATH, CA2T(o.recordingPath.c_str()));
     SetDlgItemText(IDC_EDIT_REPLAY_PATH,    CA2T(o.replayPath.c_str()));
 
@@ -287,6 +302,17 @@ void COutputPlaybackPage::WriteTo(OutputConfig& o) const
     GetDlgItemText(IDC_EDIT_UDP_MULTICAST_IFACE, text);
     if (!text.IsEmpty()) { CT2A a(text); o.multicastInterface = a.m_psz; }
     o.multicastLoopback = IsDlgButtonChecked(IDC_CHK_UDP_MULTICAST_LOOP) == BST_CHECKED;
+
+    o.tcpListen = IsDlgButtonChecked(IDC_RADIO_TCP_SERVER) == BST_CHECKED;
+    GetDlgItemText(IDC_EDIT_TCP_HOST, text);
+    if (!text.IsEmpty()) { CT2A a(text); o.tcpRemoteHost = a.m_psz; }
+    v = GetDlgItemInt(IDC_EDIT_TCP_PORT, &ok, FALSE);
+    if (ok) o.tcpRemotePort = static_cast<uint16_t>(v & 0xFFFF);
+    v = GetDlgItemInt(IDC_EDIT_TCP_LISTEN_PORT, &ok, FALSE);
+    if (ok) o.tcpListenPort = static_cast<uint16_t>(v & 0xFFFF);
+    v = GetDlgItemInt(IDC_EDIT_TCP_TIMEOUT, &ok, FALSE);
+    if (ok) o.tcpTimeoutMs = static_cast<int>(v);
+    o.tcpReconnect = IsDlgButtonChecked(IDC_CHK_TCP_RECONNECT) == BST_CHECKED;
 
     GetDlgItemText(IDC_EDIT_RECORDING_PATH, text);
     { CT2A a(text); o.recordingPath = a.m_psz; }
@@ -394,6 +420,15 @@ void COutputPlaybackPage::OnBrowseUnrealProject()
 //
 void COutputPlaybackPage::OnConfigureUnreal()
 {
+    // The origin isn't committed until the scenario is saved; don't hand DISBrowser a
+    // provisional (default-view) origin — it would drop the level at the wrong place.
+    if (m_scenario && !m_scenario->originSet)
+    {
+        AfxMessageBox(_T("Save the scenario first to set its origin, then Configure Unreal."),
+                      MB_OK | MB_ICONWARNING);
+        return;
+    }
+
     // Gather the picks.
     CString level, basemap, projectDir;
     if (CComboBox* cb = (CComboBox*)GetDlgItem(IDC_UNREAL_LEVEL_COMBO))
@@ -408,6 +443,25 @@ void COutputPlaybackPage::OnConfigureUnreal()
     {
         AfxMessageBox(_T("Set the DISBrowser project folder first."), MB_ICONWARNING);
         return;
+    }
+
+    // Guard against a silent "no ground" handoff: the Preview tab has its own Map combo
+    // (the 2D/3D preview layer) which does NOT feed Startup.ini — only THIS tab's basemap
+    // combo does. Writing Map=None for a scenario with a painted 3D-terrain boundary is
+    // almost always the two combos being conflated, and DISBrowser then renders no
+    // landscape at all. Confirm before writing it.
+    if (basemap.CompareNoCase(_T("None")) == 0 &&
+        m_scenario && m_scenario->terrainBoundsValid)
+    {
+        if (AfxMessageBox(
+                _T("The Unreal basemap on THIS tab is set to \"None\" — DISBrowser will render ")
+                _T("no landscape, even though this scenario has a painted 3D-terrain boundary.\n\n")
+                _T("(The Preview tab's Map combo only changes the preview, not Unreal.)\n\n")
+                _T("Write Startup.ini with no ground layer anyway?"),
+                MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+        {
+            return;
+        }
     }
 
     // Persist the choices so they survive across sessions (dialog saves settings on exit).
@@ -432,12 +486,47 @@ void COutputPlaybackPage::OnConfigureUnreal()
         lonMax = m_scenario->terrainLonMaxDeg;
     }
 
+    // Camera schedule: the [Camera.N] sections now live inside scenario.ini, so
+    // point DISBrowser's director at the scenario.ini itself (its config reader
+    // keeps only [Camera.N] sections and ignores the rest). Hand it over only when
+    // the scenario is saved AND actually has cameras; otherwise pass an empty path
+    // so Startup.ini clears any stale schedule and DISBrowser runs without a track.
+    CString cameraAbs;
+    bool cameraConfigured = false;
+    if (!m_scenarioPath.IsEmpty() && m_scenario && !m_scenario->cameras.empty() &&
+        ::GetFileAttributes(m_scenarioPath) != INVALID_FILE_ATTRIBUTES)
+    {
+        cameraAbs = m_scenarioPath;
+        cameraConfigured = true;
+    }
+
+    // Foliage selection -> [Foliage]. DISBrowser scatters the chosen trees across the
+    // terrain box, so it needs a built 3D terrain to sit on; warn if there's foliage
+    // but no boundary, and still write the rest.
+    StartupIniWriter::FoliageHandoff foliage;
+    if (m_scenario)
+    {
+        const FoliageConfig& fo = m_scenario->foliage;
+        foliage.oak      = fo.oak;
+        foliage.bigTrees = fo.bigTrees;
+        foliage.palm     = fo.palm;
+        foliage.palmKind = (fo.palmKind == PalmKind::Tall)     ? "Tall"
+                         : (fo.palmKind == PalmKind::Straight) ? "Straight" : "All";
+        foliage.renderMode = (fo.renderMode == FoliageRenderMode::I3dm)       ? "i3dm"
+                           : (fo.renderMode == FoliageRenderMode::BlenderGIS) ? "BlenderGIS" : "InEngine";
+        if ((fo.oak || fo.bigTrees || fo.palm) && !boundsValid)
+            AfxMessageBox(_T("Foliage is selected but this scenario has no 3D terrain boundary.\n")
+                          _T("Paint a Boundary and Build 3D Terrain first — foliage needs terrain to sit on."),
+                          MB_OK | MB_ICONWARNING);
+    }
+
     std::wstring result;
     const bool ok = StartupIniWriter::Write(
         std::wstring(CT2W(projectDir)),
         st.unrealTargetLevel, st.unrealBasemap, dynamicTiles,
         lat, lon, alt,
-        boundsValid, latMin, latMax, lonMin, lonMax, result);
+        boundsValid, latMin, latMax, lonMin, lonMax,
+        std::wstring(CT2W(cameraAbs)), foliage, result);
 
     if (ok)
     {
@@ -451,6 +540,20 @@ void COutputPlaybackPage::OnConfigureUnreal()
             msg.Format(_T("Wrote:\n%s\n\nDISBrowser will load the %s level at startup ")
                        _T("(origin/basemap unchanged for non-Generic levels)."),
                        result.c_str(), (LPCTSTR)level);
+
+        // Camera track status (applies to every level).
+        if (cameraConfigured)
+        {
+            CString cam;
+            cam.Format(_T("\n\nCamera track: %s\n(DISBrowser's director will play this schedule.)"),
+                       (LPCTSTR)cameraAbs);
+            msg += cam;
+        }
+        else
+        {
+            msg += _T("\n\nCamera track: none — save the scenario (with at least one camera) ")
+                   _T("first, then Configure Unreal again to wire its camera schedule.");
+        }
         AfxMessageBox(msg, MB_ICONINFORMATION);
     }
     else

@@ -15,10 +15,15 @@
 #include "PduBuilder.h"
 #include "ScenarioEditor.h"   // for theApp.Catalog()/Settings()/Plays()
 #include "ScenarioIO.h"
+#include "ScenarioCameraIO.h"   // legacy <scenario>-camera.ini import (migration only)
+#include "ScenarioPaths.h"      // CameraPathFor()
+#include "ScrollablePage.h"     // FitWindowToMonitorWorkArea()
 #include "SettingsIO.h"
 #include "Validator.h"
 #include "../log.h"
 #include <stdio.h>
+#include <algorithm>
+#include <cmath>
 #include <vector>
 
 namespace
@@ -41,6 +46,82 @@ namespace
     {
         sprintf_s(szError, sizeof(szError), "Placeholder command id=%u (%s)", nID, label);
         LOG(szError);
+    }
+
+    //
+    // IsIpv4MulticastGroup — true if text is a dotted-quad IPv4 address inside
+    //   224.0.0.0/4. Used to reject a unicast address typed into the multicast
+    //   group field, which would otherwise send as plain unicast without warning
+    //   (UdpSender only applies the multicast socket options for this range).
+    //
+    bool IsIpv4MulticastGroup(const std::string& text)
+    {
+        unsigned a = 0, b = 0, c = 0, d = 0;
+        char trailing = 0;
+        // %c catches trailing junk such as "239.1.2.3x" or "239.1.2.3.4".
+        const int fields = sscanf_s(text.c_str(), "%u.%u.%u.%u%c",
+                                    &a, &b, &c, &d, &trailing, 1);
+        if (fields != 4) return false;
+        if (a > 255 || b > 255 || c > 255 || d > 255) return false;
+        return a >= 224 && a <= 239;   // 224.0.0.0/4
+    }
+
+    // The camera schedule now lives inside scenario.ini ([Camera.N] sections).
+    // Older scenarios kept it in a sibling "<scenario>-camera.ini". When a freshly
+    // loaded scenario carries no cameras, import that legacy side-file (if present)
+    // so those frames aren't lost; they fold into scenario.ini on the next save,
+    // after which DoSaveTo deletes the now-redundant side-file.
+    void MigrateLegacyCameras(Scenario& loaded, const CString& iniPath)
+    {
+        if (!loaded.cameras.empty()) return;
+        ScenarioCameraIO::Load(loaded,
+            std::wstring(CT2W(CameraPathFor(iniPath))));
+    }
+
+    // Leaf filename of a path (after the last \ or /), e.g. "harburtField.ini".
+    CString LeafName(const CString& path)
+    {
+        const int b = path.ReverseFind(_T('\\'));
+        const int f = path.ReverseFind(_T('/'));
+        const int slash = (b > f) ? b : f;
+        return (slash >= 0) ? path.Mid(slash + 1) : path;
+    }
+
+    // When even the NEAREST enabled entity is this far from the origin, the origin
+    // is effectively disconnected from the scene: the flat map/preview projection
+    // (valid only near the origin) smears and entities render on the far side of the
+    // globe. A normal local scenario keeps its entities within a few tens of km.
+    constexpr double kOriginDisconnectMeters = 500000.0;   // 500 km
+
+    // Horizontal distance (m) from the origin to the nearest enabled entity, using
+    // each entity's local ENU-from-origin coordinates (kept in sync with the origin
+    // by load/relocate). HUGE_VAL when there are no enabled entities.
+    double NearestEntityDistanceM(const Scenario& s)
+    {
+        double best = HUGE_VAL;
+        for (const Entity& e : s.entities)
+        {
+            if (!e.enabled) continue;
+            best = std::min(best, std::hypot(e.localX, e.localY));
+        }
+        return best;
+    }
+
+    // Non-blocking warning shown after a load whose origin sits far from its
+    // entities (a valid but confusing file — e.g. the origin was relocated with
+    // "Move entities" off and the entities stayed fixed on the Earth).
+    void WarnIfOriginDisconnected(const Scenario& s, const CString& leaf)
+    {
+        const double d = NearestEntityDistanceM(s);
+        // Warn only for a real, finite disconnect; HUGE_VAL means no enabled entities.
+        if (!(d > kOriginDisconnectMeters && d < HUGE_VAL)) return;
+        CString msg;
+        msg.Format(_T("%s loaded, but its origin is about %.0f km from the scenario's ")
+                   _T("entities, so the map and preview will look wrong (the entities ")
+                   _T("render far from the origin).\n\nOn the Preview tab, pick a Location ")
+                   _T("near the entities, or enable \"Move entities\" before relocating the origin."),
+                   static_cast<LPCTSTR>(leaf), d / 1000.0);
+        AfxMessageBox(msg, MB_OK | MB_ICONWARNING);
     }
 }
 
@@ -96,6 +177,12 @@ BEGIN_MESSAGE_MAP(CScenarioEditorDialog, CDialogEx)
     ON_COMMAND(ID_TOOLS_OPEN_ATTRIBUTES,&CScenarioEditorDialog::OnOpenAttributes)
     ON_COMMAND_RANGE(ID_SCENARIO_GENERATE_RECORDING, ID_SCENARIO_RESET_CLOCK, &CScenarioEditorDialog::OnPlaceholderCommand)
     ON_COMMAND_RANGE(ID_PLAYBACK_LOOP,        ID_PLAYBACK_SPEED_10,      &CScenarioEditorDialog::OnPlaceholderCommand)
+    // Specific entry must precede the catch-all range below — MFC walks the
+    // message map in order, so this claims ID_NETWORK_TEST_MULTICAST before
+    // OnPlaceholderCommand's range (ID_NETWORK_OPEN_OUTPUT..ID_NETWORK_TEST_TCP)
+    // can swallow it.
+    ON_COMMAND(ID_NETWORK_TEST_MULTICAST, &CScenarioEditorDialog::OnNetworkTestMulticast)
+    ON_COMMAND(ID_NETWORK_TEST_TCP,       &CScenarioEditorDialog::OnNetworkTestTcp)
     ON_COMMAND_RANGE(ID_NETWORK_OPEN_OUTPUT,  ID_NETWORK_TEST_TCP,       &CScenarioEditorDialog::OnPlaceholderCommand)
     ON_COMMAND_RANGE(ID_VIEW_VALIDATION_PANEL, ID_VIEW_VALIDATION_PANEL, &CScenarioEditorDialog::OnPlaceholderCommand)
     ON_COMMAND_RANGE(ID_HELP_PROTOCOL_NOTES,  ID_HELP_FILE_FORMAT_NOTES, &CScenarioEditorDialog::OnPlaceholderCommand)
@@ -154,47 +241,100 @@ BOOL CScenarioEditorDialog::OnInitDialog()
     ShowPage(0);
     UpdateTitle();
 
-    // Apply persisted window state, clamped to the primary monitor's work
-    // area so a saved size larger than the screen doesn't leave the bottom
-    // of the dialog under the taskbar.
+    // Apply persisted window state, clamped to the work area of the monitor the
+    // saved rectangle lands on (nearest monitor if that display is gone). The
+    // clamp used to go through SM_CXFULLSCREEN/SM_CYFULLSCREEN, which only ever
+    // describe the PRIMARY display — on a multi-monitor desk that either
+    // refused to restore a window saved at negative coordinates (a screen left
+    // of / above the primary one) or squeezed it to the primary monitor's size.
+    // With no saved placement, still fit the template-sized dialog to the
+    // current monitor so a small panel doesn't push the status bar off-screen.
     {
         const Settings& cfg = theApp.Settings();
-        if (cfg.windowX >= 0 && cfg.windowY >= 0 &&
-            cfg.windowWidth >= 320 && cfg.windowHeight >= 240)
+        const bool hasSavedPos = !(cfg.windowX == -1 && cfg.windowY == -1);
+        if (hasSavedPos && cfg.windowWidth >= 320 && cfg.windowHeight >= 240)
         {
-            const int wa_w = ::GetSystemMetrics(SM_CXFULLSCREEN);
-            const int wa_h = ::GetSystemMetrics(SM_CYFULLSCREEN);
-            int x = cfg.windowX, y = cfg.windowY;
-            int w = cfg.windowWidth, h = cfg.windowHeight;
-            if (wa_w > 0 && wa_h > 0)
-            {
-                if (w > wa_w) w = wa_w;
-                if (h > wa_h) h = wa_h;
-                if (x + w > wa_w) x = wa_w - w;
-                if (y + h > wa_h) y = wa_h - h;
-                if (x < 0) x = 0;
-                if (y < 0) y = 0;
-            }
-            ::SetWindowPos(GetSafeHwnd(), nullptr, x, y, w, h,
+            CRect rc(cfg.windowX, cfg.windowY,
+                     cfg.windowX + cfg.windowWidth,
+                     cfg.windowY + cfg.windowHeight);
+            ClampRectToMonitorWorkArea(rc);
+            ::SetWindowPos(GetSafeHwnd(), nullptr,
+                           rc.left, rc.top, rc.Width(), rc.Height(),
                            SWP_NOZORDER | SWP_NOACTIVATE);
-            if (cfg.windowMaximized)
-                ShowWindow(SW_SHOWMAXIMIZED);
         }
+        else
+        {
+            FitWindowToMonitorWorkArea(this, /*center*/ true);
+        }
+
+        if (cfg.windowMaximized)
+            ShowWindow(SW_SHOWMAXIMIZED);
     }
 
-    // Auto-load last opened scenario if the path still exists. Either way,
-    // RefreshUiFromScenario() runs below so the asset tree / motion list
-    // are populated from the default Scenario on a fresh launch.
+    // Auto-load last opened scenario. If settings still record a path, report any
+    // problem by name and continue with the default scenario rather than blocking:
+    //   - file gone (moved/deleted)  -> "<name>.ini file not found."
+    //   - present but won't load     -> malformed / newer-version / read-error box.
+    //   - loads Ok but origin sits far from its entities -> disconnect warning
+    //     (WarnIfOriginDisconnected; the file is valid, just confusing to view).
+    // An empty path (no last scenario) auto-loads nothing and is silent. Either way,
+    // RefreshUiFromScenario() runs below so the asset tree / motion list populate.
     if (!theApp.Settings().lastScenarioPath.empty())
     {
         const std::wstring lastPath(CA2W(theApp.Settings().lastScenarioPath.c_str()));
-        if (::GetFileAttributesW(lastPath.c_str()) != INVALID_FILE_ATTRIBUTES)
+
+        // Leaf filename for user-facing messages (e.g. "harburtField.ini").
+        const CString leaf = LeafName(CString(lastPath.c_str()));
+
+        if (::GetFileAttributesW(lastPath.c_str()) == INVALID_FILE_ATTRIBUTES)
+        {
+            // Recorded last scenario no longer exists (moved/deleted).
+            sprintf_s(szError, sizeof(szError),
+                      "Startup: last scenario not found: %S", lastPath.c_str());
+            LOG(szError);
+
+            CString msg;
+            msg.Format(_T("%s file not found."), static_cast<LPCTSTR>(leaf));
+            AfxMessageBox(msg, MB_OK | MB_ICONWARNING);
+        }
+        else
         {
             Scenario loaded;
-            if (ScenarioIO::Load(loaded, lastPath) == ScenarioIO::Result::Ok)
+            const ScenarioIO::Result rc = ScenarioIO::Load(loaded, lastPath);
+            if (rc == ScenarioIO::Result::Ok)
             {
+                MigrateLegacyCameras(loaded, CString(lastPath.c_str()));
                 m_scenario = std::move(loaded);
-                m_currentScenarioPath = CString(lastPath.c_str());
+                SetCurrentScenarioPath(CString(lastPath.c_str()));
+                WarnIfOriginDisconnected(m_scenario, leaf);
+            }
+            else
+            {
+                // File exists but couldn't be loaded. Report by name (details in the
+                // log) and fall through to the default scenario.
+                sprintf_s(szError, sizeof(szError),
+                          "Startup: failed to load last scenario (result=%d): %S",
+                          static_cast<int>(rc), lastPath.c_str());
+                LOG(szError);
+
+                CString msg;
+                switch (rc)
+                {
+                    case ScenarioIO::Result::VersionTooNew:
+                        msg.Format(_T("%s was written by a newer version of ScenarioEditor ")
+                                   _T("and can't be loaded."), static_cast<LPCTSTR>(leaf));
+                        break;
+                    case ScenarioIO::Result::Malformed:
+                        msg.Format(_T("%s is malformed or corrupt. See error.log."),
+                                   static_cast<LPCTSTR>(leaf));
+                        break;
+                    case ScenarioIO::Result::IoError:
+                    default:
+                        msg.Format(_T("Could not read %s. See error.log."),
+                                   static_cast<LPCTSTR>(leaf));
+                        break;
+                }
+                AfxMessageBox(msg, MB_OK | MB_ICONWARNING);
             }
         }
     }
@@ -331,8 +471,10 @@ void CScenarioEditorDialog::CreatePages()
         return nullptr;
     };
 
-    // Output page edits Scenario::output.
+    // Output page edits Scenario::output. Seed the open-scenario path too so the
+    // Run tab's "Configure Unreal" can locate this scenario's camera schedule.
     m_pageOutput.SetScenario(&m_scenario);
+    m_pageOutput.SetScenarioPath(m_currentScenarioPath);
 
     // Preview page renders the scenario independently of the worker.
     m_pagePreview.SetScenario(&m_scenario);
@@ -393,14 +535,16 @@ void CScenarioEditorDialog::LoadScenarioForPlay(const CString& iniPath, bool als
     switch (rc)
     {
         case ScenarioIO::Result::Ok:
+            MigrateLegacyCameras(loaded, iniPath);
             m_scenario = std::move(loaded);
-            m_currentScenarioPath = iniPath;
+            SetCurrentScenarioPath(iniPath);
             RefreshUiFromScenario();
             ClearDirty();
             sprintf_s(szError, sizeof(szError),
                       "Play loaded scenario from %S (run=%d)",
                       static_cast<const wchar_t*>(CT2W(iniPath)), alsoRun ? 1 : 0);
             LOG(szError);
+            WarnIfOriginDisconnected(m_scenario, LeafName(iniPath));
             if (alsoRun) OnPlaybackStart();
             break;
         case ScenarioIO::Result::VersionTooNew:
@@ -695,6 +839,193 @@ void CScenarioEditorDialog::UpdateStatusPduCount()
 // snapshot (filling default ellipse-orbit speeds from airframe cruise), and
 // hand it to the worker thread to begin sending. No-op if already running.
 //
+//
+// OnNetworkTestMulticast — Network > Test Multicast Send. Sends exactly one
+//   Entity State PDU to the configured multicast group so the operator can
+//   confirm the group/port/TTL/interface settings actually put a packet on the
+//   wire before starting a real run. Reports the outcome in a message box.
+//
+void CScenarioEditorDialog::OnNetworkTestMulticast()
+{
+    LOG("OnNetworkTestMulticast: entered");
+
+    // Pull the Run-tab fields into m_scenario so we test what's on screen,
+    // not what was last saved.
+    CaptureUiIntoScenario();
+
+    const OutputConfig& out = m_scenario.output;
+
+    // Guard the single most common misconfiguration. Without this the send
+    // still "succeeds" — UdpSender only applies the multicast socket options
+    // for 224.0.0.0/4, so a unicast address here silently degrades to a plain
+    // unicast datagram and the test would report success misleadingly.
+    if (!IsIpv4MulticastGroup(out.multicastGroup))
+    {
+        CString msg;
+        msg.Format(_T("'%s' is not a multicast group.\n\n")
+                   _T("Multicast addresses must be in 224.0.0.0/4 ")
+                   _T("(first octet 224-239). The default is 224.252.0.1.\n\n")
+                   _T("Set the group on the Run tab under ")
+                   _T("\"UDP Multicast Settings\"."),
+                   CA2T(out.multicastGroup.c_str()).m_psz);
+        MessageBox(msg, _T("Test Multicast Send"), MB_OK | MB_ICONWARNING);
+        LOG("OnNetworkTestMulticast: rejected - group not in 224.0.0.0/4");
+        return;
+    }
+
+    // Build one PDU. Use the scenario's first entity so the packet carries
+    // realistic content; fall back to a default-constructed Entity when the
+    // scenario is empty so the command still works on a fresh document.
+    const Entity  fallback{};
+    const Entity& entity = m_scenario.entities.empty() ? fallback
+                                                       : m_scenario.entities.front();
+
+    DIS::EntityStatePdu pdu = PduBuilder::BuildEntityStatePdu(m_scenario, entity);
+    std::vector<unsigned char> bytes;
+    const size_t pduLen = PduBuilder::Serialize(pdu, bytes);
+    if (pduLen == 0 || bytes.empty())
+    {
+        MessageBox(_T("Failed to build the test PDU."),
+                   _T("Test Multicast Send"), MB_OK | MB_ICONERROR);
+        LOG("OnNetworkTestMulticast: PduBuilder::Serialize produced 0 bytes");
+        return;
+    }
+
+    m_udp.SetMulticastOptions(out.multicastTtl, out.multicastInterface,
+                              out.multicastLoopback);
+
+    const int sent = m_udp.Send(out.multicastGroup, out.multicastPort,
+                                bytes.data(), bytes.size());
+
+    if (sent > 0)
+    {
+        CString msg;
+        msg.Format(_T("Sent %d bytes to %s:%u\n\n")
+                   _T("TTL: %d    Loopback: %s    Interface: %s\n\n")
+                   _T("If the receiver saw nothing, check that it joined the ")
+                   _T("same group and is listening on port %u, and that TTL is ")
+                   _T("high enough to reach it (1 = this LAN segment only)."),
+                   sent,
+                   CA2T(out.multicastGroup.c_str()).m_psz,
+                   static_cast<unsigned>(out.multicastPort),
+                   out.multicastTtl,
+                   out.multicastLoopback ? _T("on") : _T("off"),
+                   CA2T(out.multicastInterface.c_str()).m_psz,
+                   static_cast<unsigned>(out.multicastPort));
+        MessageBox(msg, _T("Test Multicast Send"), MB_OK | MB_ICONINFORMATION);
+
+        sprintf_s(szError, sizeof(szError),
+                  "OnNetworkTestMulticast: sent %d B to %s:%u",
+                  sent, out.multicastGroup.c_str(),
+                  static_cast<unsigned>(out.multicastPort));
+        LOG(szError);
+    }
+    else
+    {
+        const std::string& why = m_udp.LastError();
+        CString msg;
+        msg.Format(_T("Failed to send to %s:%u.\n\n%s"),
+                   CA2T(out.multicastGroup.c_str()).m_psz,
+                   static_cast<unsigned>(out.multicastPort),
+                   why.empty() ? _T("(no detail available)")
+                               : CA2T(why.c_str()).m_psz);
+        MessageBox(msg, _T("Test Multicast Send"), MB_OK | MB_ICONERROR);
+        LOG("OnNetworkTestMulticast: send failed");
+    }
+}
+
+//
+// OnNetworkTestTcp — Network > Test TCP Connection. Establishes the configured
+//   TCP link (dialling out, or accepting one client) and sends a single Entity
+//   State PDU, so the operator can confirm reachability before a run. Closes
+//   the link again so it doesn't hold the port or the peer.
+//
+void CScenarioEditorDialog::OnNetworkTestTcp()
+{
+    LOG("OnNetworkTestTcp: entered");
+
+    CaptureUiIntoScenario();
+    const OutputConfig& out = m_scenario.output;
+
+    m_tcp.Configure(out.tcpListen, out.tcpRemoteHost, out.tcpRemotePort,
+                    out.tcpListenPort, out.tcpReconnect, out.tcpTimeoutMs);
+
+    // In server mode this blocks up to the timeout waiting for a client, so
+    // tell the user what's about to happen rather than freezing silently.
+    if (out.tcpListen)
+    {
+        CString ask;
+        ask.Format(_T("Listen on port %u for a client to connect?\n\n")
+                   _T("This waits up to %d ms. Start DISBrowser (or another ")
+                   _T("receiver) so it can connect during that window."),
+                   static_cast<unsigned>(out.tcpListenPort), out.tcpTimeoutMs);
+        if (MessageBox(ask, _T("Test TCP Connection"),
+                       MB_OKCANCEL | MB_ICONINFORMATION) != IDOK)
+            return;
+    }
+
+    if (!m_tcp.Connect())
+    {
+        CString msg;
+        msg.Format(_T("Could not establish the TCP link to %s.\n\n%s"),
+                   CA2T(m_tcp.DescribeEndpoint().c_str()).m_psz,
+                   m_tcp.LastError().empty()
+                       ? _T("(no detail available)")
+                       : CA2T(m_tcp.LastError().c_str()).m_psz);
+        MessageBox(msg, _T("Test TCP Connection"), MB_OK | MB_ICONERROR);
+        LOG("OnNetworkTestTcp: connect failed");
+        m_tcp.Close();
+        return;
+    }
+
+    const Entity  fallback{};
+    const Entity& entity = m_scenario.entities.empty() ? fallback
+                                                       : m_scenario.entities.front();
+
+    DIS::EntityStatePdu pdu = PduBuilder::BuildEntityStatePdu(m_scenario, entity);
+    std::vector<unsigned char> bytes;
+    const size_t pduLen = PduBuilder::Serialize(pdu, bytes);
+    if (pduLen == 0 || bytes.empty())
+    {
+        MessageBox(_T("Failed to build the test PDU."),
+                   _T("Test TCP Connection"), MB_OK | MB_ICONERROR);
+        LOG("OnNetworkTestTcp: PduBuilder::Serialize produced 0 bytes");
+        m_tcp.Close();
+        return;
+    }
+
+    const int sent = m_tcp.Send(bytes.data(), bytes.size());
+
+    if (sent > 0)
+    {
+        CString msg;
+        msg.Format(_T("Connected to %s and sent %d bytes.\n\n")
+                   _T("The stream carries raw DIS PDUs back to back - each PDU's ")
+                   _T("header Length field delimits it, so no extra framing is used."),
+                   CA2T(m_tcp.DescribeEndpoint().c_str()).m_psz, sent);
+        MessageBox(msg, _T("Test TCP Connection"), MB_OK | MB_ICONINFORMATION);
+
+        sprintf_s(szError, sizeof(szError),
+                  "OnNetworkTestTcp: sent %d B over %s",
+                  sent, m_tcp.DescribeEndpoint().c_str());
+        LOG(szError);
+    }
+    else
+    {
+        CString msg;
+        msg.Format(_T("Connected to %s but the send failed.\n\n%s"),
+                   CA2T(m_tcp.DescribeEndpoint().c_str()).m_psz,
+                   m_tcp.LastError().empty()
+                       ? _T("(no detail available)")
+                       : CA2T(m_tcp.LastError().c_str()).m_psz);
+        MessageBox(msg, _T("Test TCP Connection"), MB_OK | MB_ICONERROR);
+        LOG("OnNetworkTestTcp: send failed");
+    }
+
+    // Don't hold the port (server) or the peer's connection (client) open.
+    m_tcp.Close();
+}
+
 void CScenarioEditorDialog::OnPlaybackStart()
 {
     LOG("OnPlaybackStart: entered");
@@ -1118,9 +1449,23 @@ void CScenarioEditorDialog::OnScenarioValidate()
 // DoSaveTo — capture the UI and write the scenario to iniPath; on success
 // record it as the current path and clear dirty. Returns false on I/O error.
 //
+//
+// SetCurrentScenarioPath — record the open scenario's path and mirror it onto
+// the Run tab, so "Configure Unreal" can derive this scenario's camera schedule
+// (<scenario>-camera.ini) and write its path into DISBrowser's Startup.ini.
+//
+void CScenarioEditorDialog::SetCurrentScenarioPath(const CString& path)
+{
+    m_currentScenarioPath = path;
+    m_pageOutput.SetScenarioPath(path);
+}
+
 bool CScenarioEditorDialog::DoSaveTo(const CString& iniPath)
 {
     CaptureUiIntoScenario();
+    // Saving commits the (until-now provisional) origin: whatever place the operator
+    // navigated to becomes this scenario's real origin.
+    m_scenario.originSet = true;
     const ScenarioIO::Result rc =
         ScenarioIO::Save(m_scenario, std::wstring(CT2W(iniPath)));
     if (rc != ScenarioIO::Result::Ok)
@@ -1129,7 +1474,11 @@ bool CScenarioEditorDialog::DoSaveTo(const CString& iniPath)
                       MB_OK | MB_ICONERROR);
         return false;
     }
-    m_currentScenarioPath = iniPath;
+    // The camera schedule is now saved inside scenario.ini (ScenarioIO::Save writes
+    // the [Camera.N] sections). Delete any legacy "<scenario>-camera.ini" side-file
+    // so the two-file layout can't resurface and drift out of sync.
+    ::DeleteFileW(std::wstring(CT2W(CameraPathFor(iniPath))).c_str());
+    SetCurrentScenarioPath(iniPath);
     ClearDirty();
     UpdateTitle();
     return true;
@@ -1144,7 +1493,7 @@ void CScenarioEditorDialog::OnFileNew()
     LOG("File > New Scenario");
     if (!MaybePromptSaveOnDiscard()) return;
     m_scenario = Scenario{};
-    m_currentScenarioPath.Empty();
+    SetCurrentScenarioPath(CString());
     // The asset tree lives in the Attributes notebook now and rebuilds from
     // the model each time it opens.
     RefreshUiFromScenario();
@@ -1175,13 +1524,15 @@ void CScenarioEditorDialog::OnFileOpen()
     switch (rc)
     {
         case ScenarioIO::Result::Ok:
+            MigrateLegacyCameras(loaded, path);
             m_scenario = std::move(loaded);
-            m_currentScenarioPath = path;
+            SetCurrentScenarioPath(path);
             RefreshUiFromScenario();
             ClearDirty();
             sprintf_s(szError, sizeof(szError),
                       "Loaded scenario from %S", static_cast<const wchar_t*>(CT2W(path)));
             LOG(szError);
+            WarnIfOriginDisconnected(m_scenario, LeafName(path));
             break;
         case ScenarioIO::Result::VersionTooNew:
             AfxMessageBox(_T("This scenario.ini was written by a newer version of ScenarioEditor."),

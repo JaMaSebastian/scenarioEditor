@@ -16,6 +16,7 @@
 #include "Scenario.h"
 #include "ScenarioWorker.h"
 #include "UdpSender.h"
+#include "TcpSender.h"
 #include "OutputPlaybackPage.h"
 #include "PlaysPage.h"
 #include "DeployPage.h"
@@ -56,6 +57,8 @@ protected:
     afx_msg void OnPlaybackPause();
     afx_msg void OnPlaybackResume();
     afx_msg void OnPlaybackStop();
+    afx_msg void OnNetworkTestMulticast();
+    afx_msg void OnNetworkTestTcp();
     afx_msg void OnReplayFile();
     afx_msg void OnOpenRecording();
     afx_msg LRESULT OnPlaybackStatusMessage(WPARAM wParam, LPARAM lParam);
@@ -102,6 +105,11 @@ private:
     void Revalidate();
     bool DoSaveTo(const CString& iniPath);
 
+    // Set the current open-scenario path AND push it to the Run tab so
+    // "Configure Unreal" can find this scenario's <scenario>-camera.ini. Route
+    // every m_currentScenarioPath change through here to keep the page in sync.
+    void SetCurrentScenarioPath(const CString& path);
+
     // Block J — dirty tracking + Save/Discard/Cancel prompt
     void MarkDirty();
     void ClearDirty();
@@ -120,7 +128,8 @@ private:
     bool                    m_loopChecked = false;
     bool                    m_helpChecked = false;
     Scenario                m_scenario;
-    UdpSender               m_udp;            // unused once worker owns sending
+    UdpSender               m_udp;            // used by the Network test commands
+    TcpSender               m_tcp;            // used by Network > Test TCP Connection
     unsigned                m_pduCount = 0;
     CString                 m_currentScenarioPath; // empty until first Save/Open
     ScenarioWorker          m_worker;

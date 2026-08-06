@@ -32,6 +32,8 @@
     <ClInclude Include="src\ScenarioEditor.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\ScenarioEditorDialog.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="log.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\ScrollablePage.h"><Filter>Header Files\Pages</Filter></ClInclude>
+    <ClInclude Include="src\HelpAwarePage.h"><Filter>Header Files\Pages</Filter></ClInclude>
     <ClInclude Include="src\ScenarioSetupPage.h"><Filter>Header Files\Pages</Filter></ClInclude>
     <ClInclude Include="src\AssetEntityEditorPage.h"><Filter>Header Files\Pages</Filter></ClInclude>
     <ClInclude Include="src\MotionPathEditorPage.h"><Filter>Header Files\Pages</Filter></ClInclude>
@@ -43,11 +45,17 @@
     <ClInclude Include="src\Scenario.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\PduBuilder.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\UdpSender.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\TcpSender.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\ScenarioIO.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\EntityTypeCatalog.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\CoordTransforms.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\ScenarioWorker.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\MotionSampler.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\SpeedSeed.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\CameraZoomMenu.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\CameraTargetExtents.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\FoliageDialog.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\ScenarioPaths.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\DisrecFormat.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\DisrecWriter.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\DisrecReader.h"><Filter>Header Files</Filter></ClInclude>
@@ -60,6 +68,8 @@
     <ClCompile Include="src\ScenarioEditor.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\ScenarioEditorDialog.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="log.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\ScrollablePage.cpp"><Filter>Source Files\Pages</Filter></ClCompile>
+    <ClCompile Include="src\HelpAwarePage.cpp"><Filter>Source Files\Pages</Filter></ClCompile>
     <ClCompile Include="src\ScenarioSetupPage.cpp"><Filter>Source Files\Pages</Filter></ClCompile>
     <ClCompile Include="src\AssetEntityEditorPage.cpp"><Filter>Source Files\Pages</Filter></ClCompile>
     <ClCompile Include="src\MotionPathEditorPage.cpp"><Filter>Source Files\Pages</Filter></ClCompile>
@@ -70,11 +80,16 @@
     <ClCompile Include="src\PreviewPage.cpp"><Filter>Source Files\Pages</Filter></ClCompile>
     <ClCompile Include="src\PduBuilder.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\UdpSender.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\TcpSender.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\ScenarioIO.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\EntityTypeCatalog.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\CoordTransforms.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\ScenarioWorker.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\MotionSampler.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\SpeedSeed.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\CameraZoomMenu.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\CameraTargetExtents.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\FoliageDialog.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\DisrecWriter.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\DisrecReader.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\SettingsIO.cpp"><Filter>Source Files</Filter></ClCompile>
@@ -88,7 +103,10 @@
   <ItemGroup>
     <None Include="README.md"><Filter>Docs</Filter></None>
     <None Include="spec.mk"><Filter>Docs</Filter></None>
-    <None Include="EntityTypeCatalog.ini"><Filter>Docs</Filter></None>
+    <None Include="config\EntityTypeCatalog.ini"><Filter>Docs</Filter></None>
+    <None Include="config\EntityTypeCatalog.proposed.ini"><Filter>Docs</Filter></None>
+    <None Include="config\Cameras.ini"><Filter>Docs</Filter></None>
+    <None Include="plays\harburtField.ini"><Filter>Docs</Filter></None>
     <None Include="src\toolbar.bmp"><Filter>Resource Files</Filter></None>
     <None Include="src\make_toolbar_bmp.py"><Filter>Resource Files</Filter></None>
   </ItemGroup>
