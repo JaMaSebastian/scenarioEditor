@@ -223,6 +223,25 @@ target_compile_definitions(ScenarioEditor PRIVATE
 # Precompiled header.
 target_precompile_headers(ScenarioEditor PRIVATE src/pch.h)
 
+# OpenDIS7 is a SHARED library, so ScenarioEditor.exe needs OpenDIS7.dll sitting
+# next to it to start at all. CMake writes that DLL to the subproject's own
+# output directory (open-dis-cpp.build/<config>/), never beside the exe, so it
+# has to be copied after every link.
+#
+# Without this the app only ran because a copy had been placed in Release/ by
+# hand once and then carried along by every incremental build since. A clean
+# rebuild deletes it, and the failure is invisible at build time: the build
+# succeeds, then the exe refuses to start with a bare loader error naming no
+# cause. ScenarioEditor is the only target that links OpenDIS7, and every target
+# shares one output directory, so this single copy is enough.
+add_custom_command(TARGET ScenarioEditor POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:OpenDIS7>
+            $<TARGET_FILE_DIR:ScenarioEditor>
+    COMMENT "Copying OpenDIS7.dll next to ScenarioEditor.exe"
+    VERBATIM
+)
+
 # Gimbal-envelope round trip: CameraPresetIO writes, CameraPresetCatalog reads.
 # Pins the arc semantics (yaw/roll never reordered, pitch swapped and clamped),
 # the surgical-write guarantee, and delete-vs-zero on clear.
