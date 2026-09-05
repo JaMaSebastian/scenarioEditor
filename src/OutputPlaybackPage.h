@@ -33,8 +33,8 @@ public:
     void SetScenario(Scenario* scenario) { m_scenario = scenario; }
 
     // The full path of the currently-open scenario.ini (owned by the main dialog).
-    // "Configure Unreal" derives this scenario's <scenario>-camera.ini from it and
-    // writes that path into DISBrowser's Startup.ini. Empty until first Save/Open.
+    // "Configure Unreal" writes this path into DISBrowser's Startup.ini as the camera
+    // schedule (its [Camera.N] sections). Empty until first Save/Open.
     void SetScenarioPath(const CString& path) { m_scenarioPath = path; }
 
     //

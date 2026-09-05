@@ -137,6 +137,11 @@ namespace
 
                         Waypoint w;
                         w.ecefX = p.ecefX; w.ecefY = p.ecefY; w.ecefZ = p.ecefZ;
+                        // This ring bypasses SamplePose, so the surface clamp has to be
+                        // applied here as well or a ship orbiting on a single Ellipse -
+                        // the exact shape that qualifies for this fast path - keeps the
+                        // ellipse frame altitude and flies above the water.
+                        MotionSampler::ClampSurfaceToSeaLevel(e, w.ecefX, w.ecefY, w.ecefZ);
 
                         double tx, ty, tz;
                         CoordTransforms::LocalEnuToEcefDeg(p.tEast, p.tNorth, 0.0,

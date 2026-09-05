@@ -134,6 +134,64 @@ int main()
         ExpectNear(r2, c.r, 1e-6, c.label);
     }
 
+    // ---- Local East/North + GEODETIC altitude ----
+    //
+    // Regression for the "floating trawler": the editor Local Z column measures height
+    // above the FLAT tangent plane at the scenario origin, while an author means altitude
+    // above the ellipsoid. The plane climbs ~d^2/2R, about 1 m per 1.4 km of range, so a
+    // surface ship authored as Z=1 twelve km out was really at ~12.4 m and visibly flew.
+    // LocalUpToGeodeticAlt / GeodeticAltToLocalUp are the UI-boundary conversion the Asset
+    // and Motion-Path pages now apply; these cases pin both the round-trip and the real
+    // numbers from the taiwan-video scenario that exposed the bug.
+    {
+        // taiwan-video.ini scenario origin.
+        const double oLat = 22.640735, oLon = 120.256714, oAlt = 0.0;
+
+        struct EnCase { double e, n, expectAltForUp1; const char* label; };
+        const EnCase kEn[] = {
+            { -9382.644487,  -6763.002317, 11.502, "taiwan Focus1 (11.6 km out)" },
+            { -3535.670298, -11800.006055, 12.952, "taiwan Focus2 (12.3 km out)" },
+            { -5353.041496,  -9767.486456, 10.763, "taiwan Trawler initial pos"  },
+        };
+        const double kUps[] = { -50.0, 0.0, 1.0, 250.0, 5000.0 };
+
+        for (const EnCase& c : kEn)
+        {
+            // A stored plane-up of 1 m really is this much altitude.
+            const double alt = LocalUpToGeodeticAlt(c.e, c.n, 1.0, oLat, oLon, oAlt);
+            std::printf("[%s] up=1.000 -> alt=%.3f m (plane rise %.3f m)\n",
+                        c.label, alt, alt - 1.0);
+            ExpectNear(alt, c.expectAltForUp1, 0.02, c.label);
+
+            // ...and asking for sea level needs a NEGATIVE stored up, which is exactly
+            // why no author would ever have guessed the right value by hand.
+            const double upForSeaLevel = GeodeticAltToLocalUp(c.e, c.n, 0.0, oLat, oLon, oAlt);
+            ExpectNear(upForSeaLevel, -(c.expectAltForUp1 - 1.0), 0.02, "sea-level up");
+
+            // Round-trip in both directions.
+            for (double up : kUps)
+            {
+                const double a   = LocalUpToGeodeticAlt(c.e, c.n, up, oLat, oLon, oAlt);
+                const double up2 = GeodeticAltToLocalUp(c.e, c.n, a,  oLat, oLon, oAlt);
+                ExpectNear(up2, up, 1e-3, "up round-trip");
+            }
+
+            // Placing by geodetic altitude must land where the equivalent plane-up does.
+            double gx = 0, gy = 0, gz = 0, px = 0, py = 0, pz = 0;
+            LocalEnGeodeticAltToEcefDeg(c.e, c.n, 0.0, oLat, oLon, oAlt, gx, gy, gz);
+            LocalEnuToEcefDeg(c.e, c.n, upForSeaLevel, oLat, oLon, oAlt, px, py, pz);
+            ExpectNear(gx, px, 1e-3, "ECEF x agreement");
+            ExpectNear(gy, py, 1e-3, "ECEF y agreement");
+            ExpectNear(gz, pz, 1e-3, "ECEF z agreement");
+        }
+
+        // At the origin the two conventions are the same thing: no range, no plane rise.
+        ExpectNear(LocalUpToGeodeticAlt(0.0, 0.0, 7.5, oLat, oLon, oAlt), 7.5, 1e-6,
+                   "origin: up == alt");
+        ExpectNear(GeodeticAltToLocalUp(0.0, 0.0, 7.5, oLat, oLon, oAlt), 7.5, 1e-6,
+                   "origin: alt == up");
+    }
+
     if (failures == 0) {
         std::printf("\nALL %d assertions passed.\n", 0);
         return 0;

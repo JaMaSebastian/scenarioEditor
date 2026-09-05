@@ -14,6 +14,7 @@
 //=============================================================================
 #include "pch.h"
 #include "PreviewPage.h"
+#include "TerrainEndpoint.h"
 #include "Scenario.h"
 #include "MotionSampler.h"
 #include "CoordTransforms.h"
@@ -24,9 +25,11 @@
 #include "EntityTypeCatalog.h"      // CatalogEntry / AirframeProfile
 #include "SpeedSeed.h"              // SeedCruiseSpeedMps — catalog cruise / 10 m/s default
 #include "CameraTargetExtents.h"    // cache the framed entity's catalogued size
-#include "CameraZoomMenu.h"         // shared "Zoom" RMB submenu (canvas + timeline)
+#include "CameraPresetCombo.h"    // shared preset-combo fill + kRowNotSelectable
 #include "EntityTypePickerDialog.h" // "Change Entity" catalog tree picker
 #include "../log.h"
+#include <shlobj.h>      // SHGetFolderPath — %LOCALAPPDATA% for the published tiles
+#include <shellapi.h>    // SHFileOperation — drop the published copy on purge
 
 #include <algorithm>
 #include <array>
@@ -42,9 +45,15 @@
 
 namespace
 {
-    // True if something is listening on 127.0.0.1:<port> (WSL2 forwards localhost),
-    // used to detect the self-hosted Cesium terrain server (python3 serve.py :8088).
-    // Non-blocking connect with a short timeout so the UI poll never stalls.
+    // True if something is listening on <host>:<port> (WSL2 forwards localhost),
+    // used to detect the self-hosted Cesium terrain server. Non-blocking connect
+    // with a short timeout so the UI poll never stalls.
+    //
+    // Resolution is via getaddrinfo, NOT InetPtonA: InetPtonA parses dotted-quad
+    // literals only, so any HOSTNAME (an EC2 DNS name, "localhost", a container
+    // alias) left sin_addr as 0.0.0.0 and the probe reported DOWN forever, with
+    // no error anywhere -- indistinguishable from a dead server. AF_UNSPEC so an
+    // AAAA-only name still resolves; every returned address is tried in turn.
     bool ProbeTcpPort(const char* host, unsigned short port, int timeoutMs)
     {
         static bool wsaUp = false;
@@ -55,36 +64,48 @@ namespace
             wsaUp = true;   // process-lifetime; cleaned up at exit
         }
 
-        SOCKET s = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (s == INVALID_SOCKET) return false;
+        char portStr[16] = { 0 };
+        sprintf_s(portStr, sizeof(portStr), "%u", static_cast<unsigned>(port));
 
-        u_long nonBlocking = 1;
-        ::ioctlsocket(s, FIONBIO, &nonBlocking);
+        addrinfo hints{};
+        hints.ai_family   = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_protocol = IPPROTO_TCP;
 
-        sockaddr_in addr{};
-        addr.sin_family = AF_INET;
-        addr.sin_port   = ::htons(port);
-        ::InetPtonA(AF_INET, host, &addr.sin_addr);
+        addrinfo* res = nullptr;
+        if (::getaddrinfo(host, portStr, &hints, &res) != 0 || res == nullptr)
+            return false;
 
         bool ok = false;
-        if (::connect(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0)
-            ok = true;
-        else if (::WSAGetLastError() == WSAEWOULDBLOCK)
+        for (addrinfo* ai = res; ai != nullptr && !ok; ai = ai->ai_next)
         {
-            fd_set wf; FD_ZERO(&wf); FD_SET(s, &wf);
-            timeval tv{};
-            tv.tv_sec  = timeoutMs / 1000;
-            tv.tv_usec = (timeoutMs % 1000) * 1000;
-            if (::select(0, nullptr, &wf, nullptr, &tv) > 0 && FD_ISSET(s, &wf))
+            SOCKET s = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+            if (s == INVALID_SOCKET) continue;
+
+            u_long nonBlocking = 1;
+            ::ioctlsocket(s, FIONBIO, &nonBlocking);
+
+            if (::connect(s, ai->ai_addr, static_cast<int>(ai->ai_addrlen)) == 0)
+                ok = true;
+            else if (::WSAGetLastError() == WSAEWOULDBLOCK)
             {
-                int err = 0; int len = sizeof(err);
-                if (::getsockopt(s, SOL_SOCKET, SO_ERROR,
-                                 reinterpret_cast<char*>(&err), &len) == 0 && err == 0)
-                    ok = true;
+                fd_set wf; FD_ZERO(&wf); FD_SET(s, &wf);
+                timeval tv{};
+                tv.tv_sec  = timeoutMs / 1000;
+                tv.tv_usec = (timeoutMs % 1000) * 1000;
+                if (::select(0, nullptr, &wf, nullptr, &tv) > 0 && FD_ISSET(s, &wf))
+                {
+                    int err = 0; int len = sizeof(err);
+                    if (::getsockopt(s, SOL_SOCKET, SO_ERROR,
+                                     reinterpret_cast<char*>(&err), &len) == 0 && err == 0)
+                        ok = true;
+                }
             }
+
+            ::closesocket(s);
         }
 
-        ::closesocket(s);
+        ::freeaddrinfo(res);
         return ok;
     }
     const FFieldHelp kFields[] = {
@@ -385,6 +406,26 @@ namespace
         }
     }
 
+    // Preview playback-rate choices. One table drives the combo's strings, the
+    // multiplier a selection means, and the reverse lookup that restores a saved
+    // PlaySpeed - so the labels and the numbers cannot drift apart. Large
+    // multipliers exist for wide-area scenarios where a single lap/leg spans
+    // tens of km.
+    struct PlaySpeedChoice { const wchar_t* label; double mul; };
+    constexpr PlaySpeedChoice kPlaySpeeds[] = {
+        { L"1x",       1.0 },
+        { L"2x",       2.0 },
+        { L"5x",       5.0 },
+        { L"10x",     10.0 },
+        { L"30x",     30.0 },
+        { L"60x",     60.0 },
+        { L"120x",   120.0 },
+        { L"300x",   300.0 },
+        { L"600x",   600.0 },
+        { L"1200x", 1200.0 },
+    };
+    constexpr int kPlaySpeedDefault = 3;   // "10x" - fast enough that motion reads
+
     // Camera-strip time-scale choices (seconds represented by kRefPx pixels).
     // Smaller value => more pixels/second => wider boxes. Order matches the combo.
     struct CamScale { const wchar_t* label; double seconds; };
@@ -398,6 +439,36 @@ namespace
         { L"100 s", 100.00 },
     };
     constexpr int kCamScaleDefault = 2;   // "1 s"
+
+    // How much bigger than the system glyph the owner-draw "Show" check boxes are
+    // drawn. Windows sizes a check box for an 8pt dialog font; this page is 12pt,
+    // so the stock 13px box reads as a speck next to its own label. 2x lands it at
+    // roughly the height of the text beside it.
+    constexpr int    kCheckScale     = 2;
+    // The logical (96-DPI) side of a stock Windows check box glyph, which the
+    // system does not expose as a metric.
+    constexpr int    kCheckBaseLogicalPx = 13;
+    // Gap between the box and its label, as a fraction of the box size.
+    constexpr double kCheckLabelGap  = 0.45;
+
+    // Every owner-draw check box on this page, in one place so the DrawItem
+    // dispatch and the resource file cannot drift apart.
+    constexpr int kCheckBoxIds[] = {
+        IDC_CHK_PREVIEW_LABELS,
+        IDC_CHK_PREVIEW_TRAILS,
+        IDC_CHK_PREVIEW_PATHS,
+        IDC_CHK_PREVIEW_ORIENTATION,
+        IDC_CHK_PREVIEW_TERRAIN,
+        IDC_CHK_PREVIEW_ZONES,
+        IDC_CHK_PREVIEW_LEGEND,
+        IDC_CHK_PREVIEW_DESTTIME,
+        IDC_CHK_MAP_MOVE_ENTITIES,
+    };
+    bool IsPreviewCheckBox(int id)
+    {
+        for (int i : kCheckBoxIds) if (i == id) return true;
+        return false;
+    }
 
     // Sample N evenly-spaced points along [0, duration] for FitScenario
     // and the per-entity motion-path cache.
@@ -423,6 +494,7 @@ BEGIN_MESSAGE_MAP(CPreviewPage, CHelpAwarePage)
     ON_WM_TIMER()
     ON_WM_HSCROLL()
     ON_WM_SHOWWINDOW()
+    ON_CBN_SELCHANGE(IDC_COMBO_CAM_ENTITY,     &CPreviewPage::OnCamEntityChanged)
     ON_BN_CLICKED(IDC_BTN_PREVIEW_START,       &CPreviewPage::OnStart)
     ON_BN_CLICKED(IDC_BTN_PREVIEW_PAUSE,       &CPreviewPage::OnPause)
     ON_BN_CLICKED(IDC_BTN_PREVIEW_RESUME,      &CPreviewPage::OnResume)
@@ -448,6 +520,7 @@ BEGIN_MESSAGE_MAP(CPreviewPage, CHelpAwarePage)
     ON_BN_CLICKED(IDC_BTN_PREVIEW_BUILD_TERRAIN, &CPreviewPage::OnBuildTerrain)
     ON_BN_CLICKED(IDC_BTN_PREVIEW_BUILD_FOLIAGE, &CPreviewPage::OnBuildFoliage)
     ON_BN_CLICKED(IDC_BTN_PREVIEW_PURGE_TERRAIN, &CPreviewPage::OnPurgeTerrain)
+    ON_BN_CLICKED(IDC_BTN_PREVIEW_FOLIAGE_AREA,  &CPreviewPage::OnFoliageArea)
     ON_BN_CLICKED(IDC_BTN_PREVIEW_TERRAIN_START, &CPreviewPage::OnStartTerrainServer)
     ON_BN_CLICKED(IDC_BTN_PREVIEW_TERRAIN_STOP,  &CPreviewPage::OnStopTerrainServer)
     ON_CBN_SELCHANGE(IDC_COMBO_PREVIEW_SPEED,  &CPreviewPage::OnSpeedChange)
@@ -461,6 +534,10 @@ BEGIN_MESSAGE_MAP(CPreviewPage, CHelpAwarePage)
     ON_BN_CLICKED(IDC_CHK_MAP_MOVE_ENTITIES,   &CPreviewPage::OnMapMoveEntitiesToggle)
     ON_NOTIFY(LVN_ITEMCHANGED, IDC_LIST_PREVIEW_DESTTIME, &CPreviewPage::OnPropertiesItemChanged)
     ON_WM_DRAWITEM()
+    ON_MESSAGE(WM_APP_PROC_OUTPUT, &CPreviewPage::OnProcOutput)
+    ON_MESSAGE(WM_APP_PROC_EXIT,   &CPreviewPage::OnProcExit)
+    ON_MESSAGE(WM_APP_TERRAIN_JOB_LINE, &CPreviewPage::OnTerrainJobLine)
+    ON_MESSAGE(WM_APP_TERRAIN_JOB_DONE, &CPreviewPage::OnTerrainJobDone)
 END_MESSAGE_MAP()
 
 //
@@ -544,39 +621,15 @@ BOOL CPreviewPage::OnInitDialog()
     m_timeline.SetOwner(this);
     m_timeline.SubclassDlgItem(IDC_CAMERA_TIMELINE, this);
 
-    // Restore persisted Preview toggles so the checkboxes come up exactly as the
-    // user last left them (settings.ini [Preview], loaded once at app startup).
-    {
-        const Settings& st = theApp.Settings();
-        m_showLabels          = st.previewShowLabels;
-        m_showTrails          = st.previewShowTrails;
-        m_showPaths           = st.previewShowPaths;
-        m_showOrientation     = st.previewShowOrientation;
-        m_showTerrain         = st.previewShowTerrain;
-        m_showZones           = st.previewShowZones;
-        m_showLegend          = st.previewShowLegend;
-        m_showDestTime        = st.previewShowProperties;
-        m_moveEntitiesWithMap = st.previewMoveEntities;
-    }
-
-    CheckDlgButton(IDC_CHK_PREVIEW_LABELS,      m_showLabels      ? BST_CHECKED : BST_UNCHECKED);
-    CheckDlgButton(IDC_CHK_PREVIEW_TRAILS,      m_showTrails      ? BST_CHECKED : BST_UNCHECKED);
-    CheckDlgButton(IDC_CHK_PREVIEW_PATHS,       m_showPaths       ? BST_CHECKED : BST_UNCHECKED);
-    CheckDlgButton(IDC_CHK_PREVIEW_ORIENTATION, m_showOrientation ? BST_CHECKED : BST_UNCHECKED);
-    CheckDlgButton(IDC_CHK_PREVIEW_TERRAIN,     m_showTerrain     ? BST_CHECKED : BST_UNCHECKED);
-    CheckDlgButton(IDC_CHK_PREVIEW_ZONES,       m_showZones       ? BST_CHECKED : BST_UNCHECKED);
-    CheckDlgButton(IDC_CHK_PREVIEW_LEGEND,      m_showLegend      ? BST_CHECKED : BST_UNCHECKED);
-    CheckDlgButton(IDC_CHK_MAP_MOVE_ENTITIES,   m_moveEntitiesWithMap ? BST_CHECKED : BST_UNCHECKED);
+    // The "Show" check boxes are seeded from the scenario's [Preview] section by
+    // ApplyPreviewViewFromScenario near the end of this function — they are
+    // per-scenario state now, not per-user, so there is nothing to restore here.
 
     if (CComboBox* spd = (CComboBox*)GetDlgItem(IDC_COMBO_PREVIEW_SPEED))
     {
         spd->ResetContent();
-        // NOTE: keep in sync with kMul[] in OnSpeedChange(). Large multipliers
-        // exist for wide-area scenarios where a single lap/leg spans tens of km.
-        const wchar_t* kSpeeds[] = { L"1x", L"2x", L"5x", L"10x", L"30x", L"60x",
-                                     L"120x", L"300x", L"600x", L"1200x" };
-        for (const wchar_t* s : kSpeeds) spd->AddString(s);
-        spd->SetCurSel(3);   // default 10x so entity motion is visible
+        for (const PlaySpeedChoice& c : kPlaySpeeds) spd->AddString(c.label);
+        spd->SetCurSel(kPlaySpeedDefault);   // overridden below by the scenario's [Preview]
     }
 
     if (CListCtrl* dt = (CListCtrl*)GetDlgItem(IDC_LIST_PREVIEW_DESTTIME))
@@ -615,7 +668,6 @@ BOOL CPreviewPage::OnInitDialog()
         }
         dt->ShowWindow(SW_HIDE);   // revealed when the Show > "Properties" box is checked
     }
-    CheckDlgButton(IDC_CHK_PREVIEW_DESTTIME, m_showDestTime ? BST_CHECKED : BST_UNCHECKED);
 
     // Map backdrop layer selector.
     if (CComboBox* mc = (CComboBox*)GetDlgItem(IDC_COMBO_MAP_LAYER))
@@ -662,6 +714,11 @@ BOOL CPreviewPage::OnInitDialog()
     RebuildPathsCache();
     FitScenario();
     RebuildRenderState();
+
+    // Restore this scenario's saved view drop-downs. Applied AFTER FitScenario so
+    // a scenario saved on the Cesium layer opens the globe framed on the fitted
+    // view rather than on the pre-fit default zoom.
+    ApplyPreviewViewFromScenario();
 
     // Detect whether the self-hosted terrain server is already running (it may have
     // been left up from a previous run — we never kill it on our own exit), then poll
@@ -711,6 +768,7 @@ void CPreviewPage::OnMapLayerChange()
     const int sel = cb->GetCurSel();
     m_mapLayer = (sel <= 0) ? MapLayer::None : static_cast<MapLayer>(sel);
     ActivateCesium(m_mapLayer == MapLayer::Cesium);
+    PersistPreviewView();
     RefreshMapView();
 }
 
@@ -821,6 +879,7 @@ void CPreviewPage::OnMapPlaceChange()
     const std::vector<MapPlace>& places = theApp.Settings().mapPlaces;
     if (sel < 0 || sel >= static_cast<int>(places.size())) return;
     const MapPlace& mp = places[static_cast<size_t>(sel)];
+    PersistPreviewView();   // remember WHICH location this scenario is authored against
     ApplyMapPlace(mp.lat, mp.lon, mp.alt > 0.0 ? mp.alt : -1.0);
 }
 
@@ -878,6 +937,7 @@ void CPreviewPage::OnMapAddPlace()
     SettingsIO::Save(theApp.Settings(), theApp.SettingsPath());
 
     PopulatePlacesCombo(static_cast<int>(theApp.Settings().mapPlaces.size()) - 1);
+    PersistPreviewView();
     ApplyMapPlace(p.lat, p.lon, p.alt > 0.0 ? p.alt : -1.0);
 }
 
@@ -897,6 +957,10 @@ void CPreviewPage::OnMapDelPlace()
     SettingsIO::Save(theApp.Settings(), theApp.SettingsPath());
     PopulatePlacesCombo(places.empty() ? -1
                         : std::min(sel, static_cast<int>(places.size()) - 1));
+    // Deleting the place the scenario named leaves the combo on a different row
+    // (or none); record whatever it now shows so the .ini can't keep pointing at
+    // a location this machine no longer has.
+    PersistPreviewView();
 }
 
 void CPreviewPage::OnMapCapturePlace()
@@ -924,6 +988,7 @@ void CPreviewPage::OnMapCapturePlace()
     theApp.Settings().mapPlaces.push_back(p);
     SettingsIO::Save(theApp.Settings(), theApp.SettingsPath());
     PopulatePlacesCombo(static_cast<int>(theApp.Settings().mapPlaces.size()) - 1);
+    PersistPreviewView();
     // Move the scenario origin to the captured spot so it becomes the active
     // location (what "Configure Unreal" hands DISBrowser). Programmatic combo
     // selection above doesn't fire OnMapPlaceChange, so relocate explicitly.
@@ -936,9 +1001,7 @@ void CPreviewPage::OnMapCapturePlace()
 //
 void CPreviewPage::OnMapMoveEntitiesToggle()
 {
-    if (CButton* b = (CButton*)GetDlgItem(IDC_CHK_MAP_MOVE_ENTITIES))
-        m_moveEntitiesWithMap = (b->GetCheck() == BST_CHECKED);
-    PersistToggles();
+    ToggleCheck(IDC_CHK_MAP_MOVE_ENTITIES, m_moveEntitiesWithMap);
 }
 
 //
@@ -1050,6 +1113,18 @@ void CPreviewPage::ApplyMapPlace(double lat, double lon, double flyHeightM)
             ent.localX = e; ent.localY = n; ent.localZ = u;
         }
     }
+
+    // Re-center the 2D view on the new origin, exactly as OnGotoOrigin does.
+    // m_centerEnuE/N are metres from the ORIGIN, so leaving them alone across an
+    // origin move re-applies the old offset against the new anchor and the view
+    // jumps the same distance a second time. Picking a place that the view was
+    // already looking at therefore landed at 2*place - origin: choosing
+    // Taiwan-Video (22.64N,120.26E) from a Taipei origin (25.03N,121.35E) put the
+    // canvas at 20.25N,119.16E, ~290 km out in the South China Sea, where Esri
+    // has no imagery above z13 and every tile reads "Map data not yet available".
+    // The zoom (metres/pixel) is deliberately kept -- only the center moves.
+    m_centerEnuE = 0.0;   // origin is ENU (0,0)
+    m_centerEnuN = 0.0;
 
     RebuildPathsCache();
     RefreshMapView();
@@ -1197,15 +1272,17 @@ void CPreviewPage::OnStop()
 
 void CPreviewPage::OnSpeedChange()
 {
-    // Keep in sync with kSpeeds[] in OnInitDialog().
-    static const double kMul[] = { 1.0, 2.0, 5.0, 10.0, 30.0, 60.0,
-                                   120.0, 300.0, 600.0, 1200.0 };
     if (CComboBox* spd = (CComboBox*)GetDlgItem(IDC_COMBO_PREVIEW_SPEED))
     {
         const int sel = spd->GetCurSel();
-        if (sel >= 0 && sel < static_cast<int>(sizeof(kMul) / sizeof(kMul[0])))
-            m_playSpeed = kMul[sel];
+        if (sel >= 0 && sel < static_cast<int>(_countof(kPlaySpeeds)))
+            m_playSpeed = kPlaySpeeds[sel].mul;
     }
+    PersistPreviewView();
+
+    // The camera boxes label themselves with a speed-adjusted duration, so the
+    // strip has to repaint even though nothing about the schedule changed.
+    if (m_timeline.GetSafeHwnd()) m_timeline.Invalidate(FALSE);
 }
 
 //
@@ -1372,8 +1449,7 @@ void CPreviewPage::ZoomAtPixel(double factor, int cursorXPx, int cursorYPx)
 //
 void CPreviewPage::OnLabelsToggle()
 {
-    m_showLabels = IsDlgButtonChecked(IDC_CHK_PREVIEW_LABELS) == BST_CHECKED;
-    PersistToggles();
+    ToggleCheck(IDC_CHK_PREVIEW_LABELS, m_showLabels);
     RebuildRenderState();
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
@@ -1383,9 +1459,8 @@ void CPreviewPage::OnLabelsToggle()
 //
 void CPreviewPage::OnTrailsToggle()
 {
-    m_showTrails = IsDlgButtonChecked(IDC_CHK_PREVIEW_TRAILS) == BST_CHECKED;
+    ToggleCheck(IDC_CHK_PREVIEW_TRAILS, m_showTrails);
     if (!m_showTrails) m_trails.clear();
-    PersistToggles();
     RebuildRenderState();
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
@@ -1395,8 +1470,7 @@ void CPreviewPage::OnTrailsToggle()
 //
 void CPreviewPage::OnPathsToggle()
 {
-    m_showPaths = IsDlgButtonChecked(IDC_CHK_PREVIEW_PATHS) == BST_CHECKED;
-    PersistToggles();
+    ToggleCheck(IDC_CHK_PREVIEW_PATHS, m_showPaths);
     RebuildRenderState();
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
@@ -1406,8 +1480,7 @@ void CPreviewPage::OnPathsToggle()
 //
 void CPreviewPage::OnOrientationToggle()
 {
-    m_showOrientation = IsDlgButtonChecked(IDC_CHK_PREVIEW_ORIENTATION) == BST_CHECKED;
-    PersistToggles();
+    ToggleCheck(IDC_CHK_PREVIEW_ORIENTATION, m_showOrientation);
     RebuildRenderState();
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
@@ -1417,29 +1490,225 @@ void CPreviewPage::OnOrientationToggle()
 //
 void CPreviewPage::OnTerrainToggle()
 {
-    m_showTerrain = IsDlgButtonChecked(IDC_CHK_PREVIEW_TERRAIN) == BST_CHECKED;
-    PersistToggles();
+    ToggleCheck(IDC_CHK_PREVIEW_TERRAIN, m_showTerrain);
     RebuildRenderState();
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
 
 //
-// PersistToggles — write the current Preview display-toggle states into
-//   settings.ini so they come back the same way next session.
+// ToggleCheck — flip one owner-draw check box. A BS_OWNERDRAW button reports the
+//   click but neither toggles nor stores a check state of its own (BM_SETCHECK is
+//   documented as having no effect on one), so the member is the only state: flip
+//   it, repaint the box, and write the new value into the scenario's [Preview]
+//   section.
 //
-void CPreviewPage::PersistToggles()
+void CPreviewPage::ToggleCheck(int ctrlId, bool& flag)
 {
-    Settings& st = theApp.Settings();
-    st.previewShowLabels      = m_showLabels;
-    st.previewShowTrails      = m_showTrails;
-    st.previewShowPaths       = m_showPaths;
-    st.previewShowOrientation = m_showOrientation;
-    st.previewShowTerrain     = m_showTerrain;
-    st.previewShowZones       = m_showZones;
-    st.previewShowLegend      = m_showLegend;
-    st.previewShowProperties  = m_showDestTime;
-    st.previewMoveEntities    = m_moveEntitiesWithMap;
-    SettingsIO::Save(st, theApp.SettingsPath());
+    flag = !flag;
+    RepaintCheck(ctrlId);
+    PersistPreviewView();
+}
+
+//
+// RepaintCheck — redraw one owner-draw check box. There is no state to push onto
+//   the control: DrawCheckBox reads the m_show* member through CheckBoxState, so
+//   setting the member and calling this is the whole update.
+//
+void CPreviewPage::RepaintCheck(int ctrlId)
+{
+    if (CWnd* b = GetDlgItem(ctrlId)) b->Invalidate();
+}
+
+//
+// CheckBoxState — the member behind one owner-draw check box. This is the single
+//   place the control ids and the m_show* flags are tied together; the painter
+//   goes through it rather than asking the control, which would always answer
+//   "unchecked".
+//
+bool CPreviewPage::CheckBoxState(int ctrlId) const
+{
+    switch (ctrlId)
+    {
+        case IDC_CHK_PREVIEW_LABELS:      return m_showLabels;
+        case IDC_CHK_PREVIEW_TRAILS:      return m_showTrails;
+        case IDC_CHK_PREVIEW_PATHS:       return m_showPaths;
+        case IDC_CHK_PREVIEW_ORIENTATION: return m_showOrientation;
+        case IDC_CHK_PREVIEW_TERRAIN:     return m_showTerrain;
+        case IDC_CHK_PREVIEW_ZONES:       return m_showZones;
+        case IDC_CHK_PREVIEW_LEGEND:      return m_showLegend;
+        case IDC_CHK_PREVIEW_DESTTIME:    return m_showDestTime;
+        case IDC_CHK_MAP_MOVE_ENTITIES:   return m_moveEntitiesWithMap;
+        default:                          return false;
+    }
+}
+
+// PreviewView::mapLayer is a plain int so Scenario.h stays free of the MFC
+// headers that declare MapLayer; the two must keep the same numbering.
+static_assert(static_cast<int>(MapLayer::None)        == 0, "PreviewView::mapLayer mapping");
+static_assert(static_cast<int>(MapLayer::Satellite)   == 1, "PreviewView::mapLayer mapping");
+static_assert(static_cast<int>(MapLayer::Topographic) == 2, "PreviewView::mapLayer mapping");
+static_assert(static_cast<int>(MapLayer::Cesium)      == 3, "PreviewView::mapLayer mapping");
+
+//
+// PersistPreviewView — snapshot the whole Preview view state (the Map /
+//   Location / Speed / Scale drop-downs plus every "Show" check box) into the
+//   scenario's [Preview] section and flag the document modified, so it is saved
+//   with the scenario rather than lost on close. This lives in scenario.ini, not
+//   settings.ini, because it describes how a PARTICULAR scenario is best viewed:
+//   a coastal play wants satellite imagery and its own location, a long transit
+//   wants 300x, a scenario with a painted level wants Terrain and Zones drawn,
+//   and a 200-entity scenario is unreadable with Labels and Trails on.
+//
+void CPreviewPage::PersistPreviewView()
+{
+    if (!m_scenario) return;
+    PreviewView& pv = m_scenario->preview;
+
+    pv.mapLayer        = static_cast<int>(m_mapLayer);
+    pv.playSpeed       = m_playSpeed;
+    pv.camScaleSeconds = m_timeline.GetTimeScale();
+
+    pv.showLabels          = m_showLabels;
+    pv.showTrails          = m_showTrails;
+    pv.showPaths           = m_showPaths;
+    pv.showOrientation     = m_showOrientation;
+    pv.showTerrain         = m_showTerrain;
+    pv.showZones           = m_showZones;
+    pv.showLegend          = m_showLegend;
+    pv.showProperties      = m_showDestTime;
+    pv.moveEntitiesWithMap = m_moveEntitiesWithMap;
+
+    // The Location is stored by LABEL, not by row index: the saved-places list is
+    // per-user (settings.ini), so an index would point at a different place — or
+    // off the end — on another machine or after an Add/Delete.
+    pv.mapPlace.clear();
+    if (CComboBox* pc = (CComboBox*)GetDlgItem(IDC_COMBO_MAP_PLACE))
+    {
+        const int sel = pc->GetCurSel();
+        if (sel >= 0)
+        {
+            CString label;
+            pc->GetLBText(sel, label);
+            pv.mapPlace = std::string(CStringA(label).GetString());
+        }
+    }
+
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_MARK_DIRTY, 0, 0);
+}
+
+//
+// ApplyPreviewViewFromScenario — the reverse of PersistPreviewView: seed the four
+//   drop-downs (and the state behind them) from the scenario's [Preview] section.
+//   Deliberately does NOT mark the document dirty, and does NOT re-apply the saved
+//   Location's coordinates — [Origin] is the authority on where the scenario sits,
+//   so the label only re-selects the row. Speed/Scale snap to the nearest offered
+//   choice, which keeps a hand-edited .ini value usable instead of ignored.
+//
+void CPreviewPage::ApplyPreviewViewFromScenario()
+{
+    if (!m_scenario) return;
+    const PreviewView& pv = m_scenario->preview;
+
+    // --- "Show" check boxes ---
+    m_showLabels          = pv.showLabels;
+    m_showTrails          = pv.showTrails;
+    m_showPaths           = pv.showPaths;
+    m_showOrientation     = pv.showOrientation;
+    m_showTerrain         = pv.showTerrain;
+    m_showZones           = pv.showZones;
+    m_showLegend          = pv.showLegend;
+    m_showDestTime        = pv.showProperties;
+    m_moveEntitiesWithMap = pv.moveEntitiesWithMap;
+
+    RepaintCheck(IDC_CHK_PREVIEW_LABELS);
+    RepaintCheck(IDC_CHK_PREVIEW_TRAILS);
+    RepaintCheck(IDC_CHK_PREVIEW_PATHS);
+    RepaintCheck(IDC_CHK_PREVIEW_ORIENTATION);
+    RepaintCheck(IDC_CHK_PREVIEW_TERRAIN);
+    RepaintCheck(IDC_CHK_PREVIEW_ZONES);
+    RepaintCheck(IDC_CHK_PREVIEW_LEGEND);
+    RepaintCheck(IDC_CHK_PREVIEW_DESTTIME);
+    RepaintCheck(IDC_CHK_MAP_MOVE_ENTITIES);
+
+    // Trails are history, not geometry: a scenario saved with them off must not
+    // come up showing the previous scenario's tails.
+    if (!m_showTrails) m_trails.clear();
+
+    // The Properties grid is a real control, so its visibility follows its box.
+    if (CWnd* lc = GetDlgItem(IDC_LIST_PREVIEW_DESTTIME))
+        lc->ShowWindow(m_showDestTime ? SW_SHOW : SW_HIDE);
+    if (m_showDestTime) RefreshDestTimeList();
+
+    // --- Map backdrop layer ---
+    int layer = pv.mapLayer;
+    if (layer < 0 || layer > static_cast<int>(MapLayer::Cesium)) layer = 0;
+    m_mapLayer = static_cast<MapLayer>(layer);
+    if (CComboBox* mc = (CComboBox*)GetDlgItem(IDC_COMBO_MAP_LAYER))
+        mc->SetCurSel(layer);
+    ActivateCesium(m_mapLayer == MapLayer::Cesium);
+
+    // --- Location: select the matching saved place, if this machine has it ---
+    if (CComboBox* pc = (CComboBox*)GetDlgItem(IDC_COMBO_MAP_PLACE))
+    {
+        int sel = -1;
+        const std::vector<MapPlace>& places = theApp.Settings().mapPlaces;
+        for (size_t i = 0; i < places.size(); ++i)
+        {
+            if (places[i].label == pv.mapPlace) { sel = static_cast<int>(i); break; }
+        }
+        pc->SetCurSel(sel);   // -1 clears it: unknown label => no row highlighted
+    }
+
+    // --- Preview speed: nearest offered multiplier ---
+    {
+        int best = kPlaySpeedDefault;
+        double bestErr = -1.0;
+        for (int i = 0; i < static_cast<int>(_countof(kPlaySpeeds)); ++i)
+        {
+            const double err = std::fabs(kPlaySpeeds[i].mul - pv.playSpeed);
+            if (bestErr < 0.0 || err < bestErr) { bestErr = err; best = i; }
+        }
+        m_playSpeed = kPlaySpeeds[best].mul;
+        if (CComboBox* spd = (CComboBox*)GetDlgItem(IDC_COMBO_PREVIEW_SPEED))
+            spd->SetCurSel(best);
+    }
+
+    // --- Camera-strip time scale: nearest offered scale ---
+    {
+        int best = kCamScaleDefault;
+        double bestErr = -1.0;
+        for (int i = 0; i < static_cast<int>(_countof(kCamScales)); ++i)
+        {
+            const double err = std::fabs(kCamScales[i].seconds - pv.camScaleSeconds);
+            if (bestErr < 0.0 || err < bestErr) { bestErr = err; best = i; }
+        }
+        if (CComboBox* sc = (CComboBox*)GetDlgItem(IDC_COMBO_CAM_SCALE))
+            sc->SetCurSel(best);
+        m_timeline.SetTimeScale(kCamScales[best].seconds);
+        m_timeline.SetScrollOffset(0);
+        UpdateCameraScrollBar();
+    }
+}
+
+//
+// OnScenarioLoaded — a different scenario replaced the model (File > Open / New,
+//   or a Play). Re-seed the view drop-downs from its [Preview] section and
+//   repaint. No-op before the page has a window: OnInitDialog applies the same
+//   settings itself once it does.
+//
+void CPreviewPage::OnScenarioLoaded()
+{
+    if (!GetSafeHwnd()) return;
+
+    // Same order as OnInitDialog: fit the new scenario first, so restoring the
+    // Cesium layer opens the globe framed on this scenario rather than on the
+    // previous one's zoom. (OnShowWindow re-fits when the tab is next shown.)
+    RebuildPathsCache();
+    FitScenario();
+    ApplyPreviewViewFromScenario();
+    RefreshMapView();
+    if (m_timeline.GetSafeHwnd()) m_timeline.Invalidate(FALSE);
 }
 
 //
@@ -1449,8 +1718,7 @@ void CPreviewPage::PersistToggles()
 //
 void CPreviewPage::OnZonesToggle()
 {
-    m_showZones = IsDlgButtonChecked(IDC_CHK_PREVIEW_ZONES) == BST_CHECKED;
-    PersistToggles();
+    ToggleCheck(IDC_CHK_PREVIEW_ZONES, m_showZones);
     RebuildRenderState();
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
@@ -1460,8 +1728,7 @@ void CPreviewPage::OnZonesToggle()
 //
 void CPreviewPage::OnLegendToggle()
 {
-    m_showLegend = IsDlgButtonChecked(IDC_CHK_PREVIEW_LEGEND) == BST_CHECKED;
-    PersistToggles();
+    ToggleCheck(IDC_CHK_PREVIEW_LEGEND, m_showLegend);
     RebuildRenderState();
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
@@ -1523,7 +1790,12 @@ void CPreviewPage::OnBoundary()
     // Toggle boundary-paint mode. While armed the button shows a bold green check and the
     // canvas turns a left-drag into a yellow terrain-boundary rectangle (see PreviewCanvas).
     m_boundaryArmed = !m_boundaryArmed;
-    if (m_boundaryArmed) m_startPickArmed = false;   // the two paint modes are mutually exclusive
+    if (m_boundaryArmed)
+    {
+        m_startPickArmed   = false;   // the paint modes are mutually exclusive
+        m_foliageAreaArmed = false;
+        if (CWnd* f = GetDlgItem(IDC_BTN_PREVIEW_FOLIAGE_AREA)) f->Invalidate();
+    }
     if (CWnd* b = GetDlgItem(IDC_BTN_PREVIEW_BOUNDARY))  b->Invalidate();
     if (CWnd* s = GetDlgItem(IDC_BTN_PREVIEW_SET_START)) s->Invalidate();
     if (m_canvas.GetSafeHwnd())
@@ -1552,6 +1824,223 @@ void CPreviewPage::OnFoliage()
     if (dlg.DoModal() != IDOK) return;
 
     m_scenario->foliage = dlg.Config();
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_MARK_DIRTY, 0, 0);
+}
+
+//
+// OnFoliageArea — toggle "Foliage Area" paint mode.
+//   Mutually exclusive with the Boundary and Set-Start tools: they all claim the
+//   same drag gesture, and two armed at once would be ambiguous.
+//
+void CPreviewPage::OnFoliageArea()
+{
+    m_foliageAreaArmed = !m_foliageAreaArmed;
+    if (m_foliageAreaArmed)
+    {
+        m_boundaryArmed  = false;
+        m_startPickArmed = false;
+    }
+    if (CWnd* b = GetDlgItem(IDC_BTN_PREVIEW_FOLIAGE_AREA)) b->Invalidate();
+    if (CWnd* b = GetDlgItem(IDC_BTN_PREVIEW_BOUNDARY))     b->Invalidate();
+    if (CWnd* s = GetDlgItem(IDC_BTN_PREVIEW_SET_START))    s->Invalidate();
+    if (m_canvas.GetSafeHwnd())
+    {
+        m_canvas.Invalidate(FALSE);
+        if (m_foliageAreaArmed) ::SetCursor(::LoadCursor(nullptr, IDC_CROSS));
+    }
+    if (m_mapLayer == MapLayer::Cesium && m_cesium.GetSafeHwnd())
+        m_cesium.SetBoundaryMode(m_foliageAreaArmed);
+
+    if (m_foliageAreaArmed && m_scenario)
+    {
+        CString msg;
+        msg.Format(_T("Foliage Area armed: right-drag a rectangle (%d painted)"),
+                   static_cast<int>(m_scenario->foliageAreas.size()));
+        SetJobStatus(msg);
+    }
+}
+
+//
+// OnFoliageAreaPainted — a drag finished: APPEND a foliage rectangle and ask how
+//   many trees it carries. Unlike the terrain boundary this does not replace the
+//   previous box, and it stays armed so several areas can be painted in a row.
+//
+void CPreviewPage::OnFoliageAreaPainted(double latMinDeg, double latMaxDeg,
+                                        double lonMinDeg, double lonMaxDeg)
+{
+    if (!m_scenario) return;
+
+    if (latMinDeg > latMaxDeg) std::swap(latMinDeg, latMaxDeg);
+    if (lonMinDeg > lonMaxDeg) std::swap(lonMinDeg, lonMaxDeg);
+
+    // Seed the prompt from the previous area so painting a series of similar
+    // patches does not mean retyping the number every time.
+    long long seed = 20000;
+    if (!m_scenario->foliageAreas.empty())
+        seed = m_scenario->foliageAreas.back().treeCount;
+
+    CString initial;
+    initial.Format(_T("%lld"), seed);
+    CPromptDialog dlg(_T("Foliage Area"), _T("Trees in this area:"), initial, this);
+    if (dlg.DoModal() != IDOK) return;      // cancel = do not add the area
+
+    const long long count = _ttoi64(dlg.Value());
+    if (count <= 0)
+    {
+        MessageBox(_T("A foliage area needs a positive tree count."),
+                   _T("Foliage Area"), MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    FoliageArea a;
+    a.latMinDeg = latMinDeg;
+    a.latMaxDeg = latMaxDeg;
+    a.lonMinDeg = lonMinDeg;
+    a.lonMaxDeg = lonMaxDeg;
+    a.treeCount = count;
+    m_scenario->foliageAreas.push_back(a);
+
+    {
+        char buf[240];
+        sprintf_s(buf, sizeof(buf),
+                  "PreviewPage::OnFoliageAreaPainted: area %u lat[%.5f..%.5f] lon[%.5f..%.5f] trees=%lld",
+                  static_cast<unsigned>(m_scenario->foliageAreas.size()),
+                  latMinDeg, latMaxDeg, lonMinDeg, lonMaxDeg, count);
+        LOG(buf);
+    }
+
+    CString msg;
+    msg.Format(_T("Foliage area %d added (%lld trees). Right-drag for another, or click Foliage Area to stop."),
+               static_cast<int>(m_scenario->foliageAreas.size()), count);
+    SetJobStatus(msg);
+
+    // Stay armed: painting several areas in a row is the common case.
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_MARK_DIRTY, 0, 0);
+}
+
+//
+// SetFoliageAreaCount — edit one painted area's tree count in place.
+//
+void CPreviewPage::SetFoliageAreaCount(size_t idx)
+{
+    if (!m_scenario || idx >= m_scenario->foliageAreas.size()) return;
+    FoliageArea& a = m_scenario->foliageAreas[idx];
+
+    CString initial;
+    initial.Format(_T("%lld"), a.treeCount);
+    CPromptDialog dlg(_T("Foliage Area"), _T("Trees in this area:"), initial, this);
+    if (dlg.DoModal() != IDOK) return;
+
+    const long long count = _ttoi64(dlg.Value());
+    if (count <= 0)
+    {
+        MessageBox(_T("A foliage area needs a positive tree count.\n\n")
+                   _T("To remove the area entirely, right-click it and choose ")
+                   _T("\"Delete Foliage Area\"."),
+                   _T("Foliage Area"), MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    a.treeCount = count;
+
+    CString msg;
+    msg.Format(_T("Foliage area %d set to %lld trees."),
+               static_cast<int>(idx + 1), count);
+    SetJobStatus(msg);
+    {
+        char buf[160];
+        sprintf_s(buf, sizeof(buf),
+                  "PreviewPage::SetFoliageAreaCount: area %u -> %lld trees",
+                  static_cast<unsigned>(idx), count);
+        LOG(buf);
+    }
+
+    if (CWnd* b = GetDlgItem(IDC_BTN_PREVIEW_FOLIAGE_AREA)) b->Invalidate();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_MARK_DIRTY, 0, 0);
+}
+
+//
+// DeleteFoliageArea — remove one painted area.
+//   Erasing from the middle SHIFTS the remaining areas up, and paint order is
+//   what decides who owns overlapped ground. That is the intended behaviour --
+//   deleting an area hands its overlaps to whoever is now first -- but it does
+//   change where trees land, so the status line says the order changed.
+//
+void CPreviewPage::DeleteFoliageArea(size_t idx)
+{
+    if (!m_scenario || idx >= m_scenario->foliageAreas.size()) return;
+
+    const long long trees = m_scenario->foliageAreas[idx].treeCount;
+    const bool wasNotLast = (idx + 1 < m_scenario->foliageAreas.size());
+    m_scenario->foliageAreas.erase(m_scenario->foliageAreas.begin() +
+                                   static_cast<std::ptrdiff_t>(idx));
+
+    CString msg;
+    if (wasNotLast && !m_scenario->foliageAreas.empty())
+        msg.Format(_T("Deleted foliage area %d (%lld trees); %d left, and later areas moved up in paint order."),
+                   static_cast<int>(idx + 1), trees,
+                   static_cast<int>(m_scenario->foliageAreas.size()));
+    else
+        msg.Format(_T("Deleted foliage area %d (%lld trees); %d left."),
+                   static_cast<int>(idx + 1), trees,
+                   static_cast<int>(m_scenario->foliageAreas.size()));
+    SetJobStatus(msg);
+    {
+        char buf[180];
+        sprintf_s(buf, sizeof(buf),
+                  "PreviewPage::DeleteFoliageArea: removed area %u (%lld trees), %u remain",
+                  static_cast<unsigned>(idx), trees,
+                  static_cast<unsigned>(m_scenario->foliageAreas.size()));
+        LOG(buf);
+    }
+
+    if (CWnd* b = GetDlgItem(IDC_BTN_PREVIEW_FOLIAGE_AREA)) b->Invalidate();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_MARK_DIRTY, 0, 0);
+}
+
+//
+// DeleteAllFoliageAreas — clear the list after a confirmation.
+//   Confirmed because there is no undo, and repainting a set of areas by hand is
+//   real work.
+//
+void CPreviewPage::DeleteAllFoliageAreas()
+{
+    if (!m_scenario || m_scenario->foliageAreas.empty()) return;
+
+    long long total = 0;
+    for (const FoliageArea& a : m_scenario->foliageAreas) total += a.treeCount;
+
+    CString msg;
+    msg.Format(_T("Delete all %d painted foliage areas (%lld trees)?\n\n")
+               _T("This cannot be undone. A bake with no areas painted falls back ")
+               _T("to the whole terrain box."),
+               static_cast<int>(m_scenario->foliageAreas.size()), total);
+    if (MessageBox(msg, _T("Foliage Area"), MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+        return;
+
+    const size_t n = m_scenario->foliageAreas.size();
+    m_scenario->foliageAreas.clear();
+
+    CString done;
+    done.Format(_T("Deleted all %d foliage areas."), static_cast<int>(n));
+    SetJobStatus(done);
+    {
+        char buf[120];
+        sprintf_s(buf, sizeof(buf),
+                  "PreviewPage::DeleteAllFoliageAreas: cleared %u area(s)",
+                  static_cast<unsigned>(n));
+        LOG(buf);
+    }
+
+    if (CWnd* b = GetDlgItem(IDC_BTN_PREVIEW_FOLIAGE_AREA)) b->Invalidate();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
     if (CWnd* top = GetTopLevelParent())
         top->SendMessage(WM_APP_MARK_DIRTY, 0, 0);
 }
@@ -1595,6 +2084,397 @@ void CPreviewPage::OnBoundaryPainted(double latMinDeg, double latMaxDeg,
 //   painted terrain box. Validates the box + locates retile_terrain.cmd, confirms
 //   with the operator, then ShellExecutes the script.
 //
+//
+// TerrainTilesDir — the NTFS folder TerrainServer.exe serves from.
+//   Tiles are built on ext4 inside WSL (fast, and Docker bind-mounts stay on
+//   ext4) and published here afterwards, because a Windows process cannot read
+//   /root/terrain/tiles: the \\wsl$ share needs P9RdrService, which is stopped
+//   and requires admin to start.
+//
+//
+// TerrainHost / TerrainPort — where the tile server we care about lives.
+//   Thin wrappers over ResolveTerrainEndpoint(), which is the ONE place the
+//   four modes are turned into an address. COutputPlaybackPage used to make
+//   the same decision inline with a different default ("localhost" vs
+//   "127.0.0.1"); both now call the shared resolver so they cannot drift.
+//
+CStringA CPreviewPage::TerrainHost() const
+{
+    return CStringA(ResolveTerrainEndpoint(theApp.Settings()).host.c_str());
+}
+
+unsigned short CPreviewPage::TerrainPort() const
+{
+    return ResolveTerrainEndpoint(theApp.Settings()).port;
+}
+
+//
+// TerrainModeName — for status text and log lines.
+//
+CString CPreviewPage::TerrainModeName() const
+{
+    switch (theApp.Settings().terrainMode)
+    {
+        case TerrainServerMode::Legacy:  return _T("Legacy (serve.py in WSL)");
+        case TerrainServerMode::Remote:  return _T("Remote");
+        case TerrainServerMode::Service: return _T("Service (containerized)");
+        default:                         return _T("Local");
+    }
+}
+
+CString CPreviewPage::TerrainTilesDir() const
+{
+    TCHAR local[MAX_PATH] = { 0 };
+    if (SUCCEEDED(::SHGetFolderPath(nullptr, CSIDL_LOCAL_APPDATA, nullptr, 0, local)))
+        return CString(local) + _T("\\DISBrowser\\terrain\\tiles");
+    return _T("C:\\DISBrowser\\terrain\\tiles");
+}
+
+//
+// WslPathOf — "C:\Users\me\x" -> "/mnt/c/Users/me/x", so a Windows path can be
+//   handed to a script running inside WSL.
+//
+CString CPreviewPage::WslPathOf(const CString& winPath) const
+{
+    CString p = winPath;
+    if (p.GetLength() < 2 || p[1] != _T(':')) return p;   // not drive-qualified
+
+    CString drive = p.Left(1);
+    drive.MakeLower();
+    CString rest = p.Mid(2);
+    rest.Replace(_T('\\'), _T('/'));
+    return _T("/mnt/") + drive + rest;
+}
+
+//
+// SetJobStatus — one-line status under the preview, plus the app log. This is
+//   the "something is happening" channel; failures additionally raise a modal.
+//
+void CPreviewPage::SetJobStatus(const CString& text)
+{
+    if (::IsWindow(GetSafeHwnd()))
+        SetDlgItemText(IDC_STATIC_TERRAIN_STATUS, text);
+}
+
+//
+// ServiceMode — is the terrain server the containerized job service?
+//
+bool CPreviewPage::ServiceMode() const
+{
+    return theApp.Settings().terrainMode == TerrainServerMode::Service;
+}
+
+//
+// FailJob — the ONE failure path, shared by the supervisor and the HTTP job
+//   client. Same title, same tail, same modal, whether the work ran in a child
+//   process here or in a container somewhere else; the user should not be able
+//   to tell which from the dialog.
+//
+void CPreviewPage::FailJob(const CString& label, const CString& detail)
+{
+    CString tail;
+    for (const CString& s : m_jobTail) { tail += s; tail += _T("\n"); }
+    if (tail.IsEmpty()) tail = _T("(no output was produced)");
+
+    CString msg;
+    msg.Format(_T("%s failed (%s).\n\nLast output:\n\n%s"),
+               (LPCTSTR)label, (LPCTSTR)detail, (LPCTSTR)tail);
+    SetJobStatus(label + _T(": FAILED"));
+    MessageBox(msg, label, MB_OK | MB_ICONERROR);
+}
+
+//
+// StartServiceJob — POST a job to the terrain service and follow it.
+//   The poll thread posts each new log line here, so the status line and the
+//   failure modal behave exactly as they do for a locally supervised build.
+//
+void CPreviewPage::StartServiceJob(const CString& label, const std::string& jsonBody)
+{
+    if (m_jobActive || m_proc.IsRunning())
+    {
+        MessageBox(_T("A terrain job is already running.\n\nEvery job writes the same tile ")
+                   _T("tree, so they cannot overlap."), label, MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    const TerrainEndpoint ep = ResolveTerrainEndpoint(theApp.Settings());
+
+    m_jobLabel = label;
+    m_jobTail.clear();
+    m_publishPending = false;   // the service holds its own tiles; nothing to publish
+    m_jobActive = true;
+    UpdateBuildButtons();
+
+    if (!m_svc.StartJob(GetSafeHwnd(), ep.host, ep.port, jsonBody))
+    {
+        m_jobActive = false;
+        UpdateBuildButtons();
+        MessageBox(_T("Could not start the job (one is already in flight)."),
+                   label, MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    CString status;
+    status.Format(_T("%s: submitted to %hs:%u..."), (LPCTSTR)label, ep.host.c_str(), ep.port);
+    SetJobStatus(status);
+    {
+        char buf[320];
+        sprintf_s(buf, sizeof(buf),
+                  "PreviewPage: submitted '%s' to terrain service %s:%u",
+                  (LPCSTR)CT2A(label), ep.host.c_str(), ep.port);
+        LOG(buf);
+    }
+}
+
+//
+// OnTerrainJobLine — one log line from the running service job. Mirrors
+//   OnProcOutput: newest into the status line, last N kept for the modal.
+//
+LRESULT CPreviewPage::OnTerrainJobLine(WPARAM, LPARAM lParam)
+{
+    char* line = reinterpret_cast<char*>(lParam);
+    if (!line) return 0;
+
+    const CString text(line);
+    delete[] line;                       // the poster heap-allocated it
+
+    if (!text.IsEmpty())
+    {
+        m_jobTail.push_back(text);
+        while (m_jobTail.size() > 25) m_jobTail.pop_front();
+        SetJobStatus(m_jobLabel + _T(": ") + text);
+        char buf[512];
+        sprintf_s(buf, sizeof(buf), "terrain job: %s", (LPCSTR)CT2A(text));
+        LOG(buf);
+    }
+    return 0;
+}
+
+//
+// OnTerrainJobDone — terminal state for a service job.
+//
+LRESULT CPreviewPage::OnTerrainJobDone(WPARAM wParam, LPARAM lParam)
+{
+    char* detail = reinterpret_cast<char*>(lParam);
+    const CString why(detail ? detail : "");
+    delete[] detail;
+
+    m_jobActive = false;
+    UpdateBuildButtons();
+
+    if (wParam == 0)
+    {
+        SetJobStatus(m_jobLabel + _T(": done"));
+        // Tiles just changed underneath DISBrowser; the probe also re-reads
+        // health so a newly-populated tree stops reading as degraded.
+        RefreshTerrainServerUi();
+    }
+    else
+    {
+        FailJob(m_jobLabel, why.IsEmpty() ? CString(_T("see log")) : why);
+    }
+    return 0;
+}
+
+//
+// UpdateBuildButtons — the build actions all write the same tile tree, so only
+//   one may run at a time. Previously nothing stopped the operator from
+//   launching several concurrent tiling pipelines over each other.
+//
+void CPreviewPage::UpdateBuildButtons()
+{
+    // "idle" covers both job sources: a locally supervised child AND an HTTP
+    // job running in the container. Either one owns the tile tree.
+    const BOOL idle = (m_proc.IsRunning() || m_jobActive) ? FALSE : TRUE;
+    const BOOL up   = m_terrainServerUp ? TRUE : FALSE;
+
+    if (CWnd* b = GetDlgItem(IDC_BTN_PREVIEW_BUILD_TERRAIN))  b->EnableWindow(idle && up);
+    if (CWnd* b = GetDlgItem(IDC_BTN_PREVIEW_BUILD_FOLIAGE))  b->EnableWindow(idle && up);
+    if (CWnd* b = GetDlgItem(IDC_BTN_PREVIEW_PURGE_TERRAIN))  b->EnableWindow(idle);
+}
+
+//
+// StartSupervised — launch one external job under the supervisor: output piped
+//   into the status line and the app log, real exit code checked on completion.
+//   Replaces ::ShellExecute, which could report only launch failures.
+//
+void CPreviewPage::StartSupervised(const CString& label,
+                                   const CString& commandLine,
+                                   const CString& workingDir)
+{
+    // Legacy mode reverts to the original behaviour on purpose: fire-and-forget
+    // into a console window, no piped output, no exit code, no job object. It
+    // exists so the old path can be fallen back to wholesale; the cost is that
+    // failures are invisible again, which is what the newer modes fix.
+    if (theApp.Settings().terrainMode == TerrainServerMode::Legacy)
+    {
+        // commandLine is "\"<exe>\" <args>" — ShellExecute wants them separated.
+        CString exe = commandLine, args;
+        if (commandLine.GetLength() > 1 && commandLine[0] == _T('"'))
+        {
+            const int close = commandLine.Find(_T('"'), 1);
+            if (close > 0)
+            {
+                exe  = commandLine.Mid(1, close - 1);
+                args = commandLine.Mid(close + 1);
+                args.Trim();
+            }
+        }
+
+        sprintf_s(szError, sizeof(szError), "PreviewPage: legacy launch (%s)",
+                  (LPCSTR)CT2A(label));
+        LOG(szError);
+
+        HINSTANCE h = ::ShellExecute(GetSafeHwnd(), _T("open"), exe,
+                                     args.IsEmpty() ? nullptr : (LPCTSTR)args,
+                                     workingDir.IsEmpty() ? nullptr : (LPCTSTR)workingDir,
+                                     SW_SHOWNORMAL);
+        if ((INT_PTR)h <= 32)
+        {
+            CString msg;
+            msg.Format(_T("Failed to launch %s (error %Id)."), (LPCTSTR)label, (INT_PTR)h);
+            MessageBox(msg, label, MB_OK | MB_ICONERROR);
+            return;
+        }
+        SetJobStatus(label + _T(": running in its own console window (legacy mode)"));
+        m_publishPending = false;   // legacy serves straight from ext4; no publish
+        return;
+    }
+
+    if (m_proc.IsRunning())
+    {
+        CString msg;
+        msg.Format(_T("%s is already running.\n\nWait for it to finish before starting another."),
+                   (LPCTSTR)m_jobLabel);
+        MessageBox(msg, label, MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    m_jobLabel = label;
+    m_jobTail.clear();
+
+    if (!m_proc.Start(GetSafeHwnd(),
+                      std::wstring(CT2W(commandLine)),
+                      std::wstring(CT2W(workingDir)),
+                      /*killWithApp*/ true))
+    {
+        CString msg;
+        msg.Format(_T("Could not start %s.\n\n%s"),
+                   (LPCTSTR)label, (LPCTSTR)CString(m_proc.LastError().c_str()));
+        MessageBox(msg, label, MB_OK | MB_ICONERROR);
+        SetJobStatus(label + _T(": failed to start"));
+        return;
+    }
+
+    SetJobStatus(label + _T(": running..."));
+    UpdateBuildButtons();
+}
+
+//
+// OnProcOutput — one line from the child. The supervisor allocated it; we own
+//   it now (contract documented on WM_APP_PROC_OUTPUT).
+//
+LRESULT CPreviewPage::OnProcOutput(WPARAM, LPARAM lParam)
+{
+    char* line = reinterpret_cast<char*>(lParam);
+    if (!line) return 0;
+
+    CString text(line);
+    delete[] line;
+
+    text.Trim();
+    if (text.IsEmpty()) return 0;
+
+    // The server chatters (404s, heartbeats) for as long as it runs; keep its
+    // output out of the build status line, but retain a tail so an unexpected
+    // stop can explain itself.
+    if (m_server.IsRunning() && !m_proc.IsRunning())
+    {
+        m_serverTail.push_back(text);
+        while (m_serverTail.size() > 10) m_serverTail.pop_front();
+        return 0;
+    }
+
+    SetJobStatus(m_jobLabel + _T(": ") + text);
+
+    // Keep a short tail so a failure can show what actually went wrong
+    // instead of just an exit code.
+    m_jobTail.push_back(text);
+    while (m_jobTail.size() > 25) m_jobTail.pop_front();
+    return 0;
+}
+
+//
+// OnProcExit — the job finished. Non-zero exit is raised as a modal with the
+//   tail of the child's own output: the whole point of this rework is that a
+//   failure can no longer hide in a console window nobody is looking at.
+//
+LRESULT CPreviewPage::OnProcExit(WPARAM wParam, LPARAM lParam)
+{
+    const DWORD code      = static_cast<DWORD>(wParam);
+    const bool  cancelled = (LOWORD(lParam) != 0);
+    const WORD  tag       = HIWORD(lParam);
+
+    // The terrain server shares this handler. Its exit is not a build result:
+    // it means the server stopped (we stopped it, it was killed, or the port
+    // was already taken), so report that and leave the build state alone.
+    if (tag == kTagServer)
+    {
+        if (!cancelled && code != 0)
+        {
+            CString tail;
+            for (const CString& s : m_serverTail) { tail += s; tail += _T("\n"); }
+            CString msg;
+            msg.Format(_T("The terrain server stopped unexpectedly (exit code %lu).\n\n%s"),
+                       code, tail.IsEmpty() ? _T("(no output)") : (LPCTSTR)tail);
+            SetJobStatus(_T("Terrain server: FAILED"));
+            MessageBox(msg, _T("Terrain Server"), MB_OK | MB_ICONERROR);
+        }
+        RefreshTerrainServerUi();
+        return 0;
+    }
+
+    m_proc.Join();
+    UpdateBuildButtons();
+
+    if (cancelled)
+    {
+        SetJobStatus(m_jobLabel + _T(": cancelled"));
+        m_publishPending = false;
+        return 0;
+    }
+
+    if (code != 0)
+    {
+        CString detail;
+        detail.Format(_T("exit code %lu"), code);
+        m_publishPending = false;
+        FailJob(m_jobLabel, detail);
+        return 0;
+    }
+
+    // Tiling wrote to ext4; publish to NTFS so the native server can see it.
+    // Only Local mode needs this: Legacy's serve.py reads ext4 directly, and in
+    // Remote mode the tiles being served live on another machine entirely.
+    if (m_publishPending && theApp.Settings().terrainMode == TerrainServerMode::Local)
+    {
+        m_publishPending = false;
+        SetJobStatus(m_jobLabel + _T(": tiling done, publishing tiles..."));
+
+        const CString shWin  = ResolveDisBrowserScript(_T("wsl\\publish_tiles.sh"));
+        const CString dest   = TerrainTilesDir();
+        CString cmd;
+        cmd.Format(_T("wsl.exe -d Ubuntu -u root -- bash \"%s\" \"%s\""),
+                   (LPCTSTR)WslPathOf(shWin), (LPCTSTR)WslPathOf(dest));
+        StartSupervised(_T("Publish terrain tiles"), cmd, _T(""));
+        return 0;
+    }
+
+    m_publishPending = false;
+    SetJobStatus(m_jobLabel + _T(": done"));
+    return 0;
+}
+
 void CPreviewPage::OnBuildTerrain()
 {
     if (!m_scenario || !m_scenario->terrainBoundsValid)
@@ -1605,39 +2485,60 @@ void CPreviewPage::OnBuildTerrain()
         return;
     }
 
-    // Resolve DISBrowser\Scripts\retile_terrain.cmd (same project-dir logic as the Run tab).
-    CString projDir;
-    const ::Settings& st = theApp.Settings();
-    if (!st.disBrowserProjectDir.empty())
-        projDir = CString(st.disBrowserProjectDir.c_str());
-    else
+    // In Service mode the pipeline lives in the container, so the DISBrowser
+    // scripts are irrelevant -- and requiring them would block a user who has
+    // no DISBrowser checkout at all. Resolve them only when we run them here.
+    CString projDir, cmdPath;
+    if (!ServiceMode())
     {
-        TCHAR exe[MAX_PATH] = { 0 };
-        ::GetModuleFileName(nullptr, exe, _countof(exe));
-        CString p(exe);
-        int slash = p.ReverseFind(_T('\\'));
-        if (slash > 0) p = p.Left(slash);
-        projDir = p + _T("\\..\\..\\..\\DISBrowser");
-    }
-    CString cmdPath = projDir + _T("\\Scripts\\retile_terrain.cmd");
+        const ::Settings& st = theApp.Settings();
+        if (!st.disBrowserProjectDir.empty())
+            projDir = CString(st.disBrowserProjectDir.c_str());
+        else
+        {
+            TCHAR exe[MAX_PATH] = { 0 };
+            ::GetModuleFileName(nullptr, exe, _countof(exe));
+            CString p(exe);
+            int slash = p.ReverseFind(_T('\\'));
+            if (slash > 0) p = p.Left(slash);
+            projDir = p + _T("\\..\\..\\..\\DISBrowser");
+        }
+        cmdPath = projDir + _T("\\Scripts\\retile_terrain.cmd");
 
-    if (::GetFileAttributes(cmdPath) == INVALID_FILE_ATTRIBUTES)
-    {
-        CString msg;
-        msg.Format(_T("Cannot find the re-tile script:\n%s\n\nSet the DISBrowser project folder on the Run tab."),
-                   (LPCTSTR)cmdPath);
-        MessageBox(msg, _T("Build 3D Terrain"), MB_OK | MB_ICONWARNING);
-        return;
+        if (::GetFileAttributes(cmdPath) == INVALID_FILE_ATTRIBUTES)
+        {
+            CString msg;
+            msg.Format(_T("Cannot find the re-tile script:\n%s\n\nSet the DISBrowser project folder on the Run tab."),
+                       (LPCTSTR)cmdPath);
+            MessageBox(msg, _T("Build 3D Terrain"), MB_OK | MB_ICONWARNING);
+            return;
+        }
     }
 
     CString confirm;
     confirm.Format(_T("Download DEM + build 3D terrain for:\n\n")
                    _T("  lat  %.4f .. %.4f\n  lon  %.4f .. %.4f\n\n")
-                   _T("This runs the WSL/Docker tiling pipeline and can take several minutes. Continue?"),
+                   _T("%s Continue?"),
                    m_scenario->terrainLatMinDeg, m_scenario->terrainLatMaxDeg,
-                   m_scenario->terrainLonMinDeg, m_scenario->terrainLonMaxDeg);
+                   m_scenario->terrainLonMinDeg, m_scenario->terrainLonMaxDeg,
+                   ServiceMode()
+                     ? _T("This is submitted to the terrain service, which downloads the DEM,\n")
+                       _T("tiles it, and verifies the result. It can take several minutes.")
+                     : _T("This runs the WSL/Docker tiling pipeline and can take several minutes."));
     if (MessageBox(confirm, _T("Build 3D Terrain"), MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
         return;
+
+    if (ServiceMode())
+    {
+        char body[256];
+        sprintf_s(body, sizeof(body),
+                  "{\"type\":\"build\",\"latMin\":%.6f,\"latMax\":%.6f,"
+                  "\"lonMin\":%.6f,\"lonMax\":%.6f}",
+                  m_scenario->terrainLatMinDeg, m_scenario->terrainLatMaxDeg,
+                  m_scenario->terrainLonMinDeg, m_scenario->terrainLonMaxDeg);
+        StartServiceJob(_T("Build 3D Terrain"), body);
+        return;
+    }
 
     // retile_terrain.cmd latMin latMax lonMin lonMax
     CString args;
@@ -1645,13 +2546,13 @@ void CPreviewPage::OnBuildTerrain()
                 m_scenario->terrainLatMinDeg, m_scenario->terrainLatMaxDeg,
                 m_scenario->terrainLonMinDeg, m_scenario->terrainLonMaxDeg);
 
-    HINSTANCE h = ::ShellExecute(GetSafeHwnd(), _T("open"), cmdPath, args, projDir, SW_SHOWNORMAL);
-    if ((INT_PTR)h <= 32)
-    {
-        CString msg;
-        msg.Format(_T("Failed to launch the re-tile script (error %Id)."), (INT_PTR)h);
-        MessageBox(msg, _T("Build 3D Terrain"), MB_OK | MB_ICONERROR);
-    }
+    // Tiling lands on ext4; publish to NTFS afterwards so TerrainServer.exe
+    // (a Windows process, which cannot read /root/terrain) can serve it.
+    m_publishPending = true;
+
+    CString cmd;
+    cmd.Format(_T("\"%s\" %s"), (LPCTSTR)cmdPath, (LPCTSTR)args);
+    StartSupervised(_T("Build 3D Terrain"), cmd, projDir);
 }
 
 //
@@ -1678,13 +2579,46 @@ void CPreviewPage::OnBuildFoliage()
         return;
     }
 
-    CString cmdPath = ResolveDisBrowserScript(_T("build_foliage.cmd"));
-    if (::GetFileAttributes(cmdPath) == INVALID_FILE_ATTRIBUTES)
+    CString cmdPath;
+    if (!ServiceMode())
     {
+        cmdPath = ResolveDisBrowserScript(_T("build_foliage.cmd"));
+        if (::GetFileAttributes(cmdPath) == INVALID_FILE_ATTRIBUTES)
+        {
+            CString msg;
+            msg.Format(_T("Cannot find the foliage bake script:\n%s\n\nSet the DISBrowser project folder on the Run tab."),
+                       (LPCTSTR)cmdPath);
+            MessageBox(msg, _T("Build i3dm Foliage"), MB_OK | MB_ICONWARNING);
+            return;
+        }
+    }
+
+    if (ServiceMode() && m_scenario && !m_scenario->foliageAreas.empty())
+    {
+        long long total = 0;
+        for (const FoliageArea& a : m_scenario->foliageAreas) total += a.treeCount;
         CString msg;
-        msg.Format(_T("Cannot find the foliage bake script:\n%s\n\nSet the DISBrowser project folder on the Run tab."),
-                   (LPCTSTR)cmdPath);
-        MessageBox(msg, _T("Build i3dm Foliage"), MB_OK | MB_ICONWARNING);
+        msg.Format(_T("Bake the i3dm tree tileset for %d painted area(s), %lld trees total?\n\n")
+                   _T("Where areas overlap, the shared ground belongs to the area painted ")
+                   _T("first, so the overlap is not planted twice."),
+                   static_cast<int>(m_scenario->foliageAreas.size()), total);
+        if (MessageBox(msg, _T("Build i3dm Foliage"), MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
+            return;
+
+        std::string body = "{\"type\":\"foliage\",\"minLand\":0.5,\"rects\":[";
+        for (size_t i = 0; i < m_scenario->foliageAreas.size(); ++i)
+        {
+            const FoliageArea& a = m_scenario->foliageAreas[i];
+            char one[240];
+            sprintf_s(one, sizeof(one),
+                      "%s{\"latMin\":%.6f,\"latMax\":%.6f,\"lonMin\":%.6f,"
+                      "\"lonMax\":%.6f,\"count\":%lld}",
+                      i ? "," : "",
+                      a.latMinDeg, a.latMaxDeg, a.lonMinDeg, a.lonMaxDeg, a.treeCount);
+            body += one;
+        }
+        body += "]}";
+        StartServiceJob(_T("Build i3dm Foliage"), body);
         return;
     }
 
@@ -1698,19 +2632,42 @@ void CPreviewPage::OnBuildFoliage()
     if (MessageBox(confirm, _T("Build i3dm Foliage"), MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
         return;
 
+    if (ServiceMode())
+    {
+        // Reaching here means NOTHING was painted -- the branch above returns
+        // whenever there are areas. Fall back to the terrain boundary as a
+        // single area so the button still does the obvious thing.
+        //
+        // NO "count" here, deliberately. Every painted area carries its own
+        // count; this is the one request without one, so it omits the field and
+        // lets the service apply [Foliage] DefaultCount. Hardcoding a number
+        // here would be a second, silently disagreeing default.
+        char one[220];
+        sprintf_s(one, sizeof(one),
+                  "{\"latMin\":%.6f,\"latMax\":%.6f,\"lonMin\":%.6f,"
+                  "\"lonMax\":%.6f}",
+                  m_scenario->terrainLatMinDeg, m_scenario->terrainLatMaxDeg,
+                  m_scenario->terrainLonMinDeg, m_scenario->terrainLonMaxDeg);
+        std::string body = "{\"type\":\"foliage\",\"minLand\":0.5,\"rects\":[";
+        body += one;
+        body += "]}";
+        StartServiceJob(_T("Build i3dm Foliage"), body);
+        return;
+    }
+
     // build_foliage.cmd latMin latMax lonMin lonMax --count N --min-land M
     CString args;
     args.Format(_T("%.6f %.6f %.6f %.6f --count 20000 --min-land 0.5"),
                 m_scenario->terrainLatMinDeg, m_scenario->terrainLatMaxDeg,
                 m_scenario->terrainLonMinDeg, m_scenario->terrainLonMaxDeg);
 
-    HINSTANCE h = ::ShellExecute(GetSafeHwnd(), _T("open"), cmdPath, args, nullptr, SW_SHOWNORMAL);
-    if ((INT_PTR)h <= 32)
-    {
-        CString msg;
-        msg.Format(_T("Failed to launch the foliage bake script (error %Id)."), (INT_PTR)h);
-        MessageBox(msg, _T("Build i3dm Foliage"), MB_OK | MB_ICONERROR);
-    }
+    // The i3dm tileset is written under tiles/foliage/, so it needs publishing
+    // to NTFS exactly like the terrain does.
+    m_publishPending = true;
+
+    CString cmd;
+    cmd.Format(_T("\"%s\" %s"), (LPCTSTR)cmdPath, (LPCTSTR)args);
+    StartSupervised(_T("Build i3dm Foliage"), cmd, _T(""));
 }
 
 //
@@ -1720,14 +2677,18 @@ void CPreviewPage::OnBuildFoliage()
 //
 void CPreviewPage::OnPurgeTerrain()
 {
-    CString cmdPath = ResolveDisBrowserScript(_T("retile_terrain.cmd"));
-    if (::GetFileAttributes(cmdPath) == INVALID_FILE_ATTRIBUTES)
+    CString cmdPath;
+    if (!ServiceMode())
     {
-        CString msg;
-        msg.Format(_T("Cannot find the re-tile script:\n%s\n\nSet the DISBrowser project folder on the Run tab."),
-                   (LPCTSTR)cmdPath);
-        MessageBox(msg, _T("Purge Terrain"), MB_OK | MB_ICONWARNING);
-        return;
+        cmdPath = ResolveDisBrowserScript(_T("retile_terrain.cmd"));
+        if (::GetFileAttributes(cmdPath) == INVALID_FILE_ATTRIBUTES)
+        {
+            CString msg;
+            msg.Format(_T("Cannot find the re-tile script:\n%s\n\nSet the DISBrowser project folder on the Run tab."),
+                       (LPCTSTR)cmdPath);
+            MessageBox(msg, _T("Purge Terrain"), MB_OK | MB_ICONWARNING);
+            return;
+        }
     }
 
     if (MessageBox(_T("Delete ALL downloaded 3D terrain?\n\n")
@@ -1737,13 +2698,31 @@ void CPreviewPage::OnPurgeTerrain()
                    _T("Purge Terrain"), MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
         return;
 
-    HINSTANCE h = ::ShellExecute(GetSafeHwnd(), _T("open"), cmdPath, _T("--purge --yes"),
-                                 nullptr, SW_SHOWNORMAL);
-    if ((INT_PTR)h <= 32)
+    if (ServiceMode())
     {
-        CString msg;
-        msg.Format(_T("Failed to launch the purge (error %Id)."), (INT_PTR)h);
-        MessageBox(msg, _T("Purge Terrain"), MB_OK | MB_ICONERROR);
+        // The service purges its own tree. Critically, we must NOT also delete
+        // the NTFS copy below: in Service mode that copy belongs to the Local
+        // fallback, and wiping it would destroy the very thing you fall back to.
+        StartServiceJob(_T("Purge Terrain"), "{\"type\":\"purge\"}");
+        return;
+    }
+
+    CString cmd;
+    cmd.Format(_T("\"%s\" --purge --yes"), (LPCTSTR)cmdPath);
+    StartSupervised(_T("Purge Terrain"), cmd, _T(""));
+
+    // The published NTFS copy is now stale; drop it so the server doesn't keep
+    // serving tiles the source no longer has. Local mode only -- see above.
+    const CString dest = TerrainTilesDir();
+    if (::GetFileAttributes(dest) != INVALID_FILE_ATTRIBUTES)
+    {
+        SHFILEOPSTRUCT op = { 0 };
+        CString from = dest;
+        from.AppendChar(_T('\0'));          // SHFileOperation wants a double-NUL list
+        op.wFunc  = FO_DELETE;
+        op.pFrom  = from;
+        op.fFlags = FOF_NO_UI;
+        ::SHFileOperation(&op);
     }
 }
 
@@ -1768,7 +2747,7 @@ CString CPreviewPage::ResolveDisBrowserScript(const CString& fileName) const
 
 void CPreviewPage::RefreshTerrainServerUi()
 {
-    const bool up = ProbeTcpPort("127.0.0.1", 8088, 250);
+    const bool up = ProbeTcpPort(TerrainHost(), TerrainPort(), 250);
     const bool changed = (up != m_terrainServerUp);
     m_terrainServerUp = up;
 
@@ -1776,8 +2755,10 @@ void CPreviewPage::RefreshTerrainServerUi()
     // them, so gate those behind the server being up. Stop is only useful when up;
     // Start stays enabled (it repaints its own green "running" check).
     if (CWnd* b = GetDlgItem(IDC_BTN_PREVIEW_BOUNDARY))      b->EnableWindow(up);
-    if (CWnd* b = GetDlgItem(IDC_BTN_PREVIEW_BUILD_TERRAIN)) b->EnableWindow(up);
     if (CWnd* b = GetDlgItem(IDC_BTN_PREVIEW_TERRAIN_STOP))  b->EnableWindow(up);
+    // Build/Purge also depend on no job already being in flight — they all
+    // write the same tile tree, so concurrent runs would corrupt it.
+    UpdateBuildButtons();
     if (CWnd* b = GetDlgItem(IDC_BTN_PREVIEW_TERRAIN_START)) b->Invalidate();
 
     // If the server dropped while boundary paint was armed, disarm it so the canvas
@@ -1791,9 +2772,51 @@ void CPreviewPage::RefreshTerrainServerUi()
             m_cesium.SetBoundaryMode(false);
     }
 
+    // In Service mode the port answering is not the whole story: the container
+    // can be up with an empty or unmounted tile tree, which health reports as
+    // "degraded". Ask at most every ~5s -- the TCP probe stays the cheap check.
+    if (up && ServiceMode())
+    {
+        if (++m_healthTick >= 4)
+        {
+            m_healthTick = 0;
+            int status = 0;
+            std::string body;
+            const TerrainEndpoint ep = ResolveTerrainEndpoint(theApp.Settings());
+            if (TerrainServiceClient::Get(ep.host, ep.port, "/api/v1/health", status, body) &&
+                status == 200)
+            {
+                std::string s;
+                TerrainServiceClient::FindString(body, "status", s);
+                const CString now(s.c_str());
+                if (now != m_svcHealth)
+                {
+                    m_svcHealth = now;
+                    char buf[160];
+                    sprintf_s(buf, sizeof(buf),
+                              "PreviewPage: terrain service health=%s", s.c_str());
+                    LOG(buf);
+                    if (now == _T("degraded") && !m_jobActive)
+                        SetJobStatus(_T("Terrain service: reachable but no tiles yet ")
+                                     _T("(build one to populate it)"));
+                }
+            }
+        }
+    }
+    else m_svcHealth.Empty();
+
     if (changed)
-        LOG(up ? "PreviewPage: terrain server UP (localhost:8088)"
-               : "PreviewPage: terrain server DOWN");
+    {
+        const TerrainEndpoint ep = ResolveTerrainEndpoint(theApp.Settings());
+        // Was hardcoded "localhost:8088" regardless of mode, which made a
+        // Remote/Service outage read as a local one.
+        char buf[200];
+        sprintf_s(buf, sizeof(buf),
+                  up ? "PreviewPage: terrain server UP (%s:%u)"
+                     : "PreviewPage: terrain server DOWN (%s:%u)",
+                  ep.host.c_str(), ep.port);
+        LOG(buf);
+    }
 }
 
 //
@@ -1803,43 +2826,278 @@ void CPreviewPage::RefreshTerrainServerUi()
 //
 void CPreviewPage::OnStartTerrainServer()
 {
-    if (m_terrainServerUp || ProbeTcpPort("127.0.0.1", 8088, 250))
+    if (m_terrainServerUp || ProbeTcpPort(TerrainHost(), TerrainPort(), 250))
     {
         RefreshTerrainServerUi();   // already running — just sync the UI
         return;
     }
 
-    CString cmdPath = ResolveDisBrowserScript(_T("serve_terrain.cmd"));
-    if (::GetFileAttributes(cmdPath) == INVALID_FILE_ATTRIBUTES)
+    const ::Settings& stt = theApp.Settings();
+
+    // Remote: the tiles are served by another machine, so there is nothing to
+    // start. Say so rather than silently doing nothing.
+    if (stt.terrainMode == TerrainServerMode::Remote)
     {
         CString msg;
-        msg.Format(_T("Cannot find the terrain server script:\n%s\n\nSet the DISBrowser project folder on the Run tab."),
-                   (LPCTSTR)cmdPath);
+        msg.Format(_T("Terrain mode is Remote (%hs:%u), so there is no local server to start.\n\n")
+                   _T("The editor only checks that the remote server answers. To run one here, ")
+                   _T("set [Terrain] Mode=Local (or Legacy) in settings.ini."),
+                   (LPCSTR)TerrainHost(), static_cast<unsigned>(TerrainPort()));
+        MessageBox(msg, _T("Start Terrain Server"), MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    if (stt.terrainMode == TerrainServerMode::Service)
+    {
+        // The container is deliberately not ours to start: it has
+        // restart: unless-stopped and outlives every editor session.
+        CString msg;
+        msg.Format(_T("Terrain mode is Service (%hs:%u).\n\n")
+                   _T("The terrain service runs as an independent container and is not started ")
+                   _T("or stopped from here. Bring it up in WSL with:\n\n")
+                   _T("    cd ~/projects/planeswalker/terrainserver\n")
+                   _T("    ./scripts/up.sh"),
+                   (LPCSTR)TerrainHost(), static_cast<unsigned>(TerrainPort()));
+        MessageBox(msg, _T("Start Terrain Server"), MB_OK | MB_ICONINFORMATION);
+        RefreshTerrainServerUi();
+        return;
+    }
+
+    // Legacy: the original console-window path, kept as a fallback.
+    if (stt.terrainMode == TerrainServerMode::Legacy)
+    {
+        CString cmdPath = ResolveDisBrowserScript(_T("serve_terrain.cmd"));
+        if (::GetFileAttributes(cmdPath) == INVALID_FILE_ATTRIBUTES)
+        {
+            CString msg;
+            msg.Format(_T("Cannot find the terrain server script:\n%s\n\nSet the DISBrowser project folder on the Run tab."),
+                       (LPCTSTR)cmdPath);
+            MessageBox(msg, _T("Start Terrain Server"), MB_OK | MB_ICONWARNING);
+            return;
+        }
+        // Its console window is load-bearing here: the foreground wsl.exe is what
+        // keeps the WSL VM (and therefore serve.py) alive.
+        HINSTANCE h = ::ShellExecute(GetSafeHwnd(), _T("open"), cmdPath, nullptr, nullptr, SW_SHOWNORMAL);
+        if ((INT_PTR)h <= 32)
+        {
+            CString msg;
+            msg.Format(_T("Failed to launch the terrain server (error %Id)."), (INT_PTR)h);
+            MessageBox(msg, _T("Start Terrain Server"), MB_OK | MB_ICONERROR);
+            return;
+        }
+        SetJobStatus(_T("Terrain server: launching legacy serve.py in WSL (see its console window)"));
+        RefreshTerrainServerUi();
+        return;
+    }
+
+    // Local: TerrainServer.exe ships beside the editor. No console window, no
+    // WSL, and it can be stopped by handle instead of by `pkill -f serve.py`
+    // against a guessed distro name.
+    TCHAR exe[MAX_PATH] = { 0 };
+    ::GetModuleFileName(nullptr, exe, _countof(exe));
+    CString serverExe(exe);
+    const int slash = serverExe.ReverseFind(_T('\\'));
+    if (slash > 0) serverExe = serverExe.Left(slash);
+    serverExe += _T("\\TerrainServer.exe");
+
+    if (::GetFileAttributes(serverExe) == INVALID_FILE_ATTRIBUTES)
+    {
+        CString msg;
+        msg.Format(_T("Cannot find the terrain server:\n%s\n\nRebuild the solution ")
+                   _T("(the TerrainServer target builds alongside ScenarioEditor)."),
+                   (LPCTSTR)serverExe);
         MessageBox(msg, _T("Start Terrain Server"), MB_OK | MB_ICONWARNING);
         return;
     }
 
-    // Launch the server in its own console (it stays up independently of this editor).
-    HINSTANCE h = ::ShellExecute(GetSafeHwnd(), _T("open"), cmdPath, nullptr, nullptr, SW_SHOWNORMAL);
-    if ((INT_PTR)h <= 32)
+    const CString tiles = TerrainTilesDir();
+    if (::GetFileAttributes(tiles) == INVALID_FILE_ATTRIBUTES)
     {
         CString msg;
-        msg.Format(_T("Failed to launch the terrain server (error %Id)."), (INT_PTR)h);
+        msg.Format(_T("No published terrain tiles yet:\n%s\n\nRun \"Build 3D Terrain\" ")
+                   _T("- tiles are published there when tiling finishes."),
+                   (LPCTSTR)tiles);
+        MessageBox(msg, _T("Start Terrain Server"), MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    CString cmd;
+    cmd.Format(_T("\"%s\" \"%s\" 8088"), (LPCTSTR)serverExe, (LPCTSTR)tiles);
+
+    // killWithApp = false: closing the editor deliberately leaves the server
+    // running so a live DISBrowser keeps its terrain (see OnDestroy).
+    if (!m_server.Start(GetSafeHwnd(), std::wstring(CT2W(cmd)), std::wstring(), false))
+    {
+        CString msg;
+        msg.Format(_T("Failed to start the terrain server.\n\n%s"),
+                   (LPCTSTR)CString(m_server.LastError().c_str()));
         MessageBox(msg, _T("Start Terrain Server"), MB_OK | MB_ICONERROR);
         return;
     }
-    // The server needs a moment to bind :8088; the poll timer flips the UI to
-    // "running" (green check + enables Boundary/Build) as soon as the port answers.
+
+    SetJobStatus(_T("Terrain server: starting on http://localhost:8088"));
+    // The poll timer flips the UI to "running" as soon as the port answers.
     RefreshTerrainServerUi();
 }
 
 void CPreviewPage::OnStopTerrainServer()
 {
-    // Kill the WSL-side server process; its console window then closes on its own.
-    ::ShellExecute(GetSafeHwnd(), _T("open"), _T("wsl.exe"),
-                   _T("-d Ubuntu -u root -- pkill -f serve.py"), nullptr, SW_HIDE);
-    // The port may take a beat to drop; the poll timer will settle the final state.
+    const ::Settings& stt = theApp.Settings();
+
+    if (stt.terrainMode == TerrainServerMode::Remote)
+    {
+        MessageBox(_T("Terrain mode is Remote, so there is no local server to stop.\n\n")
+                   _T("Stop it on the machine that hosts it."),
+                   _T("Stop Terrain Server"), MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    if (stt.terrainMode == TerrainServerMode::Service)
+    {
+        MessageBox(_T("Terrain mode is Service, so there is no local server to stop.\n\n")
+                   _T("Stop the container in WSL:\n\n")
+                   _T("    cd ~/projects/planeswalker/terrainserver\n")
+                   _T("    ./scripts/down.sh"),
+                   _T("Stop Terrain Server"), MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    if (stt.terrainMode == TerrainServerMode::Legacy)
+    {
+        // Legacy has no handle to hold: kill by process name inside WSL, exactly
+        // as before. Fire-and-forget, and it only finds serve.py in this distro.
+        ::ShellExecute(GetSafeHwnd(), _T("open"), _T("wsl.exe"),
+                       _T("-d Ubuntu -u root -- pkill -f serve.py"), nullptr, SW_HIDE);
+        SetJobStatus(_T("Terrain server: sent pkill to serve.py in WSL"));
+        RefreshTerrainServerUi();
+        return;
+    }
+
+    if (m_server.IsRunning())
+    {
+        // Stop the process we actually started, by handle.
+        m_server.Cancel();
+        m_server.Join();
+        SetJobStatus(_T("Terrain server: stopped"));
+    }
+    else
+    {
+        // Nothing of ours is running, but the port may still be held by a
+        // server left over from an earlier editor session (that is the point of
+        // not killing it on exit) or by a legacy serve.py inside WSL.
+        if (ProbeTcpPort(TerrainHost(), TerrainPort(), 250))
+        {
+            MessageBox(_T("Port 8088 is being served by a process this editor did not start ")
+                       _T("- most likely a terrain server left running from an earlier session, ")
+                       _T("or a legacy serve.py inside WSL.\n\n")
+                       _T("Close that process (Task Manager: TerrainServer.exe) to free the port."),
+                       _T("Stop Terrain Server"), MB_OK | MB_ICONINFORMATION);
+        }
+    }
+    // The port may take a beat to drop; the poll timer settles the final state.
     RefreshTerrainServerUi();
+}
+
+//
+// DrawCheckBox — paint one "Show" check box in the page's dark theme, with the
+//   box drawn kCheckScale times the size Windows would use. The stock glyph is a
+//   fixed 13 logical pixels sized for an 8pt dialog; this page's template is 12pt,
+//   so the system box ends up far smaller than the text beside it and is genuinely
+//   hard to see. Drawing it ourselves is the only way to change that size -- a
+//   check box glyph is not settable by style or message -- and it also lets the
+//   box follow the display DPI and the row height instead of a fixed pixel count.
+//
+//   Owner-draw buttons do not track their own state at all, so the checked flag
+//   comes from CheckBoxState (the m_show* member), never from the control.
+//
+void CPreviewPage::DrawCheckBox(LPDRAWITEMSTRUCT dis)
+{
+    if (!dis) return;
+
+    const bool checked = CheckBoxState(static_cast<int>(dis->CtlID));
+
+    CDC* dc  = CDC::FromHandle(dis->hDC);
+    CRect rc = dis->rcItem;
+
+    const COLORREF kText    = RGB(255, 255, 255);
+    const COLORREF kBack    = RGB(0, 0, 0);
+    const COLORREF kBoxEdge = RGB(200, 200, 200);
+    const COLORREF kCheck   = RGB(80, 220, 80);   // the green the armed buttons use
+
+    // The page is a dark theme, but a BS_OWNERDRAW button gets no WM_CTLCOLORBTN
+    // treatment -- without this fill it comes up on the default light button face.
+    dc->FillSolidRect(&rc, kBack);
+
+    // Box side: the stock glyph scaled for this display's DPI, times kCheckScale,
+    // but never taller than the row it has to sit in.
+    const int dpiY    = dc->GetDeviceCaps(LOGPIXELSY);
+    const int baseBox = std::max(1, MulDiv(kCheckBaseLogicalPx, dpiY, 96));
+    int box = baseBox * kCheckScale;
+    box = std::min<int>(box, std::max<int>(1, rc.Height() - 2));
+
+    const int boxTop = rc.top + (rc.Height() - box) / 2;
+    CRect boxRc(rc.left, boxTop, rc.left + box, boxTop + box);
+
+    // Outline. A hairline edge would vanish next to a doubled box, so scale it too.
+    {
+        const int edgeW = std::max(1, box / 10);
+        CPen pen(PS_SOLID, edgeW, kBoxEdge);
+        CPen*   oldPen   = dc->SelectObject(&pen);
+        CBrush* oldBrush = (CBrush*)dc->SelectStockObject(NULL_BRUSH);
+        dc->Rectangle(&boxRc);
+        if (oldPen)   dc->SelectObject(oldPen);
+        if (oldBrush) dc->SelectObject(oldBrush);
+    }
+
+    // Check mark: a two-segment stroke inside the box, round-capped and joined so
+    // the corner reads cleanly at this weight.
+    if (checked)
+    {
+        const LOGBRUSH lb = { BS_SOLID, kCheck, 0 };
+        HPEN hp = ::ExtCreatePen(PS_GEOMETRIC | PS_SOLID | PS_ENDCAP_ROUND | PS_JOIN_ROUND,
+                                 std::max(2, box / 6), &lb, 0, nullptr);
+        if (hp)
+        {
+            HGDIOBJ oldPen = ::SelectObject(dis->hDC, hp);
+            auto at = [&](double fx, double fy)
+            {
+                return CPoint(boxRc.left + static_cast<int>(box * fx + 0.5),
+                              boxRc.top  + static_cast<int>(box * fy + 0.5));
+            };
+            const CPoint pts[3] = { at(0.24, 0.52), at(0.43, 0.73), at(0.78, 0.27) };
+            dc->Polyline(pts, 3);
+            ::SelectObject(dis->hDC, oldPen);
+            ::DeleteObject(hp);
+        }
+    }
+
+    // Label, vertically centered against the box.
+    CString label;
+    ::GetWindowText(dis->hwndItem, label.GetBuffer(128), 128);
+    label.ReleaseBuffer();
+
+    HFONT  hf      = (HFONT)::SendMessage(dis->hwndItem, WM_GETFONT, 0, 0);
+    CFont* oldFont = hf ? dc->SelectObject(CFont::FromHandle(hf)) : nullptr;
+    const int      oldBk    = dc->SetBkMode(TRANSPARENT);
+    const COLORREF oldColor = dc->SetTextColor(kText);
+
+    CRect textRc(boxRc.right + static_cast<int>(box * kCheckLabelGap),
+                 rc.top, rc.right, rc.bottom);
+    dc->DrawText(label, &textRc,
+                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+
+    // Focus ring around the label, so keyboard users can still see where they are.
+    if (dis->itemState & ODS_FOCUS)
+    {
+        CRect focusRc = textRc;
+        focusRc.right = std::min<LONG>(focusRc.right,
+                                       textRc.left + dc->GetTextExtent(label).cx + 2);
+        dc->DrawFocusRect(&focusRc);
+    }
+
+    dc->SetTextColor(oldColor);
+    dc->SetBkMode(oldBk);
+    if (oldFont) dc->SelectObject(oldFont);
 }
 
 void CPreviewPage::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT lpDIS)
@@ -1851,7 +3109,17 @@ void CPreviewPage::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT lpDIS)
     const bool isBoundary = (nIDCtl == IDC_BTN_PREVIEW_BOUNDARY);
     const bool isSrvStart = (nIDCtl == IDC_BTN_PREVIEW_TERRAIN_START);
     const bool isShowOrig = (nIDCtl == IDC_BTN_PREVIEW_SHOW_ORIGIN);
-    if ((!isSetStart && !isBoundary && !isSrvStart && !isShowOrig) || !lpDIS)
+    const bool isFolArea  = (nIDCtl == IDC_BTN_PREVIEW_FOLIAGE_AREA);
+
+    // The "Show" check boxes are owner-draw too, but painted by DrawCheckBox --
+    // they want a box-and-label, not a push-button face.
+    if (lpDIS && IsPreviewCheckBox(nIDCtl))
+    {
+        DrawCheckBox(lpDIS);
+        return;
+    }
+
+    if ((!isSetStart && !isBoundary && !isSrvStart && !isShowOrig && !isFolArea) || !lpDIS)
     {
         CHelpAwarePage::OnDrawItem(nIDCtl, lpDIS);
         return;
@@ -1873,10 +3141,20 @@ void CPreviewPage::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT lpDIS)
     // origin marker shown.
     const bool  showHint = isSetStart ? m_startPickArmed
                          : isBoundary ? m_boundaryArmed
+                         : isFolArea  ? m_foliageAreaArmed
                          : isShowOrig ? m_showOrigin
                                       : m_terrainServerUp;
+    // The Foliage Area label carries the painted count, so the tab shows at a
+    // glance whether a bake will use one rectangle or several.
+    CString folLabel(_T("Foliage Area"));
+    if (isFolArea && m_scenario && !m_scenario->foliageAreas.empty())
+        folLabel.Format(_T("Foliage Area (%d)"),
+                        static_cast<int>(m_scenario->foliageAreas.size()));
+
     CString base = isSetStart ? _T("Set Start")
                  : isBoundary ? _T("Boundary")
+                 : isFolArea  ? (LPCTSTR)folLabel   // cast: keep every arm LPCTSTR so the
+                                                    // chained ?: has one unambiguous type
                  : isShowOrig ? _T("Show Origin")
                  : (m_terrainServerUp ? _T("Terrain Server") : _T("Start Terrain Server"));
     CString hint = isSetStart ? _T(" ?") : _T(" \x2713");   // U+2713 check for Boundary/Server/Origin
@@ -2393,6 +3671,7 @@ void CPreviewPage::OnCamScaleChange()
     m_timeline.SetTimeScale(kCamScales[sel].seconds);
     m_timeline.SetScrollOffset(0);           // re-home the view on a zoom change
     UpdateCameraScrollBar();
+    PersistPreviewView();
     if (m_timeline.GetSafeHwnd()) m_timeline.Invalidate(FALSE);
 }
 
@@ -2551,18 +3830,7 @@ void CPreviewPage::PopulateCameraCombos()
         }
         tgt->SetCurSel(0);
     }
-    if (CComboBox* pre = (CComboBox*)GetDlgItem(IDC_COMBO_CAM_PRESET))
-    {
-        pre->ResetContent();
-        const auto& presets = theApp.CameraPresets().Presets();
-        for (size_t i = 0; i < presets.size(); ++i)
-        {
-            CString label(CA2W(presets[i].DisplayLabel().c_str()));
-            const int ix = pre->AddString(label);
-            pre->SetItemData(ix, static_cast<DWORD_PTR>(i));
-        }
-        if (pre->GetCount() > 0) pre->SetCurSel(0);
-    }
+    RefreshCameraPresetCombo();   // depends on the entity combo filled just above
     if (CComboBox* trn = (CComboBox*)GetDlgItem(IDC_COMBO_CAM_TRANSITION))
     {
         if (trn->GetCount() == 0)   // fixed two-item list; seed once
@@ -2574,9 +3842,54 @@ void CPreviewPage::PopulateCameraCombos()
     }
 }
 
+//-----------------------------------------------------------------------------
+// SelectedCameraEntityTypeKey — Cameras.ini <Type> for the selected entity
+//   Resolved through DISBrowser's Hanger.ini, which is the same source
+//   FDISConfigLoader::ResolveCameraTypeKey uses at runtime. Returns "" when the
+//   map could not be loaded (no DISBrowser folder set yet) or the entity's tuple
+//   has no hanger entry — the caller treats both as "don't filter".
 //
-// OnNewCamera — "New Cam" button: drop a Stationary camera box in the upper-left
-//   of the current view and register a matching frame on the timeline.
+std::string CPreviewPage::SelectedCameraEntityTypeKey() const
+{
+    if (!m_scenario) return std::string();
+    const CComboBox* ent = (const CComboBox*)GetDlgItem(IDC_COMBO_CAM_ENTITY);
+    if (!ent) return std::string();
+    const int ei = ent->GetCurSel();
+    if (ei < 0) return std::string();
+
+    return CameraPresetCombo::TypeKeyForEntityId(
+        *m_scenario, static_cast<uint16_t>(ent->GetItemData(ei)));
+}
+
+//-----------------------------------------------------------------------------
+// RefreshCameraPresetCombo — refill the preset dropdown for the selected entity
+//   The listing rules (own type first and preselected, other types below a
+//   separator, an explanatory notice when the entity has none) live in
+//   CameraPresetCombo::Populate, shared with the New Camera dialog so the two
+//   cannot drift apart.
+//
+void CPreviewPage::RefreshCameraPresetCombo()
+{
+    CComboBox* pre = (CComboBox*)GetDlgItem(IDC_COMBO_CAM_PRESET);
+    if (!pre) return;
+
+    // Land on a correct preset when one exists; otherwise on the notice, so Add
+    // refuses and explains instead of quietly mounting whatever sorted first.
+    const int firstMatch = CameraPresetCombo::Populate(*pre, SelectedCameraEntityTypeKey());
+    pre->SetCurSel(firstMatch >= 0 ? firstMatch : 0);
+}
+
+//-----------------------------------------------------------------------------
+// OnCamEntityChanged — the camera Entity dropdown changed selection
+//
+void CPreviewPage::OnCamEntityChanged()
+{
+    RefreshCameraPresetCombo();
+}
+
+//
+// NextStationaryCameraLabel — the lowest unused "Camera N" name. Source-less
+//   cameras have no entity to name them after, so they are numbered instead.
 //
 std::string CPreviewPage::NextStationaryCameraLabel() const
 {
@@ -2595,14 +3908,48 @@ std::string CPreviewPage::NextStationaryCameraLabel() const
     }
 }
 
-void CPreviewPage::OnNewCamera()
+//
+// CreateCameraFromDialog — turn an accepted New Camera dialog into a frame.
+//
+//   Both creation paths land here; they differ only in which source the dialog
+//   opened on. A source of 0 means the operator chose "(none)": build the
+//   entity-less Stationary camera the "New Cam..." button used to create
+//   directly, at a vantage in the upper-left of the current view so it lands
+//   somewhere visible and draggable rather than at the scenario origin.
+//
+void CPreviewPage::CreateCameraFromDialog(const CEntityCameraDialog& dlg)
 {
     if (!m_scenario) return;
+
+    const uint16_t srcId = dlg.SourceEntityId();
+
+    if (srcId != 0)
+    {
+        // Mounted on an entity: reuse the existing Entity-camera path, which also
+        // builds the "<entity> / <type> / <angle>" label.
+        for (size_t i = 0; i < m_scenario->entities.size(); ++i)
+        {
+            if (m_scenario->entities[i].entityId != srcId) continue;
+            AddEntityCameraFrame(i, dlg.PresetIndex(),
+                                 dlg.TargetEntityId(), dlg.Transition(),
+                                 dlg.ZoomEnabled(), dlg.ZoomFovDeg(),
+                                 dlg.DynamicZoom(), dlg.ZoomFillPct(),
+                                 dlg.LimitsEnabled(),
+                                 dlg.TransitionSeconds(), dlg.Label());
+            // After PresetIndex() has been consumed: writing the envelope reloads
+            // the catalog, which invalidates that index.
+            ApplyEnvelopeFromDialog(dlg);
+            return;
+        }
+        return;   // source vanished between opening the dialog and OK
+    }
 
     CameraFrame f;
     f.kind = CameraKind::Stationary;
 
     // Upper-left region of the current view (fallback: up-and-left of center).
+    // RebuildRenderState draws a Stationary frame at vantEast/North, so leaving
+    // these at zero would park the new camera on the scenario origin instead.
     double east = m_centerEnuE - 500.0, north = m_centerEnuN + 500.0;
     if (m_canvas.GetSafeHwnd())
     {
@@ -2616,11 +3963,31 @@ void CPreviewPage::OnNewCamera()
         }
     }
     f.vantEastM = east; f.vantNorthM = north; f.vantUpM = 0.0;
+
+    // A source-less camera carries no preset or envelope, but it can still track a
+    // target, cut with a transition, and zoom.
+    f.targetEntityId    = dlg.TargetEntityId();
+    f.transition        = dlg.Transition();
+    f.transitionSeconds = dlg.TransitionSeconds();
+    f.zoomEnabled       = dlg.ZoomEnabled();
+    f.zoomFovDeg        = dlg.ZoomFovDeg();
+    f.dynamicZoom       = dlg.DynamicZoom();
+    f.zoomFillPct       = dlg.ZoomFillPct();
+
+    // The operator can now place a stationary camera numerically instead of
+    // dragging it — including its height, which the canvas cannot express at all.
+    if (dlg.VantEastM() != 0.0 || dlg.VantNorthM() != 0.0 || dlg.VantUpM() != 0.0)
+    {
+        f.vantEastM  = dlg.VantEastM();
+        f.vantNorthM = dlg.VantNorthM();
+        f.vantUpM    = dlg.VantUpM();
+    }
+
     // Unique "Camera N": pick the lowest N whose label isn't already in use.
     // Deriving it from cameras.size()+1 collides after a delete-then-add (e.g.
     // deleting one of six leaves size 5, and "Camera 6" is regenerated as a
     // duplicate), which is exactly the two-"Camera 6" case the operator hit.
-    f.label = NextStationaryCameraLabel();
+    f.label = dlg.Label().empty() ? NextStationaryCameraLabel() : dlg.Label();
 
     AddCameraFrame(std::move(f));
 
@@ -2629,6 +3996,22 @@ void CPreviewPage::OnNewCamera()
     if (m_timeline.GetSafeHwnd()) m_timeline.Invalidate(FALSE);
     if (CWnd* top = GetTopLevelParent())
         top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+}
+
+//
+// OnNewCamera — "New Cam..." button: the same modal the entity-dot right-click
+//   uses, opened with no source preselected so OK yields a Stationary camera.
+//   Routing both through one dialog is why the button gained an ellipsis.
+//
+void CPreviewPage::OnNewCamera()
+{
+    if (!m_scenario) return;
+
+    CEntityCameraDialog dlg(this);
+    dlg.SetContext(m_scenario, 0);      // 0 = "(none)"
+    if (dlg.DoModal() != IDOK) return;
+
+    CreateCameraFromDialog(dlg);
 }
 
 //
@@ -2656,7 +4039,18 @@ void CPreviewPage::OnAddCamera()
         AfxMessageBox(_T("No camera presets are available (config\\Cameras.ini)."));
         return;
     }
-    const size_t pidx = static_cast<size_t>(pre->GetItemData(pi));
+    const DWORD_PTR pdata = pre->GetItemData(pi);
+    if (pdata == CameraPresetCombo::kRowNotSelectable)
+    {
+        // The separator, or the notice shown when this entity's type has no views.
+        AfxMessageBox(_T("That row isn't a camera preset.\n\n")
+                      _T("Pick one of this entity's own views, or a preset under ")
+                      _T("\"other types\" if you deliberately want another airframe's ")
+                      _T("calibration. If this entity has no views yet, author them in ")
+                      _T("DISBrowser's hanger first."));
+        return;
+    }
+    const size_t pidx = static_cast<size_t>(pdata);
     if (pidx >= presets.size()) return;
 
     CameraFrame f;
@@ -2712,7 +4106,9 @@ void CPreviewPage::AddEntityCameraFrame(size_t entityIdx, size_t presetIndex,
                                         CameraTransition transition,
                                         bool zoomEnabled, double zoomFovDeg,
                                         bool dynamicZoom, double zoomFillPct,
-                                        bool limitsEnabled)
+                                        bool limitsEnabled,
+                                        double transitionSeconds,
+                                        const std::string& label)
 {
     if (!m_scenario || entityIdx >= m_scenario->entities.size()) return;
     const auto& presets = theApp.CameraPresets().Presets();
@@ -2732,9 +4128,12 @@ void CPreviewPage::AddEntityCameraFrame(size_t entityIdx, size_t presetIndex,
     f.dynamicZoom    = dynamicZoom;
     f.zoomFillPct    = zoomFillPct;
     f.limitsEnabled  = limitsEnabled;
+    f.transitionSeconds = transitionSeconds;
 
-    const std::string ename = src.marking.empty() ? src.name : src.marking;
-    f.label = ename + " / " + presets[presetIndex].DisplayLabel();
+    // An operator-typed name wins; otherwise the camera is named after its mount.
+    f.label = label.empty()
+            ? AutoEntityCameraLabel(src.entityId, f.presetType, f.presetAngle)
+            : label;
 
     AddCameraFrame(std::move(f));
 
@@ -2746,36 +4145,229 @@ void CPreviewPage::AddEntityCameraFrame(size_t entityIdx, size_t presetIndex,
 }
 
 //
-// NewEntityCameraViaDialog — entity-dot "New Camera..." path: pop the modal that
-//   lets the operator choose the camera preset, the tracked target, the zoom and
-//   the transition (source is the clicked entity), then create the frame on OK.
+// NewEntityCameraViaDialog — entity-dot "New Camera..." path: the same modal the
+//   "New Cam..." button opens, but with the clicked entity preselected as the
+//   source. The operator can still switch it — including to "(none)", which
+//   yields a Stationary camera not associated with any entity.
+//
+//   No up-front "there are no presets" refusal: a source-less camera needs none,
+//   and an entity source already gets an explanatory notice inside the dialog.
 //
 void CPreviewPage::NewEntityCameraViaDialog(size_t entityIdx)
 {
     if (!m_scenario || entityIdx >= m_scenario->entities.size()) return;
 
-    if (theApp.CameraPresets().Presets().empty())
-    {
-        AfxMessageBox(_T("No camera presets are available (config\\Cameras.ini)."));
-        return;
-    }
-
-    const Entity& src = m_scenario->entities[entityIdx];
-    const std::string sname = src.marking.empty() ? src.name : src.marking;
-    CString srcLabel;
-    srcLabel.Format(_T("%s [%u]"),
-                    (LPCTSTR)CString(CA2W(sname.c_str())),
-                    static_cast<unsigned>(src.entityId));
-
     CEntityCameraDialog dlg(this);
-    dlg.SetContext(m_scenario, src.entityId, srcLabel);
+    dlg.SetContext(m_scenario, m_scenario->entities[entityIdx].entityId);
     if (dlg.DoModal() != IDOK) return;
 
-    AddEntityCameraFrame(entityIdx, dlg.PresetIndex(),
-                         dlg.TargetEntityId(), dlg.Transition(),
-                         dlg.ZoomEnabled(), dlg.ZoomFovDeg(),
-                         dlg.DynamicZoom(), dlg.ZoomFillPct(),
-                         dlg.LimitsEnabled());
+    CreateCameraFromDialog(dlg);
+}
+
+//
+// AutoEntityCameraLabel — the name an Entity camera gets when nobody has renamed
+//   it: "<entity> / <type> / <angle>". Shared by the create and edit paths so the
+//   "has this been customised?" test in UpdateCameraFromDialog compares against
+//   exactly what the creator would have produced.
+//
+std::string CPreviewPage::AutoEntityCameraLabel(uint16_t srcEntityId,
+                                                const std::string& presetType,
+                                                const std::string& presetAngle) const
+{
+    std::string ename;
+    if (m_scenario)
+    {
+        for (const Entity& e : m_scenario->entities)
+        {
+            if (e.entityId != srcEntityId) continue;
+            ename = e.marking.empty() ? e.name : e.marking;
+            break;
+        }
+    }
+    return ename + " / " + presetType + " / " + presetAngle;
+}
+
+//
+// ApplyEnvelopeFromDialog — write the dialog's gimbal envelope to both copies of
+//   Cameras.ini and re-read the catalog.
+//
+//   Called only when the operator actually touched the envelope (the dialog has
+//   already confirmed the shared scope by then). MUST run after the caller has
+//   consumed dlg.PresetIndex(): the reload invalidates every index into
+//   CameraPresets(), which is why the frame is built from PresetType()/PresetAngle()
+//   instead.
+//
+void CPreviewPage::ApplyEnvelopeFromDialog(const CEntityCameraDialog& dlg)
+{
+    if (!dlg.EnvelopeChanged()) return;
+    if (dlg.PresetType().empty() || dlg.PresetAngle().empty()) return;  // no mount
+
+    CameraPresetIO::GimbalEnvelope env;
+    env.defined  = dlg.EnvelopeDefined();
+    env.enabled  = dlg.EnvelopeEnabled();
+    env.minPitch = dlg.MinPitch(); env.maxPitch = dlg.MaxPitch();
+    env.minYaw   = dlg.MinYaw();   env.maxYaw   = dlg.MaxYaw();
+    env.minRoll  = dlg.MinRoll();  env.maxRoll  = dlg.MaxRoll();
+
+    std::wstring warning, error;
+    const bool ok = CameraPresetIO::WriteEnvelopeBothCopies(
+        theApp.CameraPresetsPath(), theApp.DisBrowserProjectDir(),
+        dlg.PresetType(), dlg.PresetAngle(), env, warning, error);
+
+    if (!ok)
+    {
+        AfxMessageBox((L"The gimbal envelope could not be saved.\n\n" + error).c_str(),
+                      MB_ICONERROR);
+        return;   // nothing was written, so nothing to reload
+    }
+
+    // The catalog is load-once, so without this the dialog would keep offering the
+    // pre-write values for the rest of the session.
+    theApp.ReloadCameraPresets();
+
+    if (!warning.empty()) AfxMessageBox(warning.c_str(), MB_ICONWARNING);
+}
+
+//
+// EditCameraViaDialog — "Edit Camera..." on a camera box (timeline or canvas).
+//
+//   Snapshots the frame BY VALUE before opening the modal. A reference into
+//   Scenario::cameras cannot safely outlive a modal loop, and the index itself is
+//   only a hint by the time the dialog closes — see UpdateCameraFromDialog.
+//
+void CPreviewPage::EditCameraViaDialog(size_t frameIdx)
+{
+    if (!m_scenario || frameIdx >= m_scenario->cameras.size()) return;
+
+    const CameraFrame before = m_scenario->cameras[frameIdx];
+
+    CEntityCameraDialog dlg(this);
+    dlg.SetEditContext(m_scenario, before);
+    if (dlg.DoModal() != IDOK) return;
+
+    UpdateCameraFromDialog(frameIdx, dlg, before);
+}
+
+//
+// UpdateCameraFromDialog — apply an accepted Edit Camera dialog to an existing
+//   frame. The mirror of CreateCameraFromDialog, with three differences that
+//   matter:
+//
+//   1. The frame is re-located before it is written. NormalizeCameraSchedule and
+//      CCameraTimeline::ReindexDraggedFrame both reorder Scenario::cameras, so an
+//      index captured before a modal is a hint, not an address.
+//   2. beginSecond/endSecond are never touched, and the schedule is NOT
+//      re-normalised: editing a camera's settings must not move its box.
+//   3. The label is only regenerated when it was never customised (see below).
+//
+void CPreviewPage::UpdateCameraFromDialog(size_t frameIdx,
+                                          const CEntityCameraDialog& dlg,
+                                          const CameraFrame& before)
+{
+    if (!m_scenario) return;
+    auto& cams = m_scenario->cameras;
+
+    // Re-find the frame if the vector moved under us. Timing plus label identifies
+    // it well enough, and giving up beats writing the operator's edit onto some
+    // other camera.
+    if (frameIdx >= cams.size() ||
+        cams[frameIdx].beginSecond != before.beginSecond ||
+        cams[frameIdx].endSecond   != before.endSecond   ||
+        cams[frameIdx].label       != before.label)
+    {
+        size_t found = cams.size();
+        for (size_t i = 0; i < cams.size(); ++i)
+        {
+            if (cams[i].beginSecond == before.beginSecond &&
+                cams[i].endSecond   == before.endSecond   &&
+                cams[i].label       == before.label)
+            { found = i; break; }
+        }
+        if (found >= cams.size()) return;   // deleted or unrecognisable; drop the edit
+        frameIdx = found;
+    }
+
+    CameraFrame& f = cams[frameIdx];
+
+    const uint16_t srcId = dlg.SourceEntityId();
+    const bool sourceChanged = (srcId != before.sourceEntityId) ||
+                               ((srcId != 0) != (before.kind == CameraKind::Entity));
+    const bool presetChanged = (dlg.PresetType()  != before.presetType) ||
+                               (dlg.PresetAngle() != before.presetAngle);
+
+    if (srcId != 0)
+    {
+        // Mounted. Note the kind can flip either way here: this dialog is the only
+        // place a Stationary camera can be given a source, or a mounted one have it
+        // taken away.
+        f.kind           = CameraKind::Entity;
+        f.sourceEntityId = srcId;
+        f.presetType     = dlg.PresetType();
+        f.presetAngle    = dlg.PresetAngle();
+        f.vantEastM = f.vantNorthM = f.vantUpM = 0.0;   // a mount has no fixed vantage
+        f.limitsEnabled  = dlg.LimitsEnabled();
+    }
+    else
+    {
+        // Source-less: a point in space, with no preset and nothing to be
+        // body-relative to. Mirrors the Entity-only LimitsEnabled write in ScenarioIO.
+        f.kind           = CameraKind::Stationary;
+        f.sourceEntityId = 0;
+        f.presetType.clear();
+        f.presetAngle.clear();
+        f.vantEastM      = dlg.VantEastM();
+        f.vantNorthM     = dlg.VantNorthM();
+        f.vantUpM        = dlg.VantUpM();
+        f.limitsEnabled  = false;
+    }
+
+    f.targetEntityId    = dlg.TargetEntityId();
+    f.transition        = dlg.Transition();
+    f.transitionSeconds = dlg.TransitionSeconds();
+    f.zoomEnabled       = dlg.ZoomEnabled();
+    f.zoomFovDeg        = dlg.ZoomFovDeg();
+    f.dynamicZoom       = dlg.DynamicZoom();
+    f.zoomFillPct       = dlg.ZoomFillPct();
+
+    // Label: the name is the operator's once they have typed one, so it is never
+    // blindly regenerated. It only follows the mount when it still reads exactly as
+    // the creator would have written it AND the mount actually changed.
+    {
+        const std::string typed = dlg.Label();
+        const std::string autoBefore =
+            (before.kind == CameraKind::Entity)
+                ? AutoEntityCameraLabel(before.sourceEntityId,
+                                        before.presetType, before.presetAngle)
+                : std::string();
+
+        if (!typed.empty() && typed != autoBefore)
+            f.label = typed;                      // named by hand — leave it alone
+        else if (f.kind == CameraKind::Entity && (sourceChanged || presetChanged))
+            f.label = AutoEntityCameraLabel(f.sourceEntityId, f.presetType, f.presetAngle);
+        else if (typed.empty())
+            f.label = before.label;               // never blank a camera's name
+        else
+            f.label = typed;
+    }
+
+    // The tracked entity may have changed, and dynamic zoom frames against the
+    // TARGET's catalogued dimensions. Without this the shot would keep fitting the
+    // previous entity's size.
+    CameraTargetExtents::Apply(*m_scenario, f);
+
+    // Cameras.ini last: the reload it triggers invalidates dlg.PresetIndex(), which
+    // is why everything above reads PresetType()/PresetAngle() instead.
+    ApplyEnvelopeFromDialog(dlg);
+
+    // Deliberately NO NormalizeCameraSchedule() — begin/end are untouched, so the
+    // running order cannot have changed, and re-sorting would only risk moving the
+    // box the operator just edited. (WM_APP_REFRESH_UI below is what marks the
+    // scenario dirty, the same as every other camera mutator on this page.)
+    RebuildRenderState();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+    if (m_timeline.GetSafeHwnd()) m_timeline.Invalidate(FALSE);
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
 }
 
 //
@@ -2797,94 +4389,6 @@ void CPreviewPage::DragCameraTo(size_t frameIdx, double enuE, double enuN)
 //
 void CPreviewPage::EndCameraDrag()
 {
-    if (CWnd* top = GetTopLevelParent())
-        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
-}
-
-//
-// SetCameraTarget — set frame `frameIdx`'s tracked entity (0 = focus on source).
-//
-void CPreviewPage::SetCameraTarget(size_t frameIdx, uint16_t targetEntityId)
-{
-    if (!m_scenario || frameIdx >= m_scenario->cameras.size()) return;
-    CameraFrame& f = m_scenario->cameras[frameIdx];
-    f.targetEntityId = targetEntityId;
-    // A new target is a new size — dynamic zoom would otherwise keep framing the
-    // old entity's dimensions.
-    CameraTargetExtents::Apply(*m_scenario, f);
-    if (CWnd* top = GetTopLevelParent())
-        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
-}
-
-//
-// SetCameraTransition — set the transition used entering frame `frameIdx`.
-//
-void CPreviewPage::SetCameraTransition(size_t frameIdx, CameraTransition t)
-{
-    if (!m_scenario || frameIdx >= m_scenario->cameras.size()) return;
-    m_scenario->cameras[frameIdx].transition = t;
-    if (CWnd* top = GetTopLevelParent())
-        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
-}
-
-//
-// SetCameraZoomEnabled — master zoom toggle for frame `frameIdx`. Off restores
-//   the legacy behaviour (preset FOV for Entity frames, engine default otherwise).
-//
-void CPreviewPage::SetCameraZoomEnabled(size_t frameIdx, bool on)
-{
-    if (!m_scenario || frameIdx >= m_scenario->cameras.size()) return;
-    m_scenario->cameras[frameIdx].zoomEnabled = on;
-    if (CWnd* top = GetTopLevelParent())
-        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
-}
-
-//
-// SetCameraDynamicZoom — auto-fit the target instead of holding a fixed FOV.
-//
-void CPreviewPage::SetCameraDynamicZoom(size_t frameIdx, bool on)
-{
-    if (!m_scenario || frameIdx >= m_scenario->cameras.size()) return;
-    m_scenario->cameras[frameIdx].dynamicZoom = on;
-    if (CWnd* top = GetTopLevelParent())
-        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
-}
-
-//
-// SetCameraGimbalLimits — enforce the mounted preset's travel envelope for this frame.
-//   Off restores the legacy behaviour: the camera aims wherever the target is, however
-//   far off-boresight that would really be.
-//
-void CPreviewPage::SetCameraGimbalLimits(size_t frameIdx, bool on)
-{
-    if (!m_scenario || frameIdx >= m_scenario->cameras.size()) return;
-    m_scenario->cameras[frameIdx].limitsEnabled = on;
-    if (CWnd* top = GetTopLevelParent())
-        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
-}
-
-//
-// SetCameraZoomFov — static FOV override (degrees), clamped to the authoring range.
-//
-void CPreviewPage::SetCameraZoomFov(size_t frameIdx, double fovDeg)
-{
-    if (!m_scenario || frameIdx >= m_scenario->cameras.size()) return;
-    if (fovDeg < kZoomFovMinDeg) fovDeg = kZoomFovMinDeg;
-    if (fovDeg > kZoomFovMaxDeg) fovDeg = kZoomFovMaxDeg;
-    m_scenario->cameras[frameIdx].zoomFovDeg = fovDeg;
-    if (CWnd* top = GetTopLevelParent())
-        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
-}
-
-//
-// SetCameraZoomFill — how much of the frame a dynamic fit should fill (percent).
-//
-void CPreviewPage::SetCameraZoomFill(size_t frameIdx, double fillPct)
-{
-    if (!m_scenario || frameIdx >= m_scenario->cameras.size()) return;
-    if (fillPct < kZoomFillMinPct) fillPct = kZoomFillMinPct;
-    if (fillPct > kZoomFillMaxPct) fillPct = kZoomFillMaxPct;
-    m_scenario->cameras[frameIdx].zoomFillPct = fillPct;
     if (CWnd* top = GetTopLevelParent())
         top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
 }
@@ -3951,8 +5455,7 @@ void CPreviewPage::RefreshEntitySpeed(size_t idx)
 //
 void CPreviewPage::OnDestTimeToggle()
 {
-    m_showDestTime = IsDlgButtonChecked(IDC_CHK_PREVIEW_DESTTIME) == BST_CHECKED;
-    PersistToggles();
+    ToggleCheck(IDC_CHK_PREVIEW_DESTTIME, m_showDestTime);
     if (CWnd* lc = GetDlgItem(IDC_LIST_PREVIEW_DESTTIME))
         lc->ShowWindow(m_showDestTime ? SW_SHOW : SW_HIDE);
     if (m_showDestTime) RefreshDestTimeList();
@@ -4151,6 +5654,39 @@ void CPreviewPage::RebuildPathsCache()
 {
     m_pathsCache.clear();
     m_ellipseTargets.clear();
+    // Painted foliage areas -> ENU for drawing. Projecting all four corners and
+    // taking the bounding box keeps the rectangle honest under any origin skew,
+    // the same way the boundary paint does in reverse.
+    m_state.foliageAreas.clear();
+    if (m_scenario)
+    {
+        m_state.foliageAreas.reserve(m_scenario->foliageAreas.size());
+        for (const FoliageArea& a : m_scenario->foliageAreas)
+        {
+            const double corners[4][2] = {
+                { a.latMinDeg, a.lonMinDeg }, { a.latMinDeg, a.lonMaxDeg },
+                { a.latMaxDeg, a.lonMinDeg }, { a.latMaxDeg, a.lonMaxDeg },
+            };
+            double eMin = 1e18, eMax = -1e18, nMin = 1e18, nMax = -1e18;
+            for (int i = 0; i < 4; ++i)
+            {
+                double X = 0, Y = 0, Z = 0, e = 0, nn = 0, u = 0;
+                CoordTransforms::GeodeticToEcefDeg(corners[i][0], corners[i][1], 0.0, X, Y, Z);
+                CoordTransforms::EcefToLocalEnuDeg(X, Y, Z,
+                    m_state.originLatDeg, m_state.originLonDeg, m_state.originAltM, e, nn, u);
+                if (e  < eMin) eMin = e;   if (e  > eMax) eMax = e;
+                if (nn < nMin) nMin = nn;  if (nn > nMax) nMax = nn;
+            }
+            PreviewFoliageArea pa;
+            pa.eastMinM  = eMin;
+            pa.eastMaxM  = eMax;
+            pa.northMinM = nMin;
+            pa.northMaxM = nMax;
+            pa.treeCount = a.treeCount;
+            m_state.foliageAreas.push_back(pa);
+        }
+    }
+
     if (!m_scenario) return;
 
     const size_t n = m_scenario->entities.size();

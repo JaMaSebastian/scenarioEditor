@@ -46,20 +46,23 @@
     <ClInclude Include="src\PduBuilder.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\UdpSender.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\TcpSender.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\ProcessSupervisor.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\ScenarioIO.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\EntityTypeCatalog.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\CoordTransforms.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\ScenarioWorker.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\MotionSampler.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\SpeedSeed.h"><Filter>Header Files</Filter></ClInclude>
-    <ClInclude Include="src\CameraZoomMenu.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\CameraPresetIO.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\CameraPresetCombo.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\CameraTargetExtents.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\FoliageDialog.h"><Filter>Header Files</Filter></ClInclude>
-    <ClInclude Include="src\ScenarioPaths.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\DisrecFormat.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\DisrecWriter.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\DisrecReader.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\SettingsIO.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\TerrainEndpoint.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\TerrainServiceClient.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\Validator.h"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
 
@@ -81,18 +84,22 @@
     <ClCompile Include="src\PduBuilder.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\UdpSender.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\TcpSender.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\ProcessSupervisor.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\ScenarioIO.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\EntityTypeCatalog.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\CoordTransforms.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\ScenarioWorker.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\MotionSampler.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\SpeedSeed.cpp"><Filter>Source Files</Filter></ClCompile>
-    <ClCompile Include="src\CameraZoomMenu.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\CameraPresetIO.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\CameraPresetCombo.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\CameraTargetExtents.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\FoliageDialog.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\DisrecWriter.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\DisrecReader.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\SettingsIO.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\TerrainEndpoint.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\TerrainServiceClient.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\Validator.cpp"><Filter>Source Files</Filter></ClCompile>
   </ItemGroup>
 

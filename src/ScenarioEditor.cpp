@@ -140,6 +140,7 @@ BOOL CScenarioEditorApp::InitInstance()
     sprintf_s(szError, sizeof(szError), "Camera presets path: %S", m_cameraPresetsPath.c_str());
     LOG(szError);
     m_cameraPresets.LoadFromIni(m_cameraPresetsPath);
+    // m_hangerTypes is deliberately NOT loaded here — see HangerTypes().
 
     m_settingsPath = exeDir + L"settings.ini";
     SettingsIO::Load(m_settings, m_settingsPath);
@@ -162,4 +163,47 @@ BOOL CScenarioEditorApp::InitInstance()
 
     LOG("ScenarioEditor V1 exiting");
     return FALSE;
+}
+
+//-----------------------------------------------------------------------------
+// HangerTypes — lazily load DISBrowser's Hanger.ini tuple -> camera-type map
+//   Resolved from the Run tab's DISBrowser project folder when set, else a
+//   sibling "DISBrowser" beside the exe (the same fallback the Run tab uses).
+//   Retried on every call while still empty so setting the folder mid-session
+//   starts filtering without a restart; once loaded it is not re-read.
+//
+const HangerCameraTypeMap& CScenarioEditorApp::HangerTypes()
+{
+    if (!m_hangerTypes.Loaded())
+        m_hangerTypes.LoadFromIni(DisBrowserProjectDir() + L"\\Config\\Hanger.ini");
+    return m_hangerTypes;
+}
+
+//
+// DisBrowserProjectDir — see header. Shared by HangerTypes() above and by
+//   CameraPresetIO, which needs the same root to reach DISBrowser's own copy of
+//   Cameras.ini. Kept in one place so the two can never disagree about where
+//   DISBrowser lives.
+//
+std::wstring CScenarioEditorApp::DisBrowserProjectDir() const
+{
+    std::wstring projDir;
+    if (!m_settings.disBrowserProjectDir.empty())
+    {
+        // Settings holds it narrow; CString does the ANSI->wide conversion.
+        const CString wide(m_settings.disBrowserProjectDir.c_str());
+        projDir = (LPCWSTR)wide;
+    }
+    else
+    {
+        wchar_t exe[MAX_PATH] = { 0 };
+        ::GetModuleFileNameW(nullptr, exe, _countof(exe));
+        std::wstring p(exe);
+        const size_t slash = p.find_last_of(L"\\/");
+        if (slash != std::wstring::npos) p.resize(slash);
+        projDir = p + L"\\..\\..\\..\\DISBrowser";
+    }
+    if (!projDir.empty() && (projDir.back() == L'\\' || projDir.back() == L'/'))
+        projDir.pop_back();
+    return projDir;
 }

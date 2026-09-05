@@ -101,6 +101,61 @@ DISBrowser is the **server** — start it first, then start ScenarioEditor. Its 
 
 **Ready-made scenario:** `plays/TCP-harburtField4.ini` is the Harburt Field 4 play preconfigured for TCP client mode against `127.0.0.1:3002`.
 
+#### Choosing a terrain server — `settings.ini` `[Terrain]`
+
+Three modes, switched by hand in `settings.ini` next to the executable:
+
+```ini
+[Terrain]
+Mode=Local              ; Legacy | Local | Remote  (unknown values fall back to Local)
+RemoteHost=127.0.0.1    ; Remote mode only
+RemotePort=8088         ; Remote mode only
+```
+
+| Mode | Server | Builds | Tiles |
+| --- | --- | --- | --- |
+| **Local** (default) | `TerrainServer.exe`, supervised — no WSL, no console window | supervised: piped output, real exit codes, no orphans | published to `%LOCALAPPDATA%\DISBrowser\terrain\tiles` after each build |
+| **Legacy** | `serve_terrain.cmd` → `serve.py` in WSL, in its own console window | original fire-and-forget `ShellExecute` | served straight from ext4; no publish step |
+| **Remote** | none — another machine serves them | supervised | not published locally |
+| **Service** | `terrainserver`, an independent container on **8089** — serves tiles *and* builds them | submitted to its HTTP job API; progress polled back into the status line | held by the service; no publish step |
+
+**Legacy is a true fallback**, not a half-measure: it restores the original code path wholesale, including the fire-and-forget builds. That means failures become invisible again and children can outlive the editor — the things Local mode exists to fix. Use it only if the newer path misbehaves.
+
+**Remote** runs nothing locally. Start/Stop Terrain Server explain that and do nothing; the editor only checks the remote address answers, and **`RemoteHost:RemotePort` is what gets written into DISBrowser's `Startup.ini`** as `CesiumTilesetUrl`, so the viewer fetches terrain from that machine. (That URL is only emitted when the basemap is *Cesium 3D (self-hosted)*.)
+
+Legacy and Local both use `localhost:8088`. `RemoteHost`/`RemotePort` are consulted in **Remote** and **Service** modes; Service defaults the port to **8089** so the container and a native `TerrainServer.exe` can run side by side during the transition.
+
+#### Service mode — the containerized terrain service
+
+```ini
+[Terrain]
+Mode=Service
+RemoteHost=127.0.0.1
+RemotePort=8089
+```
+
+The server is [`terrainserver`](../../../home/sebas/projects/planeswalker/terrainserver) running in WSL Docker (or on an EC2 Ubuntu box). It both **serves** tiles and **builds** them: **Build 3D Terrain** and **Purge Terrain** POST a job to `/api/v1/jobs` instead of running the WSL `.cmd` scripts here, and the editor polls `/api/v1/jobs/{id}?since=N` so the status line and the failure dialog behave exactly as they do for a local build.
+
+The editor never starts or stops it — the container has `restart: unless-stopped` and outlives every editor session. Start it with `./scripts/up.sh` in that directory; **Start/Stop Terrain Server** say so rather than pretending.
+
+Because the service holds its own tiles, there is no publish step, and **Purge** does *not* touch `%LOCALAPPDATA%\DISBrowser	errain	iles` — that copy belongs to the Local fallback, and wiping it would destroy the thing you fall back to.
+
+#### Terrain and foliage builds
+
+These used to be fire-and-forget `ShellExecute` calls into `.cmd` files: output went to a console window you had to find, a script that failed looked identical to one that succeeded, and nothing could stop a child that was left running. In **Local and Remote** modes it now goes through **`ProcessSupervisor`** (`src/ProcessSupervisor.{h,cpp}`) — Legacy mode keeps the old behaviour:
+
+- **You see what happened.** stdout and stderr are piped back line by line into the status line under the preview and into the app log. A non-zero exit code raises a dialog containing the script's own last output — failures can no longer hide.
+- **Nothing is orphaned.** Builds run inside a Job Object with `KILL_ON_JOB_CLOSE`, so the whole tree (`wsl.exe`, `docker`, python) dies with the editor even if it crashes.
+- **One at a time.** The Build/Purge buttons disable while a job runs; they all write the same tile tree, so concurrent runs would corrupt it.
+
+**Where tiles live.** Tiling always happens on ext4 inside WSL — that is where Docker and `ctb-tile` are fastest. In **Local** mode the finished tiles are then published to `%LOCALAPPDATA%\DISBrowser\terrain\tiles` by `DISBrowser/Scripts/wsl/publish_tiles.sh`, which the editor runs automatically after a successful build; they are **gunzipped during the copy**, so the server just streams bytes. Legacy mode skips the publish (its `serve.py` reads ext4 directly), and Remote mode skips it too (those tiles live on another machine).
+
+This copy exists because a Windows process cannot read `/root/terrain/tiles`: the `\\wsl$` share depends on `P9RdrService`, which is disabled-by-default and needs admin to start — precisely the kind of fragility this rework removes.
+
+**The terrain server survives the editor.** `TerrainServer.exe` is deliberately started *outside* the job object, so closing the editor leaves a running DISBrowser with its terrain intact. Stop it explicitly with **Stop Terrain Server**, or from Task Manager.
+
+> The legacy `serve_terrain.cmd` / `serve.py` still work if you want to run the server by hand; the editor no longer uses them.
+
 ### 2. Level/origin/basemap handoff — `Config\Startup.ini` (the file path)
 
 The **Run** tab's **"Configure Unreal"** button writes `<DISBrowserProjectDir>\Config\Startup.ini` (`StartupIniWriter`), which DISBrowser reads at boot to pick its scene. It writes:
@@ -131,7 +186,7 @@ The Preview tab's **"Build 3D Terrain"** shells out to DISBrowser's `Scripts\ret
 - **Scenario save/load** — human-readable `.ini` format (`ScenarioIO`).
 - **DIS playback** — worker-thread playback with Start/Pause/Resume/Stop/loop; **record & replay** via `.disrec`.
 - **Validation** — a validator enforces DIS rules (marking length, timestamps…) and estimates output bandwidth. Note it does **not** yet check the `[Output]` section; the multicast group range is checked by **Network → Test Multicast Send**, not at Start.
-- **Terrain-server controls** — Start/Stop the self-hosted terrain tile server and gate the boundary/build tools on it (Preview tab).
+- **Terrain-server controls** — Start/Stop the self-hosted terrain tile server and gate the boundary/build tools on it (Preview tab). The server is **`TerrainServer.exe`**, a native tile server built alongside the editor — no WSL and no console window. See [Terrain and foliage builds](#terrain-and-foliage-builds).
 
 ### UI structure
 

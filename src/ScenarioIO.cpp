@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cwchar>
+#include <cwctype>
 #include <string>
 #include <vector>
 
@@ -91,6 +92,35 @@ namespace
         const long n = std::wcstol(v.c_str(), &end, 10);
         if (end != v.c_str() && n >= 0 && n <= 3)
             return static_cast<uint8_t>(n);
+        return fallback;
+    }
+
+    //
+    // BehaviorName - map an NpcBehavior to the INI token dis-service reads.
+    // Capitalised here because that is the INI spelling; the service's REST
+    // surface reports the same states lower-case.
+    //
+    const wchar_t* BehaviorName(NpcBehavior b)
+    {
+        return b == NpcBehavior::Stationary ? L"Stationary" : L"Directed";
+    }
+    //
+    // ParseBehavior - case-INSENSITIVE, matching dis-service's reader. That is
+    // deliberate, not an oversight: for a key that decides whether an entity
+    // moves at all, a spelling mismatch is a scene that looks authored and
+    // plays wrong. Unknown values fall back rather than failing the load.
+    //
+    // Unlike ParseForceId there is no numeric fallback: dis-service does not
+    // accept Behavior=1, so accepting it here would let the editor author a
+    // file the service silently reads as Directed.
+    //
+    NpcBehavior ParseBehavior(const std::wstring& v, NpcBehavior fallback)
+    {
+        std::wstring low;
+        low.reserve(v.size());
+        for (wchar_t c : v) low.push_back(static_cast<wchar_t>(::towlower(c)));
+        if (low == L"directed")   return NpcBehavior::Directed;
+        if (low == L"stationary") return NpcBehavior::Stationary;
         return fallback;
     }
 
@@ -373,7 +403,7 @@ namespace
         return buf;
     }
 
-    // ---------- camera enum <-> name (mirror of ScenarioCameraIO) ----------
+    // ---------- camera enum <-> name ----------
     const wchar_t* KindName(CameraKind k)
     {
         return (k == CameraKind::Stationary) ? L"Stationary" : L"Entity";
@@ -386,12 +416,15 @@ namespace
     }
     const wchar_t* TransName(CameraTransition t)
     {
-        return (t == CameraTransition::HardCut) ? L"HardCut" : L"CrossfadeBlend";
+        if (t == CameraTransition::HardCut) return L"HardCut";
+        if (t == CameraTransition::FlyTo)   return L"FlyTo";
+        return L"CrossfadeBlend";
     }
     CameraTransition ParseTrans(const std::wstring& v, CameraTransition fb)
     {
         if (v == L"HardCut")        return CameraTransition::HardCut;
         if (v == L"CrossfadeBlend") return CameraTransition::CrossfadeBlend;
+        if (v == L"FlyTo")          return CameraTransition::FlyTo;
         return fb;
     }
 
@@ -422,15 +455,37 @@ namespace
         if (v == L"BlenderGIS") return FoliageRenderMode::BlenderGIS;
         return fb;
     }
+
+    // Preview map backdrop. PreviewView::mapLayer is a plain int (the model does
+    // not include the UI's MapLayer enum), so the mapping lives here and is
+    // written by NAME to keep scenario.ini hand-readable.
+    const wchar_t* MapLayerName(int layer)
+    {
+        switch (layer)
+        {
+            case 1:  return L"Satellite";
+            case 2:  return L"Topographic";
+            case 3:  return L"Cesium";
+            default: return L"None";
+        }
+    }
+    int ParseMapLayer(const std::wstring& v, int fb)
+    {
+        if (v == L"None")        return 0;
+        if (v == L"Satellite")   return 1;
+        if (v == L"Topographic") return 2;
+        if (v == L"Cesium")      return 3;
+        return fb;
+    }
 }
 
 //
 // ScenarioIO::Save — serialize a Scenario to the INI at `path`.
 //   Ensures the parent directory exists, deletes any pre-existing file so
 //   removed keys don't linger, then writes [Format], [Scenario], [Origin],
-//   optional [TerrainBounds]/[Level*], per-entity and per-motion sections,
-//   and [Output], flushing the profile cache at the end. Returns IoError on
-//   a write/mkdir failure, otherwise Ok.
+//   [Preview], optional [TerrainBounds]/[Level*], per-entity and per-motion
+//   sections, and [Output], flushing the profile cache at the end. Returns
+//   IoError on a write/mkdir failure, otherwise Ok.
 //
 ScenarioIO::Result ScenarioIO::Save(const Scenario& scenario,
                                     const std::wstring& path)
@@ -470,6 +525,40 @@ ScenarioIO::Result ScenarioIO::Save(const Scenario& scenario,
     WriteDouble(L"Origin", L"LatitudeDeg",    scenario.originLatDeg, path);
     WriteDouble(L"Origin", L"LongitudeDeg",   scenario.originLonDeg, path);
     WriteDouble(L"Origin", L"AltitudeMeters", scenario.originAltM, path);
+
+    // ---- [Preview] Preview-tab view settings (map layer / location / speeds /
+    //      "Show" check boxes) ----
+    // Written unconditionally: these are display-only, and a scenario that has
+    // never been opened on the Preview tab still saves the defaults it will load
+    // with, so the round trip is stable.
+    WriteStr   (L"Preview", L"MapLayer", MapLayerName(scenario.preview.mapLayer), path);
+    WriteStr   (L"Preview", L"Location", Widen(scenario.preview.mapPlace), path);
+    WriteDouble(L"Preview", L"PlaySpeed", scenario.preview.playSpeed, path);
+    WriteDouble(L"Preview", L"CameraScaleSeconds", scenario.preview.camScaleSeconds, path);
+    WriteInt   (L"Preview", L"ShowLabels",      scenario.preview.showLabels      ? 1 : 0, path);
+    WriteInt   (L"Preview", L"ShowTrails",      scenario.preview.showTrails      ? 1 : 0, path);
+    WriteInt   (L"Preview", L"ShowPaths",       scenario.preview.showPaths       ? 1 : 0, path);
+    WriteInt   (L"Preview", L"ShowOrientation", scenario.preview.showOrientation ? 1 : 0, path);
+    WriteInt   (L"Preview", L"ShowTerrain",     scenario.preview.showTerrain     ? 1 : 0, path);
+    WriteInt   (L"Preview", L"ShowZones",       scenario.preview.showZones       ? 1 : 0, path);
+    WriteInt   (L"Preview", L"ShowLegend",      scenario.preview.showLegend      ? 1 : 0, path);
+    WriteInt   (L"Preview", L"ShowProperties",  scenario.preview.showProperties  ? 1 : 0, path);
+    WriteInt   (L"Preview", L"MoveEntities",    scenario.preview.moveEntitiesWithMap ? 1 : 0, path);
+
+    // ---- [Foliage.Area<i>] painted foliage rectangles. AreaCount bounds the scan. ----
+    WriteInt(L"Foliage", L"AreaCount",
+             static_cast<long long>(scenario.foliageAreas.size()), path);
+    for (size_t i = 0; i < scenario.foliageAreas.size(); ++i)
+    {
+        const FoliageArea& a = scenario.foliageAreas[i];
+        wchar_t sec[64];
+        swprintf_s(sec, L"Foliage.Area%u", static_cast<unsigned>(i));
+        WriteDouble(sec, L"LatMinDeg", a.latMinDeg, path);
+        WriteDouble(sec, L"LatMaxDeg", a.latMaxDeg, path);
+        WriteDouble(sec, L"LonMinDeg", a.lonMinDeg, path);
+        WriteDouble(sec, L"LonMaxDeg", a.lonMaxDeg, path);
+        WriteInt   (sec, L"TreeCount", a.treeCount, path);
+    }
 
     // ---- [TerrainBounds] painted 3D-terrain box (Preview tab). Only emitted once painted. ----
     if (scenario.terrainBoundsValid)
@@ -531,6 +620,10 @@ ScenarioIO::Result ScenarioIO::Save(const Scenario& scenario,
         WriteInt   (S, L"Enabled",        e.enabled ? 1 : 0, path);
         WriteStr   (S, L"Name",           Widen(e.name), path);
         WriteStr   (S, L"Description",    Widen(e.description), path);
+        // Behavior (URZA-11265) - written unconditionally, Directed included:
+        // dis-service builds predating the key ignore it, and current builds
+        // read Directed as their default anyway.
+        WriteStr   (S, L"Behavior",       BehaviorName(e.behavior), path);
         WriteStr   (S, L"ForceID",        ForceIdName(e.forceId), path);
         WriteInt   (S, L"SiteID",         e.siteId, path);
         WriteInt   (S, L"ApplicationID",  e.applicationId, path);
@@ -697,6 +790,7 @@ ScenarioIO::Result ScenarioIO::Save(const Scenario& scenario,
         }
         WriteInt   (C, L"TargetEntityID", c.targetEntityId, path);
         WriteStr   (C, L"Transition",     TransName(c.transition), path);
+        WriteDouble(C, L"TransitionSeconds", c.transitionSeconds, path);
         WriteDouble(C, L"BeginSecond",    c.beginSecond, path);
         WriteDouble(C, L"EndSecond",      c.endSecond,   path);
         WriteStr   (C, L"Label",          Widen(c.label), path);
@@ -741,10 +835,10 @@ ScenarioIO::Result ScenarioIO::Save(const Scenario& scenario,
 // ScenarioIO::Load — deserialize the INI at `path` into `s`.
 //   Verifies the file exists and its [Format] Version is known (returns
 //   IoError / Malformed / VersionTooNew otherwise), resets `s` to defaults,
-//   then reads scenario/origin/terrain/level fields, discovers all "Entity.<N>"
-//   sections, and in a second pass attaches each entity's sorted "Motion.<M>"
-//   segments plus the [Output] config. Guarantees at least one entity. Ok on
-//   success.
+//   then reads scenario/origin/preview/terrain/level fields, discovers all
+//   "Entity.<N>" sections, and in a second pass attaches each entity's sorted
+//   "Motion.<M>" segments plus the [Output] config. Guarantees at least one
+//   entity. Ok on success.
 //
 ScenarioIO::Result ScenarioIO::Load(Scenario& s, const std::wstring& path)
 {
@@ -786,6 +880,50 @@ ScenarioIO::Result ScenarioIO::Load(Scenario& s, const std::wstring& path)
     s.originLatDeg = ReadDouble(L"Origin", L"LatitudeDeg",    s.originLatDeg, path);
     s.originLonDeg = ReadDouble(L"Origin", L"LongitudeDeg",   s.originLonDeg, path);
     s.originAltM   = ReadDouble(L"Origin", L"AltitudeMeters", s.originAltM,   path);
+
+    // ---- [Preview] Preview-tab view settings (absent -> PreviewView defaults) ----
+    s.preview.mapLayer =
+        ParseMapLayer(ReadStr(L"Preview", L"MapLayer", L"", path), s.preview.mapLayer);
+    s.preview.mapPlace = Narrow(ReadStr(L"Preview", L"Location", L"", path));
+    s.preview.playSpeed =
+        ReadDouble(L"Preview", L"PlaySpeed", s.preview.playSpeed, path);
+    s.preview.camScaleSeconds =
+        ReadDouble(L"Preview", L"CameraScaleSeconds", s.preview.camScaleSeconds, path);
+    auto readFlag = [&](const wchar_t* key, bool fallback)
+    {
+        return ReadInt(L"Preview", key, fallback ? 1 : 0, path) != 0;
+    };
+    s.preview.showLabels      = readFlag(L"ShowLabels",      s.preview.showLabels);
+    s.preview.showTrails      = readFlag(L"ShowTrails",      s.preview.showTrails);
+    s.preview.showPaths       = readFlag(L"ShowPaths",       s.preview.showPaths);
+    s.preview.showOrientation = readFlag(L"ShowOrientation", s.preview.showOrientation);
+    s.preview.showTerrain     = readFlag(L"ShowTerrain",     s.preview.showTerrain);
+    s.preview.showZones       = readFlag(L"ShowZones",       s.preview.showZones);
+    s.preview.showLegend      = readFlag(L"ShowLegend",      s.preview.showLegend);
+    s.preview.showProperties  = readFlag(L"ShowProperties",  s.preview.showProperties);
+    s.preview.moveEntitiesWithMap =
+        readFlag(L"MoveEntities", s.preview.moveEntitiesWithMap);
+
+    // ---- [Foliage.Area<i>] painted foliage rectangles (absent → none painted) ----
+    s.foliageAreas.clear();
+    {
+        const long long areaCount = ReadInt(L"Foliage", L"AreaCount", 0, path);
+        for (long long i = 0; i < areaCount; ++i)
+        {
+            wchar_t sec[64];
+            swprintf_s(sec, L"Foliage.Area%u", static_cast<unsigned>(i));
+            FoliageArea a;
+            a.latMinDeg = ReadDouble(sec, L"LatMinDeg", 0.0, path);
+            a.latMaxDeg = ReadDouble(sec, L"LatMaxDeg", 0.0, path);
+            a.lonMinDeg = ReadDouble(sec, L"LonMinDeg", 0.0, path);
+            a.lonMaxDeg = ReadDouble(sec, L"LonMaxDeg", 0.0, path);
+            a.treeCount = ReadInt   (sec, L"TreeCount", 20000, path);
+            // A degenerate box would place trees along a line, so drop it here
+            // rather than shipping it to the bake.
+            if (a.latMinDeg < a.latMaxDeg && a.lonMinDeg < a.lonMaxDeg)
+                s.foliageAreas.push_back(a);
+        }
+    }
 
     // ---- [TerrainBounds] painted 3D-terrain box (absent in vanilla scenarios → stays invalid) ----
     s.terrainBoundsValid = ReadInt(L"TerrainBounds", L"Valid", s.terrainBoundsValid ? 1 : 0, path) != 0;
@@ -859,6 +997,9 @@ ScenarioIO::Result ScenarioIO::Load(Scenario& s, const std::wstring& path)
         e.enabled        = ReadInt(sec, L"Enabled", e.enabled ? 1 : 0, path) != 0;
         e.name           = Narrow(ReadStr(sec, L"Name",        Widen(e.name).c_str(), path));
         e.description    = Narrow(ReadStr(sec, L"Description", L"", path));
+        e.behavior       = ParseBehavior(ReadStr(sec, L"Behavior",
+                                                 BehaviorName(e.behavior), path),
+                                         e.behavior);
         e.forceId        = ParseForceId(ReadStr(sec, L"ForceID", ForceIdName(e.forceId), path),
                                         e.forceId);
 
@@ -1083,6 +1224,7 @@ ScenarioIO::Result ScenarioIO::Load(Scenario& s, const std::wstring& path)
             c.targetEntityId = static_cast<uint16_t>(ReadInt(C, L"TargetEntityID", 0, path));
             c.transition = ParseTrans(ReadStr(C, L"Transition", TransName(c.transition), path),
                                       c.transition);
+            c.transitionSeconds = ReadDouble(C, L"TransitionSeconds", 0.5, path);
             c.beginSecond = ReadDouble(C, L"BeginSecond", 0.0, path);
             c.endSecond   = ReadDouble(C, L"EndSecond",   0.0, path);
             c.label = Narrow(ReadStr(C, L"Label", L"", path));

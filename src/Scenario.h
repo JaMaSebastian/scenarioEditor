@@ -62,6 +62,21 @@ enum class EllipseDirection : uint8_t
     CounterClockwise = 1,
 };
 
+// What an entity does with its authored motion at runtime (URZA-11265).
+// Directed = play the motion segments as written (the default, and the only
+// value a scenario authored before this key existed can have).
+// Stationary = hold one fixed pose; the authored segments stay untouched, so
+// an operator who resumes the entity rejoins its path at the current scenario
+// time rather than where it was frozen.
+// There is deliberately no Resume member: on the service's REST surface Resume
+// is a *command* meaning "back to Directed", never a state an entity rests in -
+// a persisted Resume could not say what it resumes to.
+enum class NpcBehavior : uint8_t
+{
+    Directed   = 0,
+    Stationary = 1,
+};
+
 // How a CameraFrame is anchored. Entity cameras mount a saved Cameras.ini
 // preset on a scenario entity; Stationary cameras sit at a fixed vantage point.
 enum class CameraKind : uint8_t
@@ -71,11 +86,17 @@ enum class CameraKind : uint8_t
 };
 
 // Visual transition used when the schedule switches from the previous frame's
-// camera to this one.
+// camera to this one. All three are the same UE call —
+// APlayerController::SetViewTargetWithBlend — with different arguments; that call
+// interpolates the camera POSE between the outgoing and incoming view targets, so
+// even "CrossfadeBlend" physically moves the camera rather than dissolving the
+// image. A true dissolve would need a render target + post-process pass and is
+// deliberately not offered.
 enum class CameraTransition : uint8_t
 {
-    CrossfadeBlend = 0,  // dissolve/blend between the two views
-    HardCut        = 1,  // instantaneous switch
+    CrossfadeBlend = 0,  // linear pose blend, both ends keep tracking
+    HardCut        = 1,  // instantaneous switch (duration ignored)
+    FlyTo          = 2,  // eased pose move, outgoing view frozen while it travels
 };
 
 //-----------------------------------------------------------------------------
@@ -110,6 +131,10 @@ struct CameraFrame
     double            vantUpM    = 0.0;
 
     CameraTransition  transition   = CameraTransition::CrossfadeBlend; // vs previous frame
+    // How long that transition takes, in seconds. Ignored by HardCut. Defaults to
+    // 0.5 because that is the value DISBrowser hardcoded before this was authorable,
+    // so a play written by an older build behaves identically.
+    double            transitionSeconds = 0.5;
     double            beginSecond  = 0.0;
     double            endSecond    = 0.0;
     std::string       label;                // shown on the timeline box
@@ -153,6 +178,12 @@ constexpr double kZoomFovMinDeg  = 5.0;
 constexpr double kZoomFovMaxDeg  = 170.0;
 constexpr double kZoomFillMinPct = 10.0;
 constexpr double kZoomFillMaxPct = 100.0;
+
+// Transition-duration authoring limits. The floor is below the 0.5 default rather
+// than at 1 s so a play written before this was authorable stays inside the valid
+// range; the dialog still accepts any 1..n value the operator types.
+constexpr double kTransitionMinSec = 0.1;
+constexpr double kTransitionMaxSec = 30.0;
 
 //-----------------------------------------------------------------------------
 // MotionSegment — one timed leg of an entity's trajectory
@@ -266,6 +297,12 @@ struct Entity
     bool        enabled        = true;
     std::string name           = "Drone 1";
     std::string description;
+
+    // Runtime motion behavior (URZA-11265). Directed unless the file says
+    // otherwise, so every scenario written before this key existed keeps
+    // playing exactly as it did. Field order mirrors dis-service's Entity:
+    // straight after `description`, ahead of the Force ID.
+    NpcBehavior behavior       = NpcBehavior::Directed;
 
     // ----- DIS Entity ID (wire) -----
     uint16_t    siteId         = 1;
@@ -432,6 +469,20 @@ struct LevelOverlay
     std::vector<LevelZone> zones;   // named sub-regions ([Level.Zone0], …)
 };
 
+// One painted foliage rectangle: a geographic box plus how many trees to put in
+// it. Counts are exact -- the bake places treeCount trees per area, and where
+// areas overlap the shared ground belongs to the earlier area rather than being
+// filled twice. A rectangle entirely covered by an earlier one therefore owns no
+// ground and places nothing.
+struct FoliageArea
+{
+    double    latMinDeg = 0.0;
+    double    latMaxDeg = 0.0;
+    double    lonMinDeg = 0.0;
+    double    lonMaxDeg = 0.0;
+    long long treeCount = 20000;
+};
+
 // Which sub-set of the Coconut_Palm_Pack palms to place (only meaningful when
 // FoliageConfig::palm is true).
 enum class PalmKind : uint8_t { All = 0, Tall = 1, Straight = 2 };
@@ -454,6 +505,65 @@ struct FoliageConfig
     bool              palm       = false;   // Coconut_Palm_Pack
     PalmKind          palmKind   = PalmKind::All;            // used only when palm==true
     FoliageRenderMode renderMode = FoliageRenderMode::InEngine;
+};
+
+//-----------------------------------------------------------------------------
+// PreviewView — the Preview tab's per-scenario view settings ([Preview] section)
+//   The four drop-downs above the canvas describe how a scenario is best VIEWED,
+//   not how the app is configured: a coastal scenario wants the satellite
+//   backdrop and its own saved Location, a 40-minute transit wants 300x preview
+//   speed, a tight camera-cut sequence wants a 100 ms timeline scale. Those are
+//   properties of the scenario, so they ride in scenario.ini rather than the
+//   per-user settings.ini (which keeps the display CHECKBOXES — labels, trails,
+//   paths ... — because those are operator habits, not scenario data).
+//
+//   Every field is written on save and defaults cleanly when the section is
+//   absent, so scenarios authored before [Preview] existed open exactly as they
+//   did before.
+//-----------------------------------------------------------------------------
+struct PreviewView
+{
+    // Map backdrop layer. Numerically identical to the UI's MapLayer enum
+    // (0=None, 1=Satellite, 2=Topographic, 3=Cesium 3D); kept as an int so the
+    // model stays free of the UI/MFC headers that declare it. CPreviewPage
+    // static_asserts that the two agree.
+    int         mapLayer = 0;
+
+    // Label of the entry in the Location drop-down (settings.ini [Places]) this
+    // scenario was authored against. Restoring it only re-SELECTS the row — the
+    // origin itself lives in [Origin] and is never re-applied on load, so a
+    // scenario whose origin was nudged after picking a place keeps that origin.
+    // Empty, or a label this machine has no saved place for, simply leaves the
+    // drop-down unselected.
+    std::string mapPlace;
+
+    // Preview playback multiplier ("Speed:" drop-down). Wall-clock only: it
+    // changes how fast the preview animates, never any scenario time value.
+    double      playSpeed = 10.0;
+
+    // Camera-strip time scale in seconds ("Scale:" drop-down) — how many seconds
+    // one reference span of the timeline represents. Smaller = wider boxes.
+    double      camScaleSeconds = 1.0;
+
+    // ----- "Show" group check boxes + the map's "Move entities" box -----
+    // Which overlays the canvas draws. Per-scenario for the same reason as the
+    // drop-downs above: a scenario with a painted level wants Terrain and Zones
+    // on, a dense 200-entity scenario is unreadable with Labels and Trails on,
+    // and re-setting them by hand on every open is exactly the friction this
+    // section removes. Defaults match a fresh scenario's first-run appearance.
+    bool        showLabels      = true;
+    bool        showTrails      = true;
+    bool        showPaths       = true;
+    bool        showOrientation = false;
+    bool        showTerrain     = true;    // [Level] land/ocean footprint
+    bool        showZones       = true;    // [Level] named zones
+    bool        showLegend      = false;   // size/direction legend overlay
+    bool        showProperties  = false;   // "Properties" destination-time grid
+
+    // "Move entities": whether changing Location drags the scene with the origin
+    // or leaves every entity world-fixed. Authored alongside the location it
+    // applies to, so it belongs with the scenario rather than the user.
+    bool        moveEntitiesWithMap = false;
 };
 
 //-----------------------------------------------------------------------------
@@ -508,6 +618,14 @@ struct Scenario
     // ----- Foliage selections (Preview-tab "Foliage" dialog; [Foliage] section) -----
     FoliageConfig foliage;
 
+    // ----- Painted foliage areas (Preview-tab "Foliage Area" paint tool) -----
+    // Any number of geographic rectangles, each with its own tree count. They may
+    // overlap: the terrain service owns each overlapped patch by exactly ONE
+    // rectangle (the first in this list that covers it), so a rectangle placed on
+    // top of another does not double the trees there. Empty until painted, in
+    // which case a foliage bake falls back to the terrain boundary box.
+    std::vector<FoliageArea> foliageAreas;
+
     // ----- Entities (asset tree). UI edits entities[selectedIdx]; the
     //       sample worker fans out per-tick across all enabled entries. A fresh
     //       scenario starts EMPTY — the operator adds entities via "New". -----
@@ -522,6 +640,11 @@ struct Scenario
     // ----- Camera schedule (Preview-tab authoring; [Camera.N] in scenario.ini).
     //       A contiguous list of CameraFrames tiling [0, duration]. Empty = none. -----
     std::vector<CameraFrame> cameras;
+
+    // ----- Preview-tab view settings ([Preview]): map layer, saved location,
+    //       preview speed, camera-strip scale. Display-only; nothing here
+    //       reaches DISBrowser or the PDU stream. -----
+    PreviewView preview;
 
     // ----- Physical-model defaults (§spec.mk Future Enhancements). Each
     //       entity may override or inherit these values. Phase 1 wires

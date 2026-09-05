@@ -2,12 +2,13 @@
 //  CameraTimeline.h
 //-----------------------------------------------------------------------------
 //  Declares CCameraTimeline, the owner-drawn strip beneath the Preview canvas
-//  that visualizes the scenario's camera schedule as translucent, labeled boxes
-//  along a time axis. Boxes tile [0, duration]; the user drags a box body to
-//  move it (interior frames) and drags a box edge to resize it — edits move the
-//  shared boundary so the contiguous tiling is preserved. A click scrubs the
-//  playback time. The control reads/edits its data through its CPreviewPage
-//  owner; it holds no scenario state of its own.
+//  that visualizes the scenario's camera schedule as translucent boxes along a
+//  time axis, each showing its camera label over the wall-clock seconds that
+//  view is up at the current preview speed. Boxes tile [0, duration]; the user
+//  drags a box body to move it (interior frames) and drags a box edge to resize
+//  it — edits move the shared boundary so the contiguous tiling is preserved. A
+//  click scrubs the playback time. The control reads/edits its data through its
+//  CPreviewPage owner; it holds no scenario state of its own.
 //
 //  Author:        Matt Sebastian
 //  Date started:  2026-07-14

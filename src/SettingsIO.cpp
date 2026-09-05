@@ -11,6 +11,7 @@
 //=============================================================================
 #include "SettingsIO.h"
 #include "../log.h"
+#include <algorithm>   // std::transform — case-insensitive [Terrain] Mode parse
 
 #include <windows.h>
 
@@ -133,16 +134,25 @@ bool SettingsIO::Load(Settings& out, const std::wstring& path)
     out.unrealBasemap     = Narrow(ReadStr(L"Unreal", L"Basemap",     L"Satellite", path));
     out.unrealDynamicTiles = ReadInt(L"Unreal", L"DynamicTiles", 0, path) != 0;
 
-    // [Preview] — display toggles (default to the struct's first-run values).
-    out.previewShowLabels      = ReadInt(L"Preview", L"ShowLabels",      out.previewShowLabels      ? 1 : 0, path) != 0;
-    out.previewShowTrails      = ReadInt(L"Preview", L"ShowTrails",      out.previewShowTrails      ? 1 : 0, path) != 0;
-    out.previewShowPaths       = ReadInt(L"Preview", L"ShowPaths",       out.previewShowPaths       ? 1 : 0, path) != 0;
-    out.previewShowOrientation = ReadInt(L"Preview", L"ShowOrientation", out.previewShowOrientation ? 1 : 0, path) != 0;
-    out.previewShowTerrain     = ReadInt(L"Preview", L"ShowTerrain",     out.previewShowTerrain     ? 1 : 0, path) != 0;
-    out.previewShowZones       = ReadInt(L"Preview", L"ShowZones",       out.previewShowZones       ? 1 : 0, path) != 0;
-    out.previewShowLegend      = ReadInt(L"Preview", L"ShowLegend",      out.previewShowLegend      ? 1 : 0, path) != 0;
-    out.previewShowProperties  = ReadInt(L"Preview", L"ShowProperties",  out.previewShowProperties  ? 1 : 0, path) != 0;
-    out.previewMoveEntities    = ReadInt(L"Preview", L"MoveEntities",    out.previewMoveEntities    ? 1 : 0, path) != 0;
+    // [Terrain] — server mode + remote endpoint. Unknown/misspelt names fall back
+    // to Local rather than failing the load, so a hand-edited file can't brick
+    // startup; the name is matched case-insensitively for the same reason.
+    {
+        std::wstring mode = ReadStr(L"Terrain", L"Mode", L"Local", path);
+        std::transform(mode.begin(), mode.end(), mode.begin(), ::towlower);
+        if      (mode == L"legacy")  out.terrainMode = TerrainServerMode::Legacy;
+        else if (mode == L"remote")  out.terrainMode = TerrainServerMode::Remote;
+        else if (mode == L"service") out.terrainMode = TerrainServerMode::Service;
+        else                         out.terrainMode = TerrainServerMode::Local;
+
+        out.terrainRemoteHost = Narrow(ReadStr(L"Terrain", L"RemoteHost", L"127.0.0.1", path));
+
+        // Service defaults to 8089 so the container and a native TerrainServer.exe
+        // on 8088 can both be up; the other modes keep 8088.
+        const int defPort = (out.terrainMode == TerrainServerMode::Service) ? 8089 : 8088;
+        out.terrainRemotePort = static_cast<uint16_t>(
+            ReadInt(L"Terrain", L"RemotePort", defPort, path) & 0xFFFF);
+    }
 
     // [Deploy] ColumnWidths — comma-separated pixel widths.
     out.deployColumnWidths.clear();
@@ -220,15 +230,13 @@ bool SettingsIO::Save(const Settings& s, const std::wstring& path)
     ok &= WriteStr(L"Unreal", L"Basemap",       Widen(s.unrealBasemap).c_str(),     tmp);
     ok &= WriteInt(L"Unreal", L"DynamicTiles",  s.unrealDynamicTiles ? 1 : 0,       tmp);
 
-    ok &= WriteInt(L"Preview", L"ShowLabels",      s.previewShowLabels      ? 1 : 0, tmp);
-    ok &= WriteInt(L"Preview", L"ShowTrails",      s.previewShowTrails      ? 1 : 0, tmp);
-    ok &= WriteInt(L"Preview", L"ShowPaths",       s.previewShowPaths       ? 1 : 0, tmp);
-    ok &= WriteInt(L"Preview", L"ShowOrientation", s.previewShowOrientation ? 1 : 0, tmp);
-    ok &= WriteInt(L"Preview", L"ShowTerrain",     s.previewShowTerrain     ? 1 : 0, tmp);
-    ok &= WriteInt(L"Preview", L"ShowZones",       s.previewShowZones       ? 1 : 0, tmp);
-    ok &= WriteInt(L"Preview", L"ShowLegend",      s.previewShowLegend      ? 1 : 0, tmp);
-    ok &= WriteInt(L"Preview", L"ShowProperties",  s.previewShowProperties  ? 1 : 0, tmp);
-    ok &= WriteInt(L"Preview", L"MoveEntities",    s.previewMoveEntities    ? 1 : 0, tmp);
+    // Written as a name, not a number, so the file stays hand-editable.
+    ok &= WriteStr(L"Terrain", L"Mode",
+                   s.terrainMode == TerrainServerMode::Legacy  ? L"Legacy"  :
+                   s.terrainMode == TerrainServerMode::Remote  ? L"Remote"  :
+                   s.terrainMode == TerrainServerMode::Service ? L"Service" : L"Local", tmp);
+    ok &= WriteStr(L"Terrain", L"RemoteHost", Widen(s.terrainRemoteHost).c_str(), tmp);
+    ok &= WriteInt(L"Terrain", L"RemotePort", s.terrainRemotePort, tmp);
 
     if (!s.deployColumnWidths.empty())
     {

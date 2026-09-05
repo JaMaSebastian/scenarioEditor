@@ -147,6 +147,7 @@
 #define IDC_EDIT_ENTITY_BEGIN_TIME      1235
 #define IDC_EDIT_ENTITY_END_TIME        1236
 #define IDC_EDIT_ENTITY_UPDATE_RATE     1237
+#define IDC_COMBO_ENTITY_BEHAVIOR       1238
 #define IDC_COMBO_MOTION_ENTITY         1300
 #define IDC_LIST_MOTION_SEGMENTS        1301
 #define IDC_BTN_ADD_SEGMENT             1302
@@ -224,6 +225,8 @@
 #define IDC_BTN_PREVIEW_TERRAIN_STOP    1888
 #define IDC_BTN_PREVIEW_PURGE_TERRAIN   1889
 #define IDC_BTN_PREVIEW_BUILD_FOLIAGE   1938
+#define IDC_BTN_PREVIEW_FOLIAGE_AREA    1944
+#define IDC_STATIC_TERRAIN_STATUS       1939
 #define IDC_BTN_PREVIEW_SHOW_ORIGIN     1923
 #define IDC_CHK_PREVIEW_ZONES           1924
 #define IDC_BTN_PREVIEW_GOTO_ORIGIN     1927
@@ -246,22 +249,54 @@
 #define IDC_COMBO_CAM_SCALE             1925
 #define IDC_CAMERA_HSCROLL              1926
 
-// Entity Camera dialog (RMB entity dot -> "New Camera...").
+// New/Edit Camera dialog (Preview "New Cam..." button, RMB an entity dot, and
+// RMB a camera box on the timeline strip or the canvas).
 #define IDD_ENTITY_CAMERA               310
-#define IDC_STATIC_ECAM_SOURCE          1919
+#define IDC_COMBO_ECAM_SOURCE           1945
 #define IDC_COMBO_ECAM_PRESET           1920
 #define IDC_COMBO_ECAM_TARGET           1921
 #define IDC_COMBO_ECAM_TRANS            1922
 // Zoom row (under Target): master toggle, static FOV override, dynamic
 // fit-the-target toggle, and the frame-fill percentage the fit aims for.
-#define IDC_CHK_ECAM_ZOOM               1939
+// (ECAM_ZOOM moved off 1939 — IDC_STATIC_TERRAIN_STATUS already had it.)
+#define IDC_CHK_ECAM_ZOOM               1966
 #define IDC_EDIT_ECAM_FOV               1940
 #define IDC_CHK_ECAM_DYNZOOM            1941
 #define IDC_EDIT_ECAM_FILL              1942
 
-// Gimbal-limits row: enforce the mounted preset's body-relative travel envelope.
-// Offerable only when that preset actually defines and enables one in Cameras.ini.
+// Gimbal-limits row: enforce the mounted preset's body-relative travel envelope
+// FOR THIS SHOT. Offerable only when that preset actually defines an envelope.
 #define IDC_CHK_ECAM_GIMBAL             1943
+
+// Shot fields the dialog gained when it became an editor as well as a creator:
+// a camera name, the transition duration, and the stationary vantage (ENU metres
+// from the scenario origin, enabled only when Source is "(none)").
+#define IDC_EDIT_ECAM_LABEL             1946
+#define IDC_EDIT_ECAM_TRANSSEC          1947
+#define IDC_EDIT_ECAM_VANT_E            1948
+#define IDC_EDIT_ECAM_VANT_N            1949
+#define IDC_EDIT_ECAM_VANT_U            1950
+#define IDC_LBL_ECAM_VANT               1964
+
+// Gimbal envelope group (right-hand column). These edit the PRESET's envelope in
+// Cameras.ini, shared by every shot mounting that preset — a different scope from
+// everything on the left, which is why they live in their own group box. The
+// three *_SPAN statics report each axis's swept arc so a wrapping yaw/roll pair
+// (Min > Max, legal) reads as intentional rather than as an error.
+#define IDC_GRP_ECAM_ENV                1963
+#define IDC_CHK_ECAM_ENV_DEF            1951
+#define IDC_EDIT_ECAM_MINPITCH          1952
+#define IDC_EDIT_ECAM_MAXPITCH          1953
+#define IDC_EDIT_ECAM_MINYAW            1954
+#define IDC_EDIT_ECAM_MAXYAW            1955
+#define IDC_EDIT_ECAM_MINROLL           1956
+#define IDC_EDIT_ECAM_MAXROLL           1957
+#define IDC_LBL_ECAM_PITCH_SPAN         1958
+#define IDC_LBL_ECAM_YAW_SPAN           1959
+#define IDC_LBL_ECAM_ROLL_SPAN          1960
+#define IDC_LBL_ECAM_ENV_NOTE           1961
+#define IDC_LBL_ECAM_ENV_PATH           1962
+#define IDC_LBL_ECAM_ARC_NOTE           1965
 
 // Foliage dialog (Preview tab "Foliage" button) + its controls.
 #define IDD_FOLIAGE                     311
@@ -977,7 +1012,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        312
 #define _APS_NEXT_COMMAND_VALUE         32100
-#define _APS_NEXT_CONTROL_VALUE         1944
+#define _APS_NEXT_CONTROL_VALUE         1967
 #define _APS_NEXT_SYMED_VALUE           34000
 #endif
 #endif

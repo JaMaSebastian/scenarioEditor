@@ -15,7 +15,7 @@
 #include "CameraTimeline.h"
 #include "PreviewPage.h"
 #include "Scenario.h"
-#include "CameraZoomMenu.h"   // shared "Zoom" submenu on the box RMB menu
+#include "FormatUtil.h"      // FormatDurationCompact for the per-box duration line
 
 #include <algorithm>
 #include <cstdlib>
@@ -141,7 +141,8 @@ BOOL CCameraTimeline::OnEraseBkgnd(CDC*) { return TRUE; }
 
 //
 // OnPaint — double-buffered render of the background, each frame box (translucent
-//   fill + border + centered clipped label), and the playhead at the current time.
+//   fill + border + clipped label over a duration line), and the playhead at
+//   the current time.
 //
 void CCameraTimeline::OnPaint()
 {
@@ -174,6 +175,17 @@ void CCameraTimeline::OnPaint()
         CFont* oldFont = mem.SelectObject(CFont::FromHandle(
             (HFONT)::GetStockObject(DEFAULT_GUI_FONT)));
 
+        // One metrics query for the whole strip: the box text is two stacked
+        // lines (label over duration) and DrawText won't lay that out for us.
+        TEXTMETRIC tm{};
+        mem.GetTextMetrics(&tm);
+        const int lineH = (int)tm.tmHeight;
+
+        // Durations are reported as the wall-clock seconds the view is actually
+        // up, i.e. the scenario span divided by the preview playback rate — at
+        // 10x a 16.9 s frame is only on screen for about 2 s.
+        const double spd = m_owner ? m_owner->GetPlaySpeed() : 1.0;
+
         for (size_t i = 0; i < cams->size(); ++i)
         {
             const CameraFrame& c = (*cams)[i];
@@ -191,14 +203,34 @@ void CCameraTimeline::OnPaint()
             CBrush borderBrush(kBorder);
             mem.FrameRect(&box, &borderBrush);
 
-            // Label, clipped inside the box with a small inset.
+            // Text, clipped inside the box with a small inset: the label on top
+            // and the duration under it. Two lines only when the strip is tall
+            // enough for both — otherwise fall back to the single centred label
+            // rather than clipping one of them.
             CRect textRc = box; textRc.DeflateRect(4, 0);
             if (textRc.Width() > 6)
             {
                 mem.SetTextColor(kText);
                 CString label(c.label.c_str());
-                mem.DrawText(label, &textRc,
-                             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                const UINT kFlags = DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX;
+
+                if (lineH > 0 && textRc.Height() >= 2 * lineH)
+                {
+                    // Centre the pair as a block, then stack label over duration.
+                    const int top = textRc.top + (textRc.Height() - 2 * lineH) / 2;
+                    CRect r1(textRc.left, top,         textRc.right, top + lineH);
+                    CRect r2(textRc.left, top + lineH, textRc.right, top + 2 * lineH);
+
+                    mem.DrawText(label, &r1, kFlags | DT_TOP);
+
+                    const double span = c.endSecond - c.beginSecond;
+                    mem.DrawText(FormatDurationCompact((span > 0.0 ? span : 0.0) / spd),
+                                 &r2, kFlags | DT_TOP);
+                }
+                else
+                {
+                    mem.DrawText(label, &textRc, kFlags | DT_VCENTER);
+                }
             }
         }
         mem.SelectObject(oldFont);
@@ -379,9 +411,9 @@ void CCameraTimeline::ReindexDraggedFrame()
 }
 
 //
-// OnRButtonUp — right-click a camera box to pop its Zoom + Delete menu. This is
-//   the only route to an Entity camera's zoom after creation: Entity frames have
-//   no canvas box, so the canvas menu can't reach them.
+// OnRButtonUp — right-click a camera box to pop its Edit + Delete menu. This is
+//   the only route to an Entity camera's settings after creation: Entity frames
+//   have no canvas box, so the canvas menu cannot reach them.
 //
 void CCameraTimeline::OnRButtonUp(UINT, CPoint pt)
 {
@@ -393,18 +425,16 @@ void CCameraTimeline::OnRButtonUp(UINT, CPoint pt)
 
     const std::vector<CameraFrame>* cams = m_owner->GetCameras();
     if (!cams || static_cast<size_t>(frame) >= cams->size()) return;
-    const CameraFrame& f = (*cams)[static_cast<size_t>(frame)];
 
-    // Kept clear of CameraZoomMenu's [kCmdFirst, kCmdLast] block.
-    enum { kDeleteCamera = 1 };
-
-    CMenu zoom;
-    zoom.CreatePopupMenu();
-    CameraZoomMenu::Build(zoom, f);
+    // Note there is deliberately NO CameraFrame& held here. TrackPopupMenu runs its
+    // own message loop and "Edit Camera..." opens a modal on top of it, so a
+    // reference into Scenario::cameras could not safely survive either. Only the
+    // index travels, and EditCameraViaDialog re-validates it.
+    enum { kEditCamera = 1, kDeleteCamera };
 
     CMenu menu;
     menu.CreatePopupMenu();
-    menu.AppendMenu(MF_POPUP, reinterpret_cast<UINT_PTR>(zoom.GetSafeHmenu()), _T("Camera"));
+    menu.AppendMenu(MF_STRING, kEditCamera,   _T("Edit Camera..."));
     menu.AppendMenu(MF_SEPARATOR, 0, static_cast<LPCTSTR>(nullptr));
     menu.AppendMenu(MF_STRING, kDeleteCamera, _T("Delete Camera"));
 
@@ -413,12 +443,10 @@ void CCameraTimeline::OnRButtonUp(UINT, CPoint pt)
     SetForegroundWindow();   // so the menu dismisses correctly on click-away
     const UINT cmd = menu.TrackPopupMenu(
         TPM_RETURNCMD | TPM_LEFTALIGN | TPM_RIGHTBUTTON, screen.x, screen.y, this);
-    zoom.Detach();   // owned by `menu`
 
-    if (CameraZoomMenu::Handle(cmd, *m_owner, static_cast<size_t>(frame), f, this))
-        return;
-
-    if (cmd == kDeleteCamera)
+    if (cmd == kEditCamera)
+        m_owner->EditCameraViaDialog(static_cast<size_t>(frame));
+    else if (cmd == kDeleteCamera)
         m_owner->DeleteCamera(static_cast<size_t>(frame));
 }
 

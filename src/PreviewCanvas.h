@@ -111,6 +111,17 @@ struct PreviewLevelZone
     uint32_t    colorRgb  = 0x2E7D32;  // 0xRRGGBB fill/outline tint
 };
 
+// A painted foliage rectangle, in ENU metres about the scenario origin, with the
+// tree count it carries so the canvas can label it.
+struct PreviewFoliageArea
+{
+    double    eastMinM  = 0.0;
+    double    eastMaxM  = 0.0;
+    double    northMinM = 0.0;
+    double    northMaxM = 0.0;
+    long long treeCount = 0;
+};
+
 //-----------------------------------------------------------------------------
 // PreviewRenderState — the complete, flattened snapshot the page hands the canvas
 //   Everything needed for one frame: per-entity poses/paths/trails, editable
@@ -159,6 +170,9 @@ struct PreviewRenderState
     PreviewLevelRect levelLand;
     PreviewLevelRect levelOcean;
     std::vector<PreviewLevelZone> levelZones;   // named sub-regions, drawn over terrain
+    // Painted foliage rectangles, projected to ENU for drawing. Overlaps are
+    // drawn as painted; the bake resolves them by ownership, not the canvas.
+    std::vector<PreviewFoliageArea> foliageAreas;
 };
 
 //-----------------------------------------------------------------------------
@@ -235,6 +249,14 @@ private:
     // Topmost enabled level ZONE box (e.g. Palm Forest) containing a physical-pixel
     // point, or -1. Index into state.levelZones. Only hits when zones are visible.
     int  HitTestZone(CPoint pxPt) const;
+    // Topmost painted foliage area containing a physical-pixel point, or -1.
+    // Iterated in reverse so the LAST painted wins the click -- it is also the
+    // one drawn on top, so the hit matches what the operator sees.
+    int  HitTestFoliageArea(CPoint pxPt) const;
+    // Right-click menu for a painted foliage area (set count / delete).
+    // True if a menu was shown. Only claims a click with NO drag, so a
+    // right-drag across a forest still rubber-band selects.
+    bool ShowFoliageAreaMenu(CPoint pxPt);
     // Convert a physical-pixel client point to DIPs (the space ProjectEnu draws in).
     D2D1_POINT_2F ClientToDip(CPoint px) const;
 

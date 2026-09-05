@@ -14,6 +14,7 @@
 #include "pch.h"
 #include "EntityTypeCatalog.h"
 #include "CameraPresetCatalog.h"
+#include "HangerCameraTypeMap.h"
 #include "PlaysCatalog.h"
 #include "SettingsIO.h"
 
@@ -62,14 +63,34 @@ public:
     PlaysCatalog&       MutablePlays() { return m_plays; }
     const std::wstring& PlaysPath() const { return m_playsPath; }
 
-    // Saved camera-view presets loaded once from config\Cameras.ini (resolved
-    // like the catalog). Read-only; feeds the Preview-tab "Camera" dropdown.
+    // Saved camera-view presets loaded from config\Cameras.ini (resolved like the
+    // catalog). Read-only; feeds the Preview-tab "Camera" dropdown.
     const CameraPresetCatalog& CameraPresets() const { return m_cameraPresets; }
     const std::wstring& CameraPresetsPath() const { return m_cameraPresetsPath; }
+
+    // Re-read Cameras.ini after the New/Edit Camera dialog has written a gimbal
+    // envelope through CameraPresetIO. The catalog is otherwise load-once, so
+    // without this the dialog would keep showing the pre-write values for the rest
+    // of the session. CAUTION: anything holding an INDEX into Presets() must
+    // consume it before calling this.
+    bool ReloadCameraPresets() { return m_cameraPresets.LoadFromIni(m_cameraPresetsPath); }
+
+    // DISBrowser project root: the Run tab's folder when set, else the sibling
+    // "DISBrowser" beside the exe. Never has a trailing separator, and is not
+    // checked for existence — callers that need a real file say so themselves.
+    std::wstring DisBrowserProjectDir() const;
+
+    // DIS tuple -> Cameras.ini <Type>, read from DISBrowser's Config\Hanger.ini so a
+    // camera dropdown can offer the presets that actually belong to the entity being
+    // filmed. Loaded lazily rather than in InitInstance: the DISBrowser project folder
+    // is a Run-tab setting the user may not have set yet, and it can change mid-session.
+    // Retries while empty, so setting the folder later fixes it without a restart.
+    const HangerCameraTypeMap& HangerTypes();
 
 private:
     EntityTypeCatalog  m_catalog;
     CameraPresetCatalog m_cameraPresets;
+    HangerCameraTypeMap m_hangerTypes;
     PlaysCatalog       m_plays;
     ::Settings         m_settings;
     std::wstring       m_settingsPath;

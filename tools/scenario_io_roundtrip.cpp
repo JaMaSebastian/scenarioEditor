@@ -97,6 +97,9 @@ int main()
     e.applicationId  = 1;
     e.entityId       = 101;
     e.forceId        = 2; // Opposing
+    // Behavior (URZA-11265): 101 is authored held, 7 keeps the Directed
+    // default so we cover both tokens the writer can emit.
+    e.behavior       = NpcBehavior::Stationary;
     e.kind           = 1;
     e.domain         = 2;
     e.country        = 225;
@@ -198,12 +201,54 @@ int main()
         s.cameras.push_back(c1);
     }
 
+    // ---- Preview-tab view settings ([Preview] section) ----
+    // Non-default on every field, so a writer that dropped one would show up as a
+    // fall-back-to-default rather than passing by accident.
+    s.preview.mapLayer        = 2;                        // Topographic
+    s.preview.mapPlace        = "Taipei, Taiwan";
+    s.preview.playSpeed       = 300.0;
+    s.preview.camScaleSeconds = 0.10;                     // "100 ms"
+    // Every "Show" flag flipped away from its default, so a writer that dropped
+    // one would read back as the default rather than passing by accident.
+    s.preview.showLabels          = false;
+    s.preview.showTrails          = false;
+    s.preview.showPaths           = false;
+    s.preview.showOrientation     = true;
+    s.preview.showTerrain         = false;
+    s.preview.showZones           = false;
+    s.preview.showLegend          = true;
+    s.preview.showProperties      = true;
+    s.preview.moveEntitiesWithMap = true;
+
     // ---- Foliage selection ([Foliage] section) ----
     s.foliage.oak        = true;
     s.foliage.bigTrees   = false;
     s.foliage.palm       = true;
     s.foliage.palmKind   = PalmKind::Straight;
     s.foliage.renderMode = FoliageRenderMode::I3dm;
+
+    // ---- Painted foliage areas ([Foliage.Area<i>]) ----
+    // Two DELIBERATELY OVERLAPPING rectangles with different counts. Order is
+    // load-bearing: the bake gives overlapped ground to the area listed first,
+    // so a round-trip that reordered or merged them would silently change where
+    // the trees land.
+    {
+        FoliageArea a0;
+        a0.latMinDeg = 36.20; a0.latMaxDeg = 36.60;
+        a0.lonMinDeg = -112.80; a0.lonMaxDeg = -112.40;
+        a0.treeCount = 3000;
+        FoliageArea a1;
+        a1.latMinDeg = 36.40; a1.latMaxDeg = 36.80;
+        a1.lonMinDeg = -112.60; a1.lonMaxDeg = -112.20;
+        a1.treeCount = 2000;
+        FoliageArea a2;
+        a2.latMinDeg = 36.10; a2.latMaxDeg = 36.30;
+        a2.lonMinDeg = -112.95; a2.lonMaxDeg = -112.70;
+        a2.treeCount = 750;
+        s.foliageAreas.push_back(a0);
+        s.foliageAreas.push_back(a1);
+        s.foliageAreas.push_back(a2);
+    }
 
     const std::wstring path = TempIniPath();
     std::printf("Saving to %S\n", path.c_str());
@@ -289,6 +334,7 @@ int main()
         EXPECT_EQ(le.siteId,        e.siteId,        "Entity.SiteID");
         EXPECT_EQ(le.applicationId, e.applicationId, "Entity.ApplicationID");
         EXPECT_EQ(le.entityId,      e.entityId,      "Entity.EntityID");
+        EXPECT_EQ((int)le.behavior, (int)e.behavior, "Entity.Behavior");
         EXPECT_EQ((int)le.forceId,  (int)e.forceId,  "Entity.ForceID");
         EXPECT_EQ((int)le.kind,        (int)e.kind,        "Entity.Kind");
         EXPECT_EQ((int)le.domain,      (int)e.domain,      "Entity.Domain");
@@ -388,12 +434,119 @@ int main()
         }
     }
 
+    // ---- Preview-tab view settings ----
+    EXPECT_EQ(loaded.preview.mapLayer, s.preview.mapLayer, "Preview.MapLayer");
+    EXPECT_EQ(loaded.preview.mapPlace, s.preview.mapPlace, "Preview.Location");
+    EXPECT_NEAR(loaded.preview.playSpeed, s.preview.playSpeed, 1e-9, "Preview.PlaySpeed");
+    EXPECT_NEAR(loaded.preview.camScaleSeconds, s.preview.camScaleSeconds, 1e-9,
+                "Preview.CameraScaleSeconds");
+    EXPECT_EQ(loaded.preview.showLabels,      s.preview.showLabels,      "Preview.ShowLabels");
+    EXPECT_EQ(loaded.preview.showTrails,      s.preview.showTrails,      "Preview.ShowTrails");
+    EXPECT_EQ(loaded.preview.showPaths,       s.preview.showPaths,       "Preview.ShowPaths");
+    EXPECT_EQ(loaded.preview.showOrientation, s.preview.showOrientation, "Preview.ShowOrientation");
+    EXPECT_EQ(loaded.preview.showTerrain,     s.preview.showTerrain,     "Preview.ShowTerrain");
+    EXPECT_EQ(loaded.preview.showZones,       s.preview.showZones,       "Preview.ShowZones");
+    EXPECT_EQ(loaded.preview.showLegend,      s.preview.showLegend,      "Preview.ShowLegend");
+    EXPECT_EQ(loaded.preview.showProperties,  s.preview.showProperties,  "Preview.ShowProperties");
+    EXPECT_EQ(loaded.preview.moveEntitiesWithMap, s.preview.moveEntitiesWithMap,
+              "Preview.MoveEntities");
+
     // ---- Foliage selection ----
     EXPECT_EQ(loaded.foliage.oak,        s.foliage.oak,        "Foliage.Oak");
     EXPECT_EQ(loaded.foliage.bigTrees,   s.foliage.bigTrees,   "Foliage.BigTrees");
     EXPECT_EQ(loaded.foliage.palm,       s.foliage.palm,       "Foliage.Palm");
     EXPECT_EQ((int)loaded.foliage.palmKind,   (int)s.foliage.palmKind,   "Foliage.PalmKind");
     EXPECT_EQ((int)loaded.foliage.renderMode, (int)s.foliage.renderMode, "Foliage.RenderMode");
+
+    // ---- Painted foliage areas: count, ORDER, bounds and per-area tree counts ----
+    EXPECT_EQ(loaded.foliageAreas.size(), s.foliageAreas.size(), "Foliage.AreaCount");
+    for (size_t i = 0; i < s.foliageAreas.size() && i < loaded.foliageAreas.size(); ++i)
+    {
+        const FoliageArea& a = s.foliageAreas[i];
+        const FoliageArea& b = loaded.foliageAreas[i];
+        const std::string T = "Foliage.Area" + std::to_string(i);
+        EXPECT_NEAR(b.latMinDeg, a.latMinDeg, 1e-9, (T + ".latMinDeg").c_str());
+        EXPECT_NEAR(b.latMaxDeg, a.latMaxDeg, 1e-9, (T + ".latMaxDeg").c_str());
+        EXPECT_NEAR(b.lonMinDeg, a.lonMinDeg, 1e-9, (T + ".lonMinDeg").c_str());
+        EXPECT_NEAR(b.lonMaxDeg, a.lonMaxDeg, 1e-9, (T + ".lonMaxDeg").c_str());
+        // Per-area counts are the whole point of the feature: a shared count
+        // would silently plant the wrong number of trees in each area.
+        EXPECT_EQ(b.treeCount, a.treeCount, (T + ".treeCount").c_str());
+    }
+
+    // ---- Deleting an area must not resurrect on the next load ----
+    // WritePrivateProfileString cannot remove a section, so re-saving a SHORTER
+    // list leaves the old trailing [Foliage.Area<n>] behind in the file. AreaCount
+    // is what bounds the scan, so the stale section must be ignored; if loading
+    // ever walked the sections instead, a deleted forest would silently come back.
+    {
+        std::printf("\nDelete-and-resave: 3 areas -> erase the middle -> 2 areas\n");
+        Scenario shrunk = loaded;
+        shrunk.foliageAreas.erase(shrunk.foliageAreas.begin() + 1);
+
+        const ScenarioIO::Result wrc2 = ScenarioIO::Save(shrunk, path);
+        EXPECT_EQ((int)wrc2, (int)ScenarioIO::Result::Ok, "Resave.Result");
+
+        Scenario reloaded;
+        const ScenarioIO::Result rrc2 = ScenarioIO::Load(reloaded, path);
+        EXPECT_EQ((int)rrc2, (int)ScenarioIO::Result::Ok, "Reload.Result");
+
+        EXPECT_EQ(reloaded.foliageAreas.size(), (size_t)2, "Deleted.AreaCount");
+        if (reloaded.foliageAreas.size() == 2)
+        {
+            // The survivors must be the FIRST and THIRD, in that order: paint
+            // order decides who owns overlapped ground, so a silent reorder here
+            // would move trees on the next bake.
+            EXPECT_EQ(reloaded.foliageAreas[0].treeCount, (long long)3000, "Deleted.Area0.treeCount");
+            EXPECT_EQ(reloaded.foliageAreas[1].treeCount, (long long)750,  "Deleted.Area1.treeCount");
+            EXPECT_NEAR(reloaded.foliageAreas[1].lonMinDeg, -112.95, 1e-9, "Deleted.Area1.lonMinDeg");
+        }
+    }
+
+    // ---- Behavior key: exact INI spelling, both tokens, case-insensitive read ----
+    // dis-service matches on the literal token, so the bytes on disk matter as
+    // much as the model round-trip above. Read them back raw rather than
+    // trusting ScenarioIO to agree with itself.
+    {
+        std::printf("\nBehavior key (URZA-11265)\n");
+        wchar_t buf[64] = {};
+
+        ::GetPrivateProfileStringW(L"Entity.101", L"Behavior", L"<missing>",
+                                   buf, 64, path.c_str());
+        EXPECT_EQ(std::wstring(buf), std::wstring(L"Stationary"), "Ini.Entity101.Behavior");
+
+        // Directed is written explicitly rather than omitted: an absent key
+        // loads as Directed too, but then the file cannot tell an author that
+        // the question was ever asked.
+        ::GetPrivateProfileStringW(L"Entity.7", L"Behavior", L"<missing>",
+                                   buf, 64, path.c_str());
+        EXPECT_EQ(std::wstring(buf), std::wstring(L"Directed"), "Ini.Entity7.Behavior");
+
+        // The key belongs to the entity section and must never leak into a
+        // Motion subsection, where dis-service would never look for it.
+        ::GetPrivateProfileStringW(L"Entity.101.Motion.1", L"Behavior", L"<missing>",
+                                   buf, 64, path.c_str());
+        EXPECT_EQ(std::wstring(buf), std::wstring(L"<missing>"), "Ini.Motion.NoBehavior");
+
+        // Hand-edited values, mirroring the service reader: lower case parses,
+        // and an unrecognised token (Resume is a REST command, never a state)
+        // falls back to Directed instead of failing the load.
+        ::WritePrivateProfileStringW(L"Entity.7",   L"Behavior", L"stationary", path.c_str());
+        ::WritePrivateProfileStringW(L"Entity.101", L"Behavior", L"Resume",     path.c_str());
+
+        Scenario mixed;
+        const ScenarioIO::Result rrc3 = ScenarioIO::Load(mixed, path);
+        EXPECT_EQ((int)rrc3, (int)ScenarioIO::Result::Ok, "CaseInsensitive.Load");
+        for (const auto& en : mixed.entities)
+        {
+            if (en.entityId == 7)
+                EXPECT_EQ((int)en.behavior, (int)NpcBehavior::Stationary,
+                          "CaseInsensitive.Entity7");
+            if (en.entityId == 101)
+                EXPECT_EQ((int)en.behavior, (int)NpcBehavior::Directed,
+                          "UnknownValueFallsBackToDirected");
+        }
+    }
 
     if (failures == 0) {
         std::printf("\nRound-trip PASS\n");

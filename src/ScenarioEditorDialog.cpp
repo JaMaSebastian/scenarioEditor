@@ -15,8 +15,6 @@
 #include "PduBuilder.h"
 #include "ScenarioEditor.h"   // for theApp.Catalog()/Settings()/Plays()
 #include "ScenarioIO.h"
-#include "ScenarioCameraIO.h"   // legacy <scenario>-camera.ini import (migration only)
-#include "ScenarioPaths.h"      // CameraPathFor()
 #include "ScrollablePage.h"     // FitWindowToMonitorWorkArea()
 #include "SettingsIO.h"
 #include "Validator.h"
@@ -64,18 +62,6 @@ namespace
         if (fields != 4) return false;
         if (a > 255 || b > 255 || c > 255 || d > 255) return false;
         return a >= 224 && a <= 239;   // 224.0.0.0/4
-    }
-
-    // The camera schedule now lives inside scenario.ini ([Camera.N] sections).
-    // Older scenarios kept it in a sibling "<scenario>-camera.ini". When a freshly
-    // loaded scenario carries no cameras, import that legacy side-file (if present)
-    // so those frames aren't lost; they fold into scenario.ini on the next save,
-    // after which DoSaveTo deletes the now-redundant side-file.
-    void MigrateLegacyCameras(Scenario& loaded, const CString& iniPath)
-    {
-        if (!loaded.cameras.empty()) return;
-        ScenarioCameraIO::Load(loaded,
-            std::wstring(CT2W(CameraPathFor(iniPath))));
     }
 
     // Leaf filename of a path (after the last \ or /), e.g. "harburtField.ini".
@@ -303,7 +289,6 @@ BOOL CScenarioEditorDialog::OnInitDialog()
             const ScenarioIO::Result rc = ScenarioIO::Load(loaded, lastPath);
             if (rc == ScenarioIO::Result::Ok)
             {
-                MigrateLegacyCameras(loaded, CString(lastPath.c_str()));
                 m_scenario = std::move(loaded);
                 SetCurrentScenarioPath(CString(lastPath.c_str()));
                 WarnIfOriginDisconnected(m_scenario, leaf);
@@ -535,7 +520,6 @@ void CScenarioEditorDialog::LoadScenarioForPlay(const CString& iniPath, bool als
     switch (rc)
     {
         case ScenarioIO::Result::Ok:
-            MigrateLegacyCameras(loaded, iniPath);
             m_scenario = std::move(loaded);
             SetCurrentScenarioPath(iniPath);
             RefreshUiFromScenario();
@@ -1329,9 +1313,15 @@ void CScenarioEditorDialog::RefreshUiFromScenario()
     // immediately flip us to "modified".
     // The Setup / Asset / Motion pages live in the modal Attributes notebook
     // and refresh themselves from the shared scenario when opened; here we
-    // only refresh the Output page (Preview reads the model live on paint).
+    // refresh the Output page and the Preview tab's view drop-downs (the
+    // Preview canvas itself reads the model live on paint).
     m_suppressDirty = true;
     m_pageOutput.ReadFrom(m_scenario.output);
+    // ...and the Preview tab's view drop-downs (map layer / location / speed /
+    // scale), which live in the scenario's [Preview] section. The canvas itself
+    // reads the model live, but those four controls hold state that has to be
+    // pushed back into them when the model is replaced.
+    m_pagePreview.OnScenarioLoaded();
     m_suppressDirty = false;
     UpdateTitle();
     Revalidate();
@@ -1451,8 +1441,8 @@ void CScenarioEditorDialog::OnScenarioValidate()
 //
 //
 // SetCurrentScenarioPath — record the open scenario's path and mirror it onto
-// the Run tab, so "Configure Unreal" can derive this scenario's camera schedule
-// (<scenario>-camera.ini) and write its path into DISBrowser's Startup.ini.
+// the Run tab, so "Configure Unreal" can hand DISBrowser this scenario's path as
+// its camera schedule ([ScenarioCameras] ScheduleFile in Startup.ini).
 //
 void CScenarioEditorDialog::SetCurrentScenarioPath(const CString& path)
 {
@@ -1474,10 +1464,10 @@ bool CScenarioEditorDialog::DoSaveTo(const CString& iniPath)
                       MB_OK | MB_ICONERROR);
         return false;
     }
-    // The camera schedule is now saved inside scenario.ini (ScenarioIO::Save writes
-    // the [Camera.N] sections). Delete any legacy "<scenario>-camera.ini" side-file
-    // so the two-file layout can't resurface and drift out of sync.
-    ::DeleteFileW(std::wstring(CT2W(CameraPathFor(iniPath))).c_str());
+    // The camera schedule is saved inside scenario.ini — ScenarioIO::Save writes the
+    // [Camera.N] sections. (The old two-file layout, with a sibling
+    // "<scenario>-camera.ini", is gone: its importer and the delete-on-save that
+    // cleaned up after it were retired once every scenario had been migrated.)
     SetCurrentScenarioPath(iniPath);
     ClearDirty();
     UpdateTitle();
@@ -1524,7 +1514,6 @@ void CScenarioEditorDialog::OnFileOpen()
     switch (rc)
     {
         case ScenarioIO::Result::Ok:
-            MigrateLegacyCameras(loaded, path);
             m_scenario = std::move(loaded);
             SetCurrentScenarioPath(path);
             RefreshUiFromScenario();

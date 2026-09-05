@@ -136,9 +136,10 @@
     <ClInclude Include="src\PreviewCanvas.h" />
     <ClInclude Include="src\CameraTimeline.h" />
     <ClInclude Include="src\CameraPresetCatalog.h" />
-    <ClInclude Include="src\CameraZoomMenu.h" />
+    <ClInclude Include="src\HangerCameraTypeMap.h" />
+    <ClInclude Include="src\CameraPresetIO.h" />
+    <ClInclude Include="src\CameraPresetCombo.h" />
     <ClInclude Include="src\CameraTargetExtents.h" />
-    <ClInclude Include="src\ScenarioCameraIO.h" />
     <ClInclude Include="src\EntityTypePickerDialog.h" />
     <ClInclude Include="src\MapTileService.h" />
     <ClInclude Include="src\CesiumView.h" />
@@ -147,17 +148,19 @@
     <ClInclude Include="src\PduBuilder.h" />
     <ClInclude Include="src\UdpSender.h" />
     <ClInclude Include="src\TcpSender.h" />
+    <ClInclude Include="src\ProcessSupervisor.h" />
     <ClInclude Include="src\ScenarioIO.h" />
     <ClInclude Include="src\EntityTypeCatalog.h" />
     <ClInclude Include="src\CoordTransforms.h" />
     <ClInclude Include="src\ScenarioWorker.h" />
     <ClInclude Include="src\MotionSampler.h" />
     <ClInclude Include="src\SpeedSeed.h" />
-    <ClInclude Include="src\ScenarioPaths.h" />
     <ClInclude Include="src\DisrecFormat.h" />
     <ClInclude Include="src\DisrecWriter.h" />
     <ClInclude Include="src\DisrecReader.h" />
     <ClInclude Include="src\SettingsIO.h" />
+    <ClInclude Include="src\TerrainEndpoint.h" />
+    <ClInclude Include="src\TerrainServiceClient.h" />
     <ClInclude Include="src\StartupIniWriter.h" />
     <ClInclude Include="src\Validator.h" />
     <ClInclude Include="src\FormatUtil.h" />
@@ -188,9 +191,10 @@
     <ClCompile Include="src\PreviewCanvas.cpp" />
     <ClCompile Include="src\CameraTimeline.cpp" />
     <ClCompile Include="src\CameraPresetCatalog.cpp" />
-    <ClCompile Include="src\CameraZoomMenu.cpp" />
+    <ClCompile Include="src\HangerCameraTypeMap.cpp" />
+    <ClCompile Include="src\CameraPresetIO.cpp" />
+    <ClCompile Include="src\CameraPresetCombo.cpp" />
     <ClCompile Include="src\CameraTargetExtents.cpp" />
-    <ClCompile Include="src\ScenarioCameraIO.cpp" />
     <ClCompile Include="src\EntityTypePickerDialog.cpp" />
     <ClCompile Include="src\MapTileService.cpp" />
     <ClCompile Include="src\CesiumView.cpp" />
@@ -202,6 +206,7 @@
     <ClCompile Include="src\PduBuilder.cpp" />
     <ClCompile Include="src\UdpSender.cpp" />
     <ClCompile Include="src\TcpSender.cpp" />
+    <ClCompile Include="src\ProcessSupervisor.cpp" />
     <ClCompile Include="src\ScenarioIO.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -226,6 +231,8 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="src\StartupIniWriter.cpp" />
+    <ClCompile Include="src\TerrainEndpoint.cpp" />
+    <ClCompile Include="src\TerrainServiceClient.cpp" />
     <ClCompile Include="src\Validator.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>

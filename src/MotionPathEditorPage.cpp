@@ -519,6 +519,27 @@ void CMotionPathEditorPage::SetTypeSpecificVisibility()
 // Helper: copy a focus triple from the segment into 3 doubles based on
 // the segment's coord mode. Used by both Load and the coord-mode-flip
 // conversion.
+// Local-mode Z is STORED as height above the flat tangent plane at the scenario origin,
+// but the edit boxes PRESENT it as altitude above the ellipsoid - the thing an author
+// means by "0". The two differ by the plane rise, ~1 m per 1.4 km of range, so a ship
+// authored as "1" twelve km out was really at 12.4 m and visibly flew. These convert at
+// the UI boundary only: nothing downstream of the edit boxes changes meaning, and files
+// from older builds keep working (they simply display their true altitude).
+// No-op in the other coord modes, where the third component is already an altitude
+// (LatLonAlt) or an ECEF axis.
+static double LocalZToDisplay(CoordMode mode, const Scenario* scn, double e, double nn, double up)
+{
+    if (mode != CoordMode::Local || !scn) return up;
+    return CoordTransforms::LocalUpToGeodeticAlt(e, nn, up,
+               scn->originLatDeg, scn->originLonDeg, scn->originAltM);
+}
+static double LocalZFromDisplay(CoordMode mode, const Scenario* scn, double e, double nn, double altM)
+{
+    if (mode != CoordMode::Local || !scn) return altM;
+    return CoordTransforms::GeodeticAltToLocalUp(e, nn, altM,
+               scn->originLatDeg, scn->originLonDeg, scn->originAltM);
+}
+
 static void GetFocusTriple(const MotionSegment& s, int which,
                            double& a, double& b, double& c)
 {
@@ -579,11 +600,11 @@ void CMotionPathEditorPage::LoadEllipseFromSegment(const MotionSegment& s)
     GetFocusTriple(s, 1, a, b, c);
     WriteDoubleText(*this, IDC_EDIT_F1_A, a);
     WriteDoubleText(*this, IDC_EDIT_F1_B, b);
-    WriteDoubleText(*this, IDC_EDIT_F1_C, c);
+    WriteDoubleText(*this, IDC_EDIT_F1_C, LocalZToDisplay(s.coordMode, m_scenario, a, b, c));
     GetFocusTriple(s, 2, a, b, c);
     WriteDoubleText(*this, IDC_EDIT_F2_A, a);
     WriteDoubleText(*this, IDC_EDIT_F2_B, b);
-    WriteDoubleText(*this, IDC_EDIT_F2_C, c);
+    WriteDoubleText(*this, IDC_EDIT_F2_C, LocalZToDisplay(s.coordMode, m_scenario, a, b, c));
 
     WriteDoubleText(*this, IDC_EDIT_LEN,     s.lengthMeters);
     WriteDoubleText(*this, IDC_EDIT_BEARING, s.startBearingDeg);
@@ -609,6 +630,10 @@ void CMotionPathEditorPage::LoadEllipseFromSegment(const MotionSegment& s)
                 p.ecefX, p.ecefY, p.ecefZ,
                 m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM,
                 sa, sb, sc);   // East/North/Up → X/Y/Z
+            // Match the editable boxes above: the Z column is an ALTITUDE, so a path
+            // authored at sea level reads back 0 here instead of the plane rise.
+            { double gLat = 0.0, gLon = 0.0;
+              CoordTransforms::EcefToGeodeticDeg(p.ecefX, p.ecefY, p.ecefZ, gLat, gLon, sc); }
             break;
         }
         case CoordMode::ECEF:
@@ -631,14 +656,18 @@ void CMotionPathEditorPage::LoadEllipseFromSegment(const MotionSegment& s)
 //
 void CMotionPathEditorPage::CommitEllipseToSegment(MotionSegment& s)
 {
-    SetFocusTriple(s, 1,
-                   ReadDoubleText(*this, IDC_EDIT_F1_A, 0.0),
-                   ReadDoubleText(*this, IDC_EDIT_F1_B, 0.0),
-                   ReadDoubleText(*this, IDC_EDIT_F1_C, 0.0));
-    SetFocusTriple(s, 2,
-                   ReadDoubleText(*this, IDC_EDIT_F2_A, 0.0),
-                   ReadDoubleText(*this, IDC_EDIT_F2_B, 0.0),
-                   ReadDoubleText(*this, IDC_EDIT_F2_C, 0.0));
+    {
+        const double f1a = ReadDoubleText(*this, IDC_EDIT_F1_A, 0.0);
+        const double f1b = ReadDoubleText(*this, IDC_EDIT_F1_B, 0.0);
+        const double f1c = ReadDoubleText(*this, IDC_EDIT_F1_C, 0.0);
+        SetFocusTriple(s, 1, f1a, f1b,
+                       LocalZFromDisplay(s.coordMode, m_scenario, f1a, f1b, f1c));
+        const double f2a = ReadDoubleText(*this, IDC_EDIT_F2_A, 0.0);
+        const double f2b = ReadDoubleText(*this, IDC_EDIT_F2_B, 0.0);
+        const double f2c = ReadDoubleText(*this, IDC_EDIT_F2_C, 0.0);
+        SetFocusTriple(s, 2, f2a, f2b,
+                       LocalZFromDisplay(s.coordMode, m_scenario, f2a, f2b, f2c));
+    }
 
     s.lengthMeters    = ReadDoubleText(*this, IDC_EDIT_LEN,     s.lengthMeters);
     s.startBearingDeg = ReadDoubleText(*this, IDC_EDIT_BEARING, s.startBearingDeg);
@@ -728,7 +757,7 @@ void CMotionPathEditorPage::LoadLineFromSegment(const MotionSegment& s)
         }
         WriteDoubleText(*this, idA, a);
         WriteDoubleText(*this, idB, b);
-        WriteDoubleText(*this, idC, c);
+        WriteDoubleText(*this, idC, LocalZToDisplay(s.coordMode, m_scenario, a, b, c));
     };
     loadTriple(s, false);
     loadTriple(s, true);
@@ -756,9 +785,10 @@ void CMotionPathEditorPage::CommitLineToSegment(MotionSegment& s)
         const UINT idA = isEnd ? IDC_EDIT_LINE_END_A : IDC_EDIT_LINE_START_A;
         const UINT idB = isEnd ? IDC_EDIT_LINE_END_B : IDC_EDIT_LINE_START_B;
         const UINT idC = isEnd ? IDC_EDIT_LINE_END_C : IDC_EDIT_LINE_START_C;
-        const double a = ReadDoubleText(*this, idA, 0.0);
-        const double b = ReadDoubleText(*this, idB, 0.0);
-        const double c = ReadDoubleText(*this, idC, 0.0);
+        const double a    = ReadDoubleText(*this, idA, 0.0);
+        const double b    = ReadDoubleText(*this, idB, 0.0);
+        const double cIn  = ReadDoubleText(*this, idC, 0.0);
+        const double c    = LocalZFromDisplay(s.coordMode, m_scenario, a, b, cIn);
         switch (s.coordMode) {
             case CoordMode::Local:
                 if (isEnd) { s.endLocalX = a; s.endLocalY = b; s.endLocalZ = c; }

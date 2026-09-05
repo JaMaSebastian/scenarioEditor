@@ -60,6 +60,15 @@ namespace MotionSampler
                                 const Scenario* scenario = nullptr,
                                 bool geometricMode = false);
 
+    // Pin a DIS Domain 3 (Surface) platform to altitude 0, in place.
+    //
+    // SamplePose applies this itself, but it has to be reachable because the playback
+    // waypoint ring in ScenarioWorker is a fast path for a lone non-following Ellipse:
+    // it builds ECEF points straight from the ellipse frame and never calls SamplePose.
+    // A ship on a closed orbit is precisely the case that takes that path, so a clamp
+    // that lived only in SamplePose missed the entity it existed to fix.
+    void ClampSurfaceToSeaLevel(const Entity& entity, double& ecefX, double& ecefY, double& ecefZ);
+
     // ----- Ellipse geometry (shared by the time sampler and the playback
     //       equidistant-waypoint precompute) -----
 

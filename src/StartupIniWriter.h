@@ -41,9 +41,9 @@ namespace StartupIniWriter
     // terrainBoundsValid + the lat/lon box are the painted 3D-terrain boundary (Preview tab). When
     // valid and level == "Generic" they are emitted as [Generic] TerrainBoundsLatMin/LatMax/LonMin/LonMax
     // so DISBrowser knows the terrain extent. Pass terrainBoundsValid=false to omit them.
-    // cameraScheduleAbsPath : absolute path to this scenario's <scenario>-camera.ini, emitted as
-    //   [ScenarioCameras] ScheduleFile for EVERY level (DISBrowser's director reads it regardless of
-    //   the selected level). Pass an empty string to actively clear any stale schedule on the runtime.
+    // cameraScheduleAbsPath : absolute path to the scenario.ini whose [Camera.N] sections are the
+    //   schedule. Emitted as [ScenarioCameras] ScheduleFile for EVERY level (DISBrowser's director
+    //   reads it regardless of the selected level). Pass "" to clear any stale schedule on the runtime.
     bool Write(const std::wstring& disBrowserProjectDir,
                const std::string&  levelToken,
                const std::string&  basemap,
@@ -54,5 +54,10 @@ namespace StartupIniWriter
                double terrainLonMinDeg, double terrainLonMaxDeg,
                const std::wstring& cameraScheduleAbsPath,
                const FoliageHandoff& foliage,
+               // Where DISBrowser should fetch self-hosted terrain from. Usually
+               // localhost:8088, but [Terrain] Mode=Remote points it at another
+               // machine, so this cannot be hardcoded.
+               const std::string&  terrainHost,
+               unsigned short      terrainPort,
                std::wstring&        outError);
 }

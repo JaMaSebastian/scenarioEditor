@@ -106,7 +106,7 @@ private:
     bool DoSaveTo(const CString& iniPath);
 
     // Set the current open-scenario path AND push it to the Run tab so
-    // "Configure Unreal" can find this scenario's <scenario>-camera.ini. Route
+    // "Configure Unreal" can hand its path to DISBrowser as the camera schedule. Route
     // every m_currentScenarioPath change through here to keep the page in sync.
     void SetCurrentScenarioPath(const CString& path);
 

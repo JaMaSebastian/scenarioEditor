@@ -58,6 +58,7 @@ namespace
         { IDC_EDIT_ENTITY_DESCRIPTION,  _T("Free-text description of this entity."), false },
         { IDC_EDIT_ENTITY_MARKING,      _T("DIS Marking Text (max 11 ASCII chars)."), false },
         { IDC_COMBO_ENTITY_FORCE_ID,    _T("DIS Force ID: Other, Friendly, Opposing, or Neutral."), true },
+        { IDC_COMBO_ENTITY_BEHAVIOR,    _T("Starting behavior: Directed plays the motion segments; Stationary holds the entity at its window-start pose. Playback rewinds to this value."), true },
         { IDC_COMBO_ENTITY_KIND,        _T("DIS Entity Type - Kind (Platform, Munition, Life Form, etc.). Pick from catalog or type a raw SISO-REF-010 ID."), true },
         { IDC_COMBO_ENTITY_DOMAIN,      _T("DIS Entity Type - Domain (Land, Air, Surface, Subsurface, Space). Filtered by selected Kind."), true },
         { IDC_COMBO_ENTITY_COUNTRY,     _T("DIS Entity Type - Country (SISO-REF-010). Pick from catalog or type a raw numeric code."), true },
@@ -73,7 +74,7 @@ namespace
         { IDC_COMBO_ENTITY_COORD_MODE,  _T("Coordinate system for this entity's initial position."), true },
         { IDC_EDIT_ENTITY_LAT,          _T("Initial position component A — meaning depends on Initial Coord Mode: Lat (deg) / Local X (m) / ECEF X (m)."), false },
         { IDC_EDIT_ENTITY_LON,          _T("Initial position component B — Lon (deg) / Local Y (m) / ECEF Y (m)."), false },
-        { IDC_EDIT_ENTITY_ALT,          _T("Initial position component C — Alt (m above MSL) / Local Z (m) / ECEF Z (m)."), false },
+        { IDC_EDIT_ENTITY_ALT,          _T("Initial position component C — altitude in metres above the ellipsoid for both Alt and Local Z (0 = sea level anywhere in the scenario) / ECEF Z (m)."), false },
         // Position edits use a single dynamic row; help text below covers
         // all three modes via IDC_EDIT_ENTITY_LAT/LON/ALT (the labels
         // relabel at runtime based on Initial Coord Mode).
@@ -457,6 +458,16 @@ BOOL CAssetEntityEditorPage::OnInitDialog()
         cb->SetCurSel(1); // Friendly default
     }
 
+    // Starting behavior (URZA-11265). Two items only, in enum order, so the
+    // selection index IS the NpcBehavior value. Resume is deliberately absent:
+    // it is a live REST command, not a state that can be authored into a file.
+    if (CComboBox* cb = (CComboBox*)GetDlgItem(IDC_COMBO_ENTITY_BEHAVIOR))
+    {
+        cb->AddString(_T("Directed"));
+        cb->AddString(_T("Stationary"));
+        cb->SetCurSel(0); // Directed default - matches Entity::behavior
+    }
+
     if (CComboBox* cb = (CComboBox*)GetDlgItem(IDC_COMBO_ENTITY_COORD_MODE))
     {
         cb->AddString(_T("Lat/Lon/Alt"));
@@ -777,7 +788,14 @@ void CAssetEntityEditorPage::OnEntityCoordModeChanged()
     const double posC = ReadDoubleText(*this, IDC_EDIT_ENTITY_ALT, 0.0);
     switch (oldMode) {
         case CoordMode::LatLonAlt: entity.lat = posA; entity.lon = posB; entity.alt = posC; break;
-        case CoordMode::Local:     entity.localX = posA; entity.localY = posB; entity.localZ = posC; break;
+        case CoordMode::Local:
+            entity.localX = posA; entity.localY = posB;
+            entity.localZ = m_scenario ? CoordTransforms::GeodeticAltToLocalUp(
+                                             posA, posB, posC,
+                                             m_scenario->originLatDeg, m_scenario->originLonDeg,
+                                             m_scenario->originAltM)
+                                       : posC;
+            break;
         case CoordMode::ECEF:      entity.ecefX = posA; entity.ecefY = posB; entity.ecefZ = posC; break;
     }
 
@@ -868,6 +886,13 @@ void CAssetEntityEditorPage::WriteTo(Entity& entity,
             entity.forceId = static_cast<uint8_t>(idx);
     }
 
+    if (const CComboBox* cb = (const CComboBox*)GetDlgItem(IDC_COMBO_ENTITY_BEHAVIOR))
+    {
+        const int idx = cb->GetCurSel();
+        if (idx == 1) entity.behavior = NpcBehavior::Stationary;
+        else if (idx == 0) entity.behavior = NpcBehavior::Directed;
+    }
+
     entity.kind        = static_cast<uint8_t> (ComboNumericValue(IDC_COMBO_ENTITY_KIND,         entity.kind)        & 0xFF);
     entity.domain      = static_cast<uint8_t> (ComboNumericValue(IDC_COMBO_ENTITY_DOMAIN,       entity.domain)      & 0xFF);
     entity.country     = static_cast<uint16_t>(ComboNumericValue(IDC_COMBO_ENTITY_COUNTRY,      entity.country)     & 0xFFFF);
@@ -900,7 +925,10 @@ void CAssetEntityEditorPage::WriteTo(Entity& entity,
                                                entity.ecefX, entity.ecefY, entity.ecefZ);
             break;
         case CoordMode::Local:
-            entity.localX = posA; entity.localY = posB; entity.localZ = posC;
+            // posC is an ALTITUDE as typed; convert to the tangent-plane up we store.
+            entity.localX = posA; entity.localY = posB;
+            entity.localZ = CoordTransforms::GeodeticAltToLocalUp(
+                                posA, posB, posC, originLatDeg, originLonDeg, originAltM);
             CoordTransforms::LocalEnuToEcefDeg(entity.localX, entity.localY, entity.localZ,
                                                originLatDeg, originLonDeg, originAltM,
                                                entity.ecefX, entity.ecefY, entity.ecefZ);
@@ -1022,6 +1050,9 @@ void CAssetEntityEditorPage::ReadFrom(const Entity& entity)
     if (CComboBox* cb = (CComboBox*)GetDlgItem(IDC_COMBO_ENTITY_FORCE_ID))
         cb->SetCurSel(entity.forceId <= 3 ? entity.forceId : 0);
 
+    if (CComboBox* cb = (CComboBox*)GetDlgItem(IDC_COMBO_ENTITY_BEHAVIOR))
+        cb->SetCurSel(entity.behavior == NpcBehavior::Stationary ? 1 : 0);
+
     // Catalog combos: select by ID. Order matters — Kind first so Domain/
     // Category/Subcategory have the correct cascade context, then re-fill.
     if (CComboBox* cb = (CComboBox*)GetDlgItem(IDC_COMBO_ENTITY_KIND))
@@ -1089,7 +1120,18 @@ void CAssetEntityEditorPage::WriteActivePositionFields(const Entity& entity, Coo
     double a = 0.0, b = 0.0, c = 0.0;
     switch (mode) {
         case CoordMode::LatLonAlt: a = entity.lat;   b = entity.lon;   c = entity.alt;   break;
-        case CoordMode::Local:     a = entity.localX; b = entity.localY; c = entity.localZ; break;
+        case CoordMode::Local:
+            // Local Z is shown as ALTITUDE (height above the ellipsoid), not as height
+            // above the flat tangent plane the stored value measures. See
+            // CoordTransforms::LocalUpToGeodeticAlt - 12 km out the two differ by ~11 m,
+            // which is what had surface ships transmitting at 12 m and visibly flying.
+            a = entity.localX; b = entity.localY;
+            c = m_scenario ? CoordTransforms::LocalUpToGeodeticAlt(
+                                 entity.localX, entity.localY, entity.localZ,
+                                 m_scenario->originLatDeg, m_scenario->originLonDeg,
+                                 m_scenario->originAltM)
+                           : entity.localZ;
+            break;
         case CoordMode::ECEF:      a = entity.ecefX; b = entity.ecefY; c = entity.ecefZ; break;
     }
     SetDlgItemText(IDC_EDIT_ENTITY_LAT, FormatDoubleTrim(a));

@@ -4,12 +4,15 @@
 //  Declares the persisted per-user UI state (window geometry, paths, Unreal
 //  handoff target, Deploy column widths, saved map places) and the Load/Save
 //  API that reads and atomically writes settings.ini next to the executable.
+//  Anything that describes a SCENARIO rather than the user lives in
+//  scenario.ini instead (see Scenario::preview).
 //
 //  Author:        Matt Sebastian
 //  Date started:  2026-05-21
 //=============================================================================
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -27,10 +30,21 @@ struct MapPlace
     double      alt = 0.0;   // eye/viewing altitude in metres (globe camera height)
 };
 
+// Which terrain tile server the Preview tab drives. Persisted as a name in
+// settings.ini ([Terrain] Mode) so it is readable and hand-editable.
+enum class TerrainServerMode : uint8_t
+{
+    Legacy  = 0,   // serve_terrain.cmd -> serve.py in WSL (console window)
+    Local   = 1,   // native TerrainServer.exe under ProcessSupervisor
+    Remote  = 2,   // a server on another machine; nothing is run here
+    Service = 3,   // containerized Linux terrainserver: serves tiles AND builds
+                   // them, driven over its /api/v1 job API. Nothing runs here.
+};
+
 //-----------------------------------------------------------------------------
 // Settings — the complete persisted UI/app state, one instance per session.
 //   Grouped to mirror the settings.ini sections ([Window], [Paths], [Unreal],
-//   [Deploy], [Places]); members default to sensible first-run values.
+//   [Terrain], [Deploy], [Places]); members default to sensible first-run values.
 //-----------------------------------------------------------------------------
 struct Settings
 {
@@ -53,22 +67,41 @@ struct Settings
     std::string unrealBasemap     = "Satellite";  // Satellite|Topographic|None (used when level=Generic)
     bool        unrealDynamicTiles = false;       // stream/cache tiles around the camera in the generic level
 
+    // [Terrain] — which terrain tile server the Preview tab drives, and where it is.
+    //
+    //   Legacy : the original serve_terrain.cmd -> serve.py inside WSL, in its own
+    //            console window. Builds also revert to the original fire-and-forget
+    //            ShellExecute behaviour, so this is a true fallback to the old code
+    //            path if the newer one misbehaves.
+    //   Local  : native TerrainServer.exe, run and monitored by ProcessSupervisor,
+    //            serving tiles published to NTFS. No WSL, no console window.
+    //   Remote : no server is run here at all; the tiles are served by another
+    //            machine at terrainRemoteHost:terrainRemotePort, and that address is
+    //            what gets written into DISBrowser's Startup.ini.
+    //
+    //   Service: the containerized Linux terrainserver at
+    //            terrainRemoteHost:terrainRemotePort (default port 8089, so it can
+    //            run alongside a native TerrainServer.exe on 8088). Builds are
+    //            submitted to its HTTP job API instead of run locally through WSL.
+    //
+    // Host/port are consulted in Remote and Service modes only; Legacy and Local
+    // always use localhost:8088 (the port both serve.py and TerrainServer.exe
+    // bind). Resolve all four through ResolveTerrainEndpoint() in
+    // TerrainEndpoint.h -- never re-derive the address at a call site.
+    TerrainServerMode terrainMode       = TerrainServerMode::Local;
+    std::string       terrainRemoteHost = "127.0.0.1";
+    uint16_t          terrainRemotePort = 8088;
+
     // [Deploy] — persisted Deploy-tab list column widths (px), one per column.
     // Empty until the user first sets them; the Deploy page then hand-applies
     // and re-saves these instead of any hardcoded default layout.
     std::vector<int> deployColumnWidths;
 
-    // [Preview] — Preview-tab display toggles, persisted so the checkbox states
-    // survive across sessions. Defaults mirror CPreviewPage's member defaults.
-    bool previewShowLabels      = true;
-    bool previewShowTrails      = true;
-    bool previewShowPaths       = true;
-    bool previewShowOrientation = false;
-    bool previewShowTerrain     = true;
-    bool previewShowZones       = true;
-    bool previewShowLegend      = false;
-    bool previewShowProperties  = false;   // "Show Properties" (destination-time grid)
-    bool previewMoveEntities    = false;   // "Move entities" with the map
+    // NOTE: the Preview tab's display toggles used to live here as a [Preview]
+    // section. They are per-SCENARIO state now (Scenario::preview, written to
+    // scenario.ini) because which overlays are worth drawing depends on the
+    // scenario, not the operator. Old settings.ini files may still carry the
+    // dead [Preview] keys; nothing reads them.
 
     // [Places] — named map locations for the Preview tab's Location drop-down.
     std::vector<MapPlace> mapPlaces;

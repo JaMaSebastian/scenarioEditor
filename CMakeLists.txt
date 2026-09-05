@@ -37,9 +37,10 @@ add_executable(ScenarioEditor WIN32
     src/PreviewCanvas.cpp
     src/CameraTimeline.cpp
     src/CameraPresetCatalog.cpp
-    src/CameraZoomMenu.cpp
+    src/HangerCameraTypeMap.cpp
+    src/CameraPresetIO.cpp
+    src/CameraPresetCombo.cpp
     src/CameraTargetExtents.cpp
-    src/ScenarioCameraIO.cpp
     src/EntityTypePickerDialog.cpp
     src/MapTileService.cpp
     src/CesiumView.cpp
@@ -51,6 +52,7 @@ add_executable(ScenarioEditor WIN32
     src/PduBuilder.cpp
     src/UdpSender.cpp
     src/TcpSender.cpp
+    src/ProcessSupervisor.cpp
     src/ScenarioIO.cpp
     src/EntityTypeCatalog.cpp
     src/CoordTransforms.cpp
@@ -60,6 +62,8 @@ add_executable(ScenarioEditor WIN32
     src/DisrecWriter.cpp
     src/DisrecReader.cpp
     src/SettingsIO.cpp
+    src/TerrainEndpoint.cpp
+    src/TerrainServiceClient.cpp
     src/Validator.cpp
     log.cpp
     src/ScenarioEditor.rc
@@ -130,6 +134,59 @@ set_target_properties(validator_test PROPERTIES
     VS_GLOBAL_CharacterSet "Unicode"
 )
 
+# ProcessSupervisor regression test: exit codes, piped output, and the
+# no-orphans / deliberate-survivor guarantees.
+add_executable(process_supervisor_test
+    tools/process_supervisor_test.cpp
+    src/ProcessSupervisor.cpp
+    log.cpp
+)
+target_include_directories(process_supervisor_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+# ProcessSupervisor.cpp includes pch.h → MFC, so this console test needs the
+# same MFC-shared/Unicode config as the main app.
+target_compile_definitions(process_supervisor_test PRIVATE _AFXDLL UNICODE _UNICODE)
+set_target_properties(process_supervisor_test PROPERTIES
+    VS_GLOBAL_UseOfMfc "Dynamic"
+    VS_GLOBAL_CharacterSet "Unicode"
+)
+
+# Mode=Service plumbing: the endpoint resolver, the WinHTTP client, and the
+# submit-then-poll loop, checked against a live terrainserver when one is up.
+add_executable(terrain_service_test
+    tools/terrain_service_test.cpp
+    src/TerrainEndpoint.cpp
+    src/TerrainServiceClient.cpp
+    src/SettingsIO.cpp
+    src/StartupIniWriter.cpp
+    log.cpp
+)
+target_include_directories(terrain_service_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+# These sources include pch.h -> MFC, so this console test needs the same
+# MFC-shared/Unicode config as the app (otherwise afx.h errors on /MD).
+target_compile_definitions(terrain_service_test PRIVATE _AFXDLL UNICODE _UNICODE)
+set_target_properties(terrain_service_test PROPERTIES
+    VS_GLOBAL_UseOfMfc "Dynamic"
+    VS_GLOBAL_CharacterSet "Unicode"
+)
+target_link_libraries(terrain_service_test PRIVATE Shlwapi)
+
+# Native terrain tile server — replaces Scripts/wsl/serve.py so the serving
+# path needs no WSL and no console window. Plain console app (no MFC, no pch);
+# the editor launches it with CREATE_NO_WINDOW.
+add_executable(TerrainServer
+    tools/terrain_server.cpp
+)
+target_link_libraries(TerrainServer PRIVATE Ws2_32 Shell32)
+set_target_properties(TerrainServer PROPERTIES
+    VS_GLOBAL_CharacterSet "MultiByte"
+)
+
 target_include_directories(ScenarioEditor PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -165,3 +222,24 @@ target_compile_definitions(ScenarioEditor PRIVATE
 
 # Precompiled header.
 target_precompile_headers(ScenarioEditor PRIVATE src/pch.h)
+
+# Gimbal-envelope round trip: CameraPresetIO writes, CameraPresetCatalog reads.
+# Pins the arc semantics (yaw/roll never reordered, pitch swapped and clamped),
+# the surgical-write guarantee, and delete-vs-zero on clear.
+add_executable(camera_preset_io_test
+    tools/camera_preset_io_test.cpp
+    src/CameraPresetIO.cpp
+    src/CameraPresetCatalog.cpp
+    log.cpp
+)
+target_include_directories(camera_preset_io_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+# Both sources include pch.h → MFC, so this console test needs the same
+# MFC-shared/Unicode config as the main app.
+target_compile_definitions(camera_preset_io_test PRIVATE _AFXDLL UNICODE _UNICODE)
+set_target_properties(camera_preset_io_test PROPERTIES
+    VS_GLOBAL_UseOfMfc "Dynamic"
+    VS_GLOBAL_CharacterSet "Unicode"
+)

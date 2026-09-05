@@ -14,7 +14,6 @@
 #include "PreviewCanvas.h"
 #include "PreviewPage.h"
 #include "Scenario.h"        // CameraTransition / CameraFrame (camera RMB menu)
-#include "CameraZoomMenu.h"  // shared "Zoom" submenu on the camera-box menu
 #include "Direct2DContext.h"
 #include "CoordTransforms.h"
 #include "ScenarioEditor.h"   // theApp.SettingsPath() -> tile cache dir
@@ -407,7 +406,9 @@ void CPreviewCanvas::OnRButtonDown(UINT nFlags, CPoint pt)
 
     // "Boundary" paint mode: the SAME right-drag gesture that mass-selects entities instead marks
     // the 3D-terrain box (no entity selection, no context menu). Armed via the Preview Boundary button.
-    if (m_owner && m_owner->IsBoundaryArmed())
+    // Foliage-Area paint uses the SAME gesture; the two are mutually exclusive
+    // at the page, so only one can be armed at a time.
+    if (m_owner && (m_owner->IsBoundaryArmed() || m_owner->IsFoliageAreaArmed()))
     {
         m_boundaryDragActive = true;
         m_boundaryStart = pt;
@@ -441,6 +442,52 @@ void CPreviewCanvas::OnRButtonDown(UINT nFlags, CPoint pt)
 //   appropriate context menu (course-line, group, or single-entity) and dispatch
 //   the chosen command to the owner.
 //
+//
+// ShowFoliageAreaMenu — right-click actions on a painted foliage area.
+//   Returns true if a menu was shown (and the click consumed). Deliberately only
+//   claims a right-click with NO drag: a right-DRAG across a forest must still
+//   rubber-band select the entities inside it, which is why this is called from
+//   the no-move path rather than from OnRButtonDown's object test. Areas are
+//   large, and treating them as objects would kill group-select over any forest.
+//
+bool CPreviewCanvas::ShowFoliageAreaMenu(CPoint pt)
+{
+    const int folHit = HitTestFoliageArea(pt);
+    if (folHit < 0 || !m_owner) return false;
+    if (HitTestCamera(pt) >= 0 || HitTestEntity(pt) >= 0) return false;
+
+    const PreviewRenderState& s = m_owner->GetRenderState();
+    enum { kFolCount = 7100, kFolDelete, kFolDeleteAll };
+
+    CString countItem;
+    countItem.Format(_T("Set Tree Count (%lld)..."),
+             s.foliageAreas[static_cast<size_t>(folHit)].treeCount);
+
+    CMenu menu;
+    menu.CreatePopupMenu();
+    menu.AppendMenu(MF_STRING, kFolCount, countItem);
+    menu.AppendMenu(MF_STRING, kFolDelete, _T("Delete Foliage Area"));
+    if (s.foliageAreas.size() > 1)
+    {
+        menu.AppendMenu(MF_SEPARATOR, 0, static_cast<LPCTSTR>(nullptr));
+        CString allItem;
+        allItem.Format(_T("Delete All %d Foliage Areas"),
+               static_cast<int>(s.foliageAreas.size()));
+        menu.AppendMenu(MF_STRING, kFolDeleteAll, allItem);
+    }
+
+    CPoint sp = pt;
+    ClientToScreen(&sp);
+    SetForegroundWindow();
+    const UINT cmd = menu.TrackPopupMenu(
+        TPM_RETURNCMD | TPM_LEFTALIGN | TPM_RIGHTBUTTON, sp.x, sp.y, this);
+
+    if      (cmd == kFolCount)     m_owner->SetFoliageAreaCount(static_cast<size_t>(folHit));
+    else if (cmd == kFolDelete)    m_owner->DeleteFoliageArea(static_cast<size_t>(folHit));
+    else if (cmd == kFolDeleteAll) m_owner->DeleteAllFoliageAreas();
+    return true;
+}
+
 void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
 {
     // Finish a "Boundary" paint drag: convert the box → ENU → lat/lon corners → the page (which
@@ -475,7 +522,10 @@ void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
                     if (la < latMin) latMin = la;  if (la > latMax) latMax = la;
                     if (lo < lonMin) lonMin = lo;  if (lo > lonMax) lonMax = lo;
                 }
-                m_owner->OnBoundaryPainted(latMin, latMax, lonMin, lonMax);
+                if (m_owner->IsFoliageAreaArmed())
+                    m_owner->OnFoliageAreaPainted(latMin, latMax, lonMin, lonMax);
+                else
+                    m_owner->OnBoundaryPainted(latMin, latMax, lonMin, lonMax);
             }
         }
         return;
@@ -508,14 +558,19 @@ void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
         }
         else if (m_owner)
         {
+            // No drag: a click inside a painted foliage area opens its menu
+            // instead of clearing the selection.
+            if (ShowFoliageAreaMenu(pt)) { m_rbMoved = false; return; }
             m_owner->ClearSelection();
         }
         m_rbMoved = false;
         return;
     }
 
-    // Camera box right-click (sits on top of entities): Target + Transition +
-    // Zoom + Delete.
+    // Camera box right-click (sits on top of entities): Edit + Delete. Target,
+    // transition and zoom used to be three submenus here; they are all fields of
+    // the one Edit Camera modal now, which is also the only place the gimbal
+    // envelope can be authored.
     {
         const int camHit = HitTestCamera(pt);
         if (camHit >= 0 && m_owner)
@@ -525,40 +580,12 @@ void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
 
             const std::vector<CameraFrame>* cams = m_owner->GetCameras();
             if (!cams || frameIdx >= cams->size()) return;
-            const CameraFrame& frame = (*cams)[frameIdx];
 
-            // kCamTargetBase..+poses.size() and the 5000 block are this menu's;
-            // the Zoom submenu owns CameraZoomMenu::kCmdFirst..kCmdLast (6000+).
-            enum { kCamTargetBase = 1,               // [base .. base+poses.size()] inclusive
-                   kCamTransCross = 5000, kCamTransHard, kCamDelete };
-
-            // "Target": (focus on source) + one item per entity.
-            CMenu target;
-            target.CreatePopupMenu();
-            target.AppendMenu(MF_STRING, kCamTargetBase, _T("(focus on source)"));
-            for (size_t i = 0; i < s.poses.size(); ++i)
-            {
-                const CA2W wname(s.poses[i].name.c_str());
-                CString label = (wname.m_psz && *wname.m_psz) ? wname.m_psz : L"(entity)";
-                target.AppendMenu(MF_STRING, kCamTargetBase + 1 + static_cast<UINT>(i), label);
-            }
-
-            // "Transition": Crossfade/Blend or Hard cut.
-            CMenu trans;
-            trans.CreatePopupMenu();
-            trans.AppendMenu(MF_STRING, kCamTransCross, _T("Crossfade / Blend"));
-            trans.AppendMenu(MF_STRING, kCamTransHard,  _T("Hard cut"));
-
-            // "Zoom": shared with the timeline's box menu.
-            CMenu zoom;
-            zoom.CreatePopupMenu();
-            CameraZoomMenu::Build(zoom, frame);
+            enum { kCamEdit = 1, kCamDelete };
 
             CMenu menu;
             menu.CreatePopupMenu();
-            menu.AppendMenu(MF_POPUP, reinterpret_cast<UINT_PTR>(target.GetSafeHmenu()), _T("Target"));
-            menu.AppendMenu(MF_POPUP, reinterpret_cast<UINT_PTR>(trans.GetSafeHmenu()),  _T("Transition"));
-            menu.AppendMenu(MF_POPUP, reinterpret_cast<UINT_PTR>(zoom.GetSafeHmenu()),   _T("Camera"));
+            menu.AppendMenu(MF_STRING, kCamEdit,   _T("Edit Camera..."));
             menu.AppendMenu(MF_SEPARATOR, 0, static_cast<LPCTSTR>(nullptr));
             menu.AppendMenu(MF_STRING, kCamDelete, _T("Delete Camera"));
 
@@ -567,30 +594,10 @@ void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
             SetForegroundWindow();
             const UINT cmd = menu.TrackPopupMenu(
                 TPM_RETURNCMD | TPM_LEFTALIGN | TPM_RIGHTBUTTON, sp.x, sp.y, this);
-            target.Detach();  // owned by `menu`
-            trans.Detach();   // owned by `menu`
-            zoom.Detach();    // owned by `menu`
 
-            if (CameraZoomMenu::Handle(cmd, *m_owner, frameIdx, frame, this))
+            if (cmd == kCamEdit)
             {
-                // handled by the shared submenu
-            }
-            else if (cmd == kCamTargetBase)
-            {
-                m_owner->SetCameraTarget(frameIdx, 0);   // focus on source / none
-            }
-            else if (cmd > kCamTargetBase && cmd <= kCamTargetBase + s.poses.size())
-            {
-                const size_t ei = cmd - kCamTargetBase - 1;
-                m_owner->SetCameraTarget(frameIdx, s.poses[ei].entityId);
-            }
-            else if (cmd == kCamTransCross)
-            {
-                m_owner->SetCameraTransition(frameIdx, CameraTransition::CrossfadeBlend);
-            }
-            else if (cmd == kCamTransHard)
-            {
-                m_owner->SetCameraTransition(frameIdx, CameraTransition::HardCut);
+                m_owner->EditCameraViaDialog(frameIdx);
             }
             else if (cmd == kCamDelete)
             {
@@ -704,11 +711,10 @@ void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
     CMenu menu;
     menu.CreatePopupMenu();
     menu.AppendMenu(MF_POPUP, reinterpret_cast<UINT_PTR>(plot.GetSafeHmenu()), _T("Plot"));
-    // "New Camera...": opens the modal to pick preset / target / transition and
-    // mount an Entity camera on this entity (grayed when no presets are loaded).
-    const bool hasPresets = m_owner && m_owner->CameraPresetCount() > 0;
-    menu.AppendMenu(hasPresets ? MF_STRING : (MF_STRING | MF_GRAYED),
-                    kNewCamera, _T("New Camera..."));
+    // "New Camera...": opens the modal to pick source / preset / target / transition.
+    // Never grayed for a missing catalog — the dialog's source can be set to "(none)",
+    // which builds a Stationary camera and needs no presets at all.
+    menu.AppendMenu(MF_STRING, kNewCamera, _T("New Camera..."));
     // "Delete Camera": remove the camera(s) mounted on this entity (grayed when
     // the entity has none). Each deleted camera drops its timeline box too.
     const bool hasEntityCamera =
@@ -1255,6 +1261,39 @@ int CPreviewCanvas::HitTestEntity(CPoint pxPt) const
 //   rectangle contains a physical-pixel point, or -1. Only hits when zones are
 //   visible (showZones). Later zones are drawn on top, so iterate in reverse.
 //
+//
+// HitTestFoliageArea — topmost painted foliage rectangle under a click, or -1.
+//   Reverse order so the most recently painted area wins, matching both the draw
+//   order and the bake's "first painted owns the overlap" rule read backwards:
+//   the one you see on top is the one you act on.
+//
+int CPreviewCanvas::HitTestFoliageArea(CPoint pxPt) const
+{
+    if (!m_owner || !m_rt) return -1;
+    const PreviewRenderState& s = m_owner->GetRenderState();
+    if (s.foliageAreas.empty()) return -1;
+
+    const D2D1_SIZE_F dip = m_rt->GetSize();
+    if (dip.width <= 0.0f || dip.height <= 0.0f) return -1;
+    CRect rc; GetClientRect(&rc);
+    const double scaleX = (rc.Width()  > 0) ? rc.Width()  / dip.width  : 1.0;
+    const double scaleY = (rc.Height() > 0) ? rc.Height() / dip.height : 1.0;
+    const double clickX = pxPt.x / ((scaleX > 0.0) ? scaleX : 1.0);
+    const double clickY = pxPt.y / ((scaleY > 0.0) ? scaleY : 1.0);
+
+    for (int i = static_cast<int>(s.foliageAreas.size()) - 1; i >= 0; --i)
+    {
+        const PreviewFoliageArea& a = s.foliageAreas[static_cast<size_t>(i)];
+        const D2D1_POINT_2F tl = ProjectEnu(a.eastMinM, a.northMaxM, s, dip.width, dip.height);
+        const D2D1_POINT_2F br = ProjectEnu(a.eastMaxM, a.northMinM, s, dip.width, dip.height);
+        const double left   = std::min(tl.x, br.x), right  = std::max(tl.x, br.x);
+        const double top    = std::min(tl.y, br.y), bottom = std::max(tl.y, br.y);
+        if (clickX >= left && clickX <= right && clickY >= top && clickY <= bottom)
+            return i;
+    }
+    return -1;
+}
+
 int CPreviewCanvas::HitTestZone(CPoint pxPt) const
 {
     if (!m_owner || !m_rt) return -1;
@@ -1572,6 +1611,36 @@ void CPreviewCanvas::Render(const PreviewRenderState& state)
                                                    rc.right - 4.0f, rc.bottom - 3.0f);
                 m_rt->DrawTextW(txt, static_cast<UINT32>(wcslen(txt)),
                                m_textFormat.Get(), tr, m_brushLabel.Get());
+            }
+        }
+    }
+
+    // ---- Painted foliage areas: forest-green boxes labelled with their tree
+    //      count. Drawn as painted, overlaps included -- the bake decides who
+    //      owns overlapped ground, and hiding the overlap here would make the
+    //      count in each label look wrong. ----
+    if (m_brushZone && !state.foliageAreas.empty())
+    {
+        for (const PreviewFoliageArea& a : state.foliageAreas)
+        {
+            const D2D1_POINT_2F tl = ProjectEnu(a.eastMinM, a.northMaxM, state, w, h);
+            const D2D1_POINT_2F br = ProjectEnu(a.eastMaxM, a.northMinM, state, w, h);
+            const D2D1_RECT_F rc = D2D1::RectF(std::min(tl.x, br.x), std::min(tl.y, br.y),
+                                               std::max(tl.x, br.x), std::max(tl.y, br.y));
+            m_brushZone->SetColor(D2D1::ColorF(0.18f, 0.55f, 0.22f));
+            m_brushZone->SetOpacity(0.22f);
+            m_rt->FillRectangle(rc, m_brushZone.Get());
+            m_brushZone->SetOpacity(1.0f);
+            m_rt->DrawRectangle(rc, m_brushZone.Get(), 1.5f);
+
+            if (m_textFormat && m_brushLabel)
+            {
+                wchar_t txt[64];
+                swprintf_s(txt, L"%lld trees", a.treeCount);
+                const D2D1_RECT_F tr = D2D1::RectF(rc.left + 4.0f, rc.top + 3.0f,
+                                                   rc.right - 4.0f, rc.bottom - 3.0f);
+                m_rt->DrawTextW(txt, static_cast<UINT32>(wcslen(txt)),
+                                m_textFormat.Get(), tr, m_brushLabel.Get());
             }
         }
     }

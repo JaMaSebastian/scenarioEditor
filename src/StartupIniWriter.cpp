@@ -63,6 +63,8 @@ bool StartupIniWriter::Write(const std::wstring& disBrowserProjectDir,
                              double terrainLonMinDeg, double terrainLonMaxDeg,
                              const std::wstring& cameraScheduleAbsPath,
                              const FoliageHandoff& foliage,
+                             const std::string&  terrainHost,
+                             unsigned short      terrainPort,
                              std::wstring&        outError)
 {
     if (disBrowserProjectDir.empty())
@@ -137,10 +139,18 @@ bool StartupIniWriter::Write(const std::wstring& disBrowserProjectDir,
     // ApplyStartupOverride reads CesiumTilesetUrl / CesiumRasterOverlayUrlTemplate from here.
     if (appendCesiumUrls)
     {
-        static const char* const kUrlLines =
-            "CesiumTilesetUrl=\"http://localhost:8088/layer.json\"\r\n"
+        // The terrain host is NOT always localhost: with [Terrain] Mode=Remote the
+        // tiles are served by another machine, and DISBrowser has to be pointed at
+        // it. terrainHost/terrainPort carry that through from settings.ini.
+        char urlLines[1024];
+        sprintf_s(urlLines, sizeof(urlLines),
+            "CesiumTilesetUrl=\"http://%s:%u/layer.json\"\r\n"
             "CesiumRasterOverlayUrlTemplate=\"https://server.arcgisonline.com/ArcGIS/rest/services/"
-            "World_Imagery/MapServer/tile/{z}/{reverseY}/{x}\"\r\n";
+            "World_Imagery/MapServer/tile/{z}/{reverseY}/{x}\"\r\n",
+            terrainHost.empty() ? "localhost" : terrainHost.c_str(),
+            static_cast<unsigned>(terrainPort ? terrainPort : 8088));
+
+        const char* const kUrlLines = urlLines;
         HANDLE h = ::CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr,
                                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (h != INVALID_HANDLE_VALUE)

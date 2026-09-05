@@ -49,6 +49,30 @@ inline CString FormatDoubleTrim(double v, int maxFractionalDigits = 6)
     return CString(tmp);
 }
 
+// Format a duration in seconds for compact display: whole seconds under a
+// minute, "Nm SSs" past one. A non-zero span that rounds to zero renders as
+// "<1s" rather than "0s", so a fast preview speed never makes a live camera
+// box read as if it were never on screen. Examples:
+//   0.0   ->  "0s"
+//   0.3   ->  "<1s"
+//   17.4  ->  "17s"
+//   65.2  ->  "1m 05s"
+//   751.0 ->  "12m 31s"
+inline CString FormatDurationCompact(double seconds)
+{
+    if (!(seconds > 0.0)) return CString(_T("0s"));   // also catches NaN
+
+    const long long total = std::llround(seconds);
+    if (total <= 0) return CString(_T("<1s"));
+
+    CString out;
+    if (total < 60)
+        out.Format(_T("%llds"), total);
+    else
+        out.Format(_T("%lldm %02llds"), total / 60, total % 60);
+    return out;
+}
+
 // Parse a speed input string. Accepts:
 //   "260"        -> 260 m/s
 //   "Mach 1.2"   -> 411.6 m/s     (343 * 1.2, ISA sea level)

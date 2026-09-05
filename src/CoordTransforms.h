@@ -74,6 +74,25 @@ namespace CoordTransforms
                            double originLatDeg, double originLonDeg, double originAltM,
                            double& outEast, double& outNorth, double& outUp);
 
+    // ---------- local East/North with a GEODETIC altitude ----------
+    //
+    // Same East/North as the plain ENU pair, but the third component is height
+    // above the ELLIPSOID rather than above the flat tangent plane at the origin.
+    // The two differ by the plane rise, ~d^2/2R: about 1 m per 1.4 km of range, so
+    // ~11 m at 12 km out. Authors think in altitude ("a ship sits at 0"), and the
+    // editor fields should mean that; stored segment/entity data stays plain ENU up.
+    void LocalEnGeodeticAltToEcefDeg(double east, double north, double altM,
+                                     double originLatDeg, double originLonDeg, double originAltM,
+                                     double& outX, double& outY, double& outZ);
+
+    // Convert just the third component between the two conventions, holding East and
+    // North fixed. These are what the editor pages call on the way in and out of an
+    // edit box: display = LocalUpToGeodeticAlt(stored), store = GeodeticAltToLocalUp(typed).
+    double LocalUpToGeodeticAlt(double east, double north, double up,
+                                double originLatDeg, double originLonDeg, double originAltM);
+    double GeodeticAltToLocalUp(double east, double north, double altM,
+                                double originLatDeg, double originLonDeg, double originAltM);
+
     // ---------- orientation ----------
     //
     // Maps the user-facing aviation Euler triple (Heading, Pitch, Roll)

@@ -164,6 +164,61 @@ void CoordTransforms::EcefToLocalEnuDeg(double x, double y, double z,
 }
 
 // ---------------------------------------------------------------------------
+// Local East/North + geodetic altitude
+//
+//   Round-trip through the ellipsoid: place the point on the tangent plane to
+//   recover its lat/lon, then re-place it at the requested geodetic altitude.
+// ---------------------------------------------------------------------------
+
+void CoordTransforms::LocalEnGeodeticAltToEcefDeg(double east, double north, double altM,
+                                                  double originLatDeg, double originLonDeg,
+                                                  double originAltM,
+                                                  double& outX, double& outY, double& outZ)
+{
+    // Defined in terms of the inverse below so East/North are preserved EXACTLY and this
+    // agrees with LocalEnuToEcefDeg by construction. Placing the point at U=0, reading its
+    // lat/lon, then re-placing at altM would instead travel along the ellipsoid normal at
+    // that lat/lon rather than the tangent-plane normal at the origin, which shifts
+    // East/North by centimetres at scenario ranges and more as altitude grows.
+    const double up = GeodeticAltToLocalUp(east, north, altM,
+                                           originLatDeg, originLonDeg, originAltM);
+    LocalEnuToEcefDeg(east, north, up, originLatDeg, originLonDeg, originAltM,
+                      outX, outY, outZ);
+}
+
+double CoordTransforms::LocalUpToGeodeticAlt(double east, double north, double up,
+                                             double originLatDeg, double originLonDeg,
+                                             double originAltM)
+{
+    double X = 0.0, Y = 0.0, Z = 0.0;
+    LocalEnuToEcefDeg(east, north, up, originLatDeg, originLonDeg, originAltM, X, Y, Z);
+    double lat = 0.0, lon = 0.0, alt = 0.0;
+    EcefToGeodeticDeg(X, Y, Z, lat, lon, alt);
+    return alt;
+}
+
+double CoordTransforms::GeodeticAltToLocalUp(double east, double north, double altM,
+                                             double originLatDeg, double originLonDeg,
+                                             double originAltM)
+{
+    // Invert LocalUpToGeodeticAlt by fixed-point iteration. d(alt)/d(up) is 1 to within
+    // the cosine of the angular offset between the origin and the point (~1e-6 at
+    // scenario ranges), so the correction converges in two or three passes; four is
+    // belt-and-braces. Iterating rather than approximating keeps the UI round-trip exact,
+    // which matters because the author sees it: type 0, reopen, and it must still read 0.
+    double up = altM;
+    for (int i = 0; i < 4; ++i)
+    {
+        const double alt = LocalUpToGeodeticAlt(east, north, up,
+                                                originLatDeg, originLonDeg, originAltM);
+        const double err = altM - alt;
+        up += err;
+        if (std::fabs(err) < 1e-9) break;
+    }
+    return up;
+}
+
+// ---------------------------------------------------------------------------
 // Orientation transforms (§14.5.2 / §15)
 // ---------------------------------------------------------------------------
 

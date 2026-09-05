@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <cwchar>
 #include <utility>
+#include <algorithm>
 
 namespace
 {
@@ -138,19 +139,33 @@ bool CameraPresetCatalog::LoadFromIni(const std::wstring& path)
             else if (k == L"FOV")   p.fov   = ToD(v, p.fov);
             else if (k == L"FocusCenter")
                 p.focusCenter = static_cast<int>(ToD(v, 0.0));
-            // Gimbal envelope. We only care whether one exists and is switched on; the
-            // angles themselves are DISBrowser's business, so they are not mirrored here.
+            // Gimbal envelope. Any one of these keys marks the preset as carrying an
+            // envelope; a partial block keeps the permissive default on the axes the
+            // file didn't mention, exactly as DISBrowser's loader does.
             else if (k == L"LimitsEnabled")
             {
                 p.limitsEnabled = (ToD(v, 0.0) != 0.0);
                 p.hasLimits = true;
             }
-            else if (k == L"MinPitch" || k == L"MaxPitch" ||
-                     k == L"MinYaw"   || k == L"MaxYaw"   ||
-                     k == L"MinRoll"  || k == L"MaxRoll")
-            {
-                p.hasLimits = true;
-            }
+            else if (k == L"MinPitch") { p.minPitch = ToD(v, p.minPitch); p.hasLimits = true; }
+            else if (k == L"MaxPitch") { p.maxPitch = ToD(v, p.maxPitch); p.hasLimits = true; }
+            else if (k == L"MinYaw")   { p.minYaw   = ToD(v, p.minYaw);   p.hasLimits = true; }
+            else if (k == L"MaxYaw")   { p.maxYaw   = ToD(v, p.maxYaw);   p.hasLimits = true; }
+            else if (k == L"MinRoll")  { p.minRoll  = ToD(v, p.minRoll);  p.hasLimits = true; }
+            else if (k == L"MaxRoll")  { p.maxRoll  = ToD(v, p.maxRoll);  p.hasLimits = true; }
+        }
+
+        // Mirror CameraViewStore::LoadAll's post-read normalisation so the editor holds
+        // exactly what DISBrowser will enforce. Pitch is an interval: a reversed pair is
+        // a typo, so swap it, then clamp both ends to the range FQuat::Rotator() can
+        // actually express. Yaw and roll are LEFT EXACTLY AS AUTHORED — Min > Max is the
+        // legal arc that wraps through +/-180, and swapping it would silently invert the
+        // envelope.
+        if (p.hasLimits)
+        {
+            if (p.minPitch > p.maxPitch) std::swap(p.minPitch, p.maxPitch);
+            p.minPitch = std::clamp(p.minPitch, kGimbalPitchMinDeg, kGimbalPitchMaxDeg);
+            p.maxPitch = std::clamp(p.maxPitch, kGimbalPitchMinDeg, kGimbalPitchMaxDeg);
         }
 
         m_presets.push_back(std::move(p));

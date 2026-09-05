@@ -139,6 +139,8 @@ static SampledPose EvaluateSegmentImpl(const MotionSegment& s, double u,
                                        bool allowFollow, const double* overrideEndEcef = nullptr);
 static SampledPose SamplePoseImpl(const Entity& entity, const Scenario& scenario,
                                   double scenarioTimeSec, bool allowFollow);
+static SampledPose SamplePoseRaw (const Entity& entity, const Scenario& scenario,
+                                  double scenarioTimeSec, bool allowFollow);
 
 // Resolve the moving orbit center for an Entity-Ellipse segment: the follow
 // target's ECEF position at `timeSec`. Returns false (callers fall back to the
@@ -525,8 +527,8 @@ SampledPose MotionSampler::SamplePose(const Entity& entity, const Scenario& scen
 //   terminal ellipse; and applies speed-authoritative Line timing. allowFollow
 //   guards one level of Entity-Ellipse follow recursion.
 //
-static SampledPose SamplePoseImpl(const Entity& entity, const Scenario& scenario,
-                                  double scenarioTimeSec, bool allowFollow)
+static SampledPose SamplePoseRaw(const Entity& entity, const Scenario& scenario,
+                                 double scenarioTimeSec, bool allowFollow)
 {
     const Scenario* const scn = &scenario;
     SampledPose out{};
@@ -705,6 +707,50 @@ static SampledPose SamplePoseImpl(const Entity& entity, const Scenario& scenario
 
     return EvaluateSegmentImpl(*active, u, scn, false, allowFollow,
                                hasDynEnd ? lineEnd : nullptr);
+}
+
+//
+// ClampSurfaceToSeaLevel - pin a DIS Domain 3 (Surface) platform to altitude 0.
+//
+//   A surface ship floats on the sea by definition, so its geodetic altitude is 0 no
+//   matter what the authored path works out to. This exists because the editor Local
+//   X/Y/Z column measures Z against the FLAT tangent plane through the scenario origin,
+//   not against the ellipsoid, and that plane climbs roughly 1 m per 1.4 km of range:
+//   12 km out it is already ~11 m up. A trawler authored at "Z = 1" therefore transmits
+//   at ~12.4 m and visibly flies. Without this, every ship placed far from the origin
+//   would need a hand-computed NEGATIVE Z that is only correct for one point on its path.
+//
+//   Domain 4 (Subsurface) is deliberately NOT clamped - depth is meaningful there. Air
+//   and land keep their authored altitude too; only Surface is unambiguous.
+//
+void MotionSampler::ClampSurfaceToSeaLevel(const Entity& entity,
+                                           double& ecefX, double& ecefY, double& ecefZ)
+{
+    constexpr uint8_t kDomainSurface = 3;
+    if (entity.domain != kDomainSurface) return;
+
+    double lat = 0.0, lon = 0.0, alt = 0.0;
+    CoordTransforms::EcefToGeodeticDeg(ecefX, ecefY, ecefZ, lat, lon, alt);
+    if (std::fabs(alt) < 1e-6) return;           // already at sea level
+    CoordTransforms::GeodeticToEcefDeg(lat, lon, 0.0, ecefX, ecefY, ecefZ);
+}
+
+static void ClampSurfaceToSeaLevel(const Entity& entity, SampledPose& p)
+{
+    MotionSampler::ClampSurfaceToSeaLevel(entity, p.ecefX, p.ecefY, p.ecefZ);
+}
+
+//
+// SamplePoseImpl - SamplePoseRaw plus the surface clamp. Every sampler entry point
+// funnels through here (including the Entity-Ellipse follow-centre resolution), so a
+// ship cannot leave the sea by any path.
+//
+static SampledPose SamplePoseImpl(const Entity& entity, const Scenario& scenario,
+                                  double scenarioTimeSec, bool allowFollow)
+{
+    SampledPose p = SamplePoseRaw(entity, scenario, scenarioTimeSec, allowFollow);
+    ClampSurfaceToSeaLevel(entity, p);
+    return p;
 }
 
 //

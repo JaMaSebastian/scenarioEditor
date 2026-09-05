@@ -14,6 +14,7 @@
 #include "Scenario.h"
 #include "ScenarioEditor.h"   // theApp.Settings()
 #include "SettingsIO.h"
+#include "TerrainEndpoint.h"
 #include "StartupIniWriter.h"
 
 #include <cstdlib>
@@ -520,13 +521,23 @@ void COutputPlaybackPage::OnConfigureUnreal()
                           MB_OK | MB_ICONWARNING);
     }
 
+    const TerrainEndpoint terrainEp = ResolveTerrainEndpoint(st);
+
     std::wstring result;
     const bool ok = StartupIniWriter::Write(
         std::wstring(CT2W(projectDir)),
         st.unrealTargetLevel, st.unrealBasemap, dynamicTiles,
         lat, lon, alt,
         boundsValid, latMin, latMax, lonMin, lonMax,
-        std::wstring(CT2W(cameraAbs)), foliage, result);
+        std::wstring(CT2W(cameraAbs)), foliage,
+        // Where DISBrowser fetches tiles from. Remote and Service both put the
+        // server on another host/port, so this cannot be assumed to be
+        // localhost:8088. Resolved through the SHARED resolver rather than
+        // re-derived here -- this used to be an inline copy that defaulted to
+        // "localhost" while PreviewPage's copy defaulted to "127.0.0.1".
+        terrainEp.host,
+        terrainEp.port,
+        result);
 
     if (ok)
     {

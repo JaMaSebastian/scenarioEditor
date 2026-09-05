@@ -17,7 +17,12 @@
 
 namespace
 {
-    // Height reserved at the bottom of the dialog for the Close button.
+    // Gap between the Close button and the dialog's bottom/right edges, and the
+    // same gap again between it and the tab control above.
+    constexpr int kBottomMarginPx = 6;
+
+    // Fallback reserve, used only if the Close button can't be measured; the
+    // real reserve is derived from the button's height in LayoutChildren().
     constexpr int kBottomReservePx = 28;
 
     // Synthesize a BN_CLICKED to a specific control on a hosted page — the
@@ -202,23 +207,39 @@ void CAttributesDialog::LayoutChildren()
     CRect rcClient;
     GetClientRect(&rcClient);
 
-    const int tabHeight = (rcClient.Height() - kBottomReservePx > 60)
-                              ? rcClient.Height() - kBottomReservePx
+    // Measure the Close button FIRST: the strip reserved at the bottom has to be
+    // derived from its real height, not assumed. The template's 14-DLU button
+    // renders 34px at this dialog's 12pt font, so the old fixed 28px reserve was
+    // 12px short. The tab control then ran past the button's top edge, and since
+    // the active page is raised to wndTop over the tab's display area, the page
+    // covered the upper ~2/3 of the button and swallowed clicks aimed at it --
+    // only an ~11px strip along the bottom edge still reached the button, which
+    // read as "the Close button doesn't work".
+    int bw = 0, bh = 0;
+    CWnd* close = GetDlgItem(IDOK);
+    if (close)
+    {
+        CRect rcBtn;
+        close->GetWindowRect(&rcBtn);
+        bw = rcBtn.Width();
+        bh = rcBtn.Height();
+    }
+    const int reserve = (bh > 0) ? (bh + 2 * kBottomMarginPx) : kBottomReservePx;
+
+    const int tabHeight = (rcClient.Height() - reserve > 60)
+                              ? rcClient.Height() - reserve
                               : 60;
     m_tabCtrl.SetWindowPos(nullptr,
                            4, 4,
                            rcClient.Width() - 8, tabHeight,
                            SWP_NOZORDER | SWP_NOACTIVATE);
 
-    // Pin the Close button to the bottom-right corner.
-    if (CWnd* close = GetDlgItem(IDOK))
+    // Pin the Close button to the bottom-right corner, clear of the tab control.
+    if (close)
     {
-        CRect rcBtn;
-        close->GetWindowRect(&rcBtn);
-        const int bw = rcBtn.Width(), bh = rcBtn.Height();
         close->SetWindowPos(nullptr,
-                            rcClient.right - bw - 6,
-                            rcClient.bottom - bh - 6,
+                            rcClient.right - bw - kBottomMarginPx,
+                            rcClient.bottom - bh - kBottomMarginPx,
                             0, 0,
                             SWP_NOZORDER | SWP_NOSIZE | SWP_NOACTIVATE);
     }
