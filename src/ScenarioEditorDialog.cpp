@@ -64,6 +64,49 @@ namespace
         return a >= 224 && a <= 239;   // 224.0.0.0/4
     }
 
+    // RelocateIntoPlays — given the leaf name of a scenario that is no longer where
+    //   settings.ini says it is, look for the same file in the repo's plays\ folder.
+    //
+    //   Why this exists: scenario files were consolidated into plays\ at some point,
+    //   which silently invalidated every absolute LastScenario recorded before the
+    //   move. The app then started empty with only a "file not found" box naming a
+    //   path the operator never typed, and the fix ("your scenario is in plays\ now")
+    //   was not guessable from it.
+    //
+    //   Resolution mirrors how InitInstance finds config\Cameras.ini: walk up from the
+    //   exe looking for the first ancestor that has the file, so it works from a build
+    //   tree (build-claude\Release\) and from a flat install alike. Returns an empty
+    //   string when nothing matches, which leaves the caller's original behaviour.
+    std::wstring RelocateIntoPlays(const CString& leaf)
+    {
+        if (leaf.IsEmpty()) return {};
+
+        wchar_t exe[MAX_PATH] = { 0 };
+        ::GetModuleFileNameW(nullptr, exe, _countof(exe));
+        std::wstring dir(exe);
+        const size_t slash = dir.find_last_of(L"\\/");
+        if (slash == std::wstring::npos) return {};
+        dir.resize(slash + 1);
+
+        const std::wstring wantLeaf(static_cast<const wchar_t*>(CT2W(leaf)));
+
+        // The exe's own folder first (a flat install keeps plays\ beside the binary),
+        // then each ancestor.
+        for (int up = 0; up < 8; ++up)
+        {
+            const std::wstring candidate = dir + L"plays\\" + wantLeaf;
+            if (::GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES)
+                return candidate;
+
+            if (!dir.empty() && (dir.back() == L'\\' || dir.back() == L'/'))
+                dir.pop_back();
+            const size_t upSlash = dir.find_last_of(L"\\/");
+            if (upSlash == std::wstring::npos) break;
+            dir.resize(upSlash + 1);
+        }
+        return {};
+    }
+
     // Leaf filename of a path (after the last \ or /), e.g. "harburtField.ini".
     CString LeafName(const CString& path)
     {
@@ -267,20 +310,46 @@ BOOL CScenarioEditorDialog::OnInitDialog()
     // RefreshUiFromScenario() runs below so the asset tree / motion list populate.
     if (!theApp.Settings().lastScenarioPath.empty())
     {
-        const std::wstring lastPath(CA2W(theApp.Settings().lastScenarioPath.c_str()));
+        std::wstring lastPath(CA2W(theApp.Settings().lastScenarioPath.c_str()));
 
         // Leaf filename for user-facing messages (e.g. "harburtField.ini").
         const CString leaf = LeafName(CString(lastPath.c_str()));
 
+        // The recorded path is absolute and was recorded by a previous run, so it goes
+        // stale whenever a scenario is moved -- which every scenario was, when they were
+        // consolidated into plays\. Before reporting it missing, look for the same file
+        // there and adopt it. The setting is corrected in place so the recovery happens
+        // once rather than on every launch.
         if (::GetFileAttributesW(lastPath.c_str()) == INVALID_FILE_ATTRIBUTES)
         {
-            // Recorded last scenario no longer exists (moved/deleted).
+            const std::wstring moved = RelocateIntoPlays(leaf);
+            if (!moved.empty())
+            {
+                sprintf_s(szError, sizeof(szError),
+                          "Startup: last scenario %S not at its recorded path; "
+                          "found in plays: %S", static_cast<const wchar_t*>(CT2W(leaf)),
+                          moved.c_str());
+                LOG(szError);
+
+                lastPath = moved;
+                CT2A ascii(CString(moved.c_str()));
+                theApp.Settings().lastScenarioPath = ascii.m_psz;
+            }
+        }
+
+        if (::GetFileAttributesW(lastPath.c_str()) == INVALID_FILE_ATTRIBUTES)
+        {
+            // Recorded last scenario no longer exists (moved/deleted) and no file of
+            // that name is in plays\ either.
             sprintf_s(szError, sizeof(szError),
                       "Startup: last scenario not found: %S", lastPath.c_str());
             LOG(szError);
 
             CString msg;
-            msg.Format(_T("%s file not found."), static_cast<LPCTSTR>(leaf));
+            msg.Format(_T("%s file not found.\n\nIt is not at its recorded location, ")
+                       _T("and no file of that name is in the plays folder. ")
+                       _T("Starting with an empty scenario."),
+                       static_cast<LPCTSTR>(leaf));
             AfxMessageBox(msg, MB_OK | MB_ICONWARNING);
         }
         else
