@@ -2,6 +2,12 @@ cmake_minimum_required(VERSION 3.22)
 
 project(ScenarioEditor LANGUAGES CXX)
 
+# Sources are UTF-8 without a BOM; MSVC would otherwise read them as code page
+# 1252 and mangle every non-ASCII string literal (the em dashes in the UI).
+if (MSVC)
+    add_compile_options(/utf-8)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -52,6 +58,7 @@ add_executable(ScenarioEditor WIN32
     src/PduBuilder.cpp
     src/UdpSender.cpp
     src/TcpSender.cpp
+    src/CameraChannelProducer.cpp
     src/ProcessSupervisor.cpp
     src/ScenarioIO.cpp
     src/EntityTypeCatalog.cpp

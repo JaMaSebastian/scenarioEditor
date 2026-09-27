@@ -100,6 +100,7 @@ int main()
     // Behavior (URZA-11265): 101 is authored held, 7 keeps the Directed
     // default so we cover both tokens the writer can emit.
     e.behavior       = NpcBehavior::Stationary;
+    e.deckCrew       = 6;
     e.kind           = 1;
     e.domain         = 2;
     e.country        = 225;
@@ -138,6 +139,9 @@ int main()
         m.startHeadingDeg = 45.0;   m.endHeadingDeg = 90.0;
         m.speedMode   = "CalculateFromTime";
         m.headingMode = "CalculateFromPath";
+        // Terminal explosion keys (Terminate Explosion): crash into entity 42.
+        m.impactEntityId = 42;
+        m.impactForwardM = 3.5;  m.impactRightM = -1.25;  m.impactUpM = 2.0;
         m.description = "Transit A -> B"; // ASCII; ANSI INI files don't preserve U+2192
         e.motionSegments.push_back(m);
     }
@@ -335,6 +339,7 @@ int main()
         EXPECT_EQ(le.applicationId, e.applicationId, "Entity.ApplicationID");
         EXPECT_EQ(le.entityId,      e.entityId,      "Entity.EntityID");
         EXPECT_EQ((int)le.behavior, (int)e.behavior, "Entity.Behavior");
+        EXPECT_EQ(le.deckCrew,      e.deckCrew,      "Entity.DeckCrew");
         EXPECT_EQ((int)le.forceId,  (int)e.forceId,  "Entity.ForceID");
         EXPECT_EQ((int)le.kind,        (int)e.kind,        "Entity.Kind");
         EXPECT_EQ((int)le.domain,      (int)e.domain,      "Entity.Domain");
@@ -391,6 +396,10 @@ int main()
                 EXPECT_NEAR(b.startBearingDeg, a.startBearingDeg, 1e-9, (T + ".bearing").c_str());
                 EXPECT_NEAR(b.speedMps,      a.speedMps,      1e-9, (T + ".speed").c_str());
                 EXPECT_EQ((int)b.direction,  (int)a.direction,     (T + ".direction").c_str());
+                EXPECT_EQ(b.impactEntityId,  a.impactEntityId,     (T + ".impactEntityId").c_str());
+                EXPECT_NEAR(b.impactForwardM, a.impactForwardM, 1e-9, (T + ".impactForward").c_str());
+                EXPECT_NEAR(b.impactRightM,   a.impactRightM,   1e-9, (T + ".impactRight").c_str());
+                EXPECT_NEAR(b.impactUpM,      a.impactUpM,      1e-9, (T + ".impactUp").c_str());
 
                 EXPECT_EQ(b.speedMode,   a.speedMode,   (T + ".speedMode").c_str());
                 EXPECT_EQ(b.headingMode, a.headingMode, (T + ".headingMode").c_str());

@@ -203,6 +203,9 @@
 #define IDC_EDIT_TCP_LISTEN_PORT        1434
 #define IDC_CHK_TCP_RECONNECT           1435
 #define IDC_EDIT_TCP_TIMEOUT            1436
+#define IDC_EDIT_CAM_CHANNEL_HOST       1438
+#define IDC_EDIT_CAM_CHANNEL_PORT       1439
+#define IDC_STATIC_GROUP_CAM_CHANNEL    1440
 #define IDC_STATIC_PREVIEW_CANVAS       1500
 #define IDC_BTN_PREVIEW_START           1501
 #define IDC_BTN_PREVIEW_PAUSE           1502
@@ -260,6 +263,8 @@
 // fit-the-target toggle, and the frame-fill percentage the fit aims for.
 // (ECAM_ZOOM moved off 1939 — IDC_STATIC_TERRAIN_STATUS already had it.)
 #define IDC_CHK_ECAM_ZOOM               1966
+#define IDC_EDIT_ECAM_BEGIN             1967
+#define IDC_EDIT_ECAM_DURATION          1968
 #define IDC_EDIT_ECAM_FOV               1940
 #define IDC_CHK_ECAM_DYNZOOM            1941
 #define IDC_EDIT_ECAM_FILL              1942
@@ -440,6 +445,17 @@
 #define IDC_LBL_PROMPT                  1866
 #define IDC_EDIT_PROMPT                 1867
 #define IDC_COMBO_TARGET_ENTITY         1868
+
+// Terminate Explosion (IDD_TERMINATE_EXPLOSION) — Preview entity RMB.
+#define IDD_TERMINATE_EXPLOSION         312
+#define IDC_EDIT_TERM_SOURCE            1969
+#define IDC_COMBO_TERM_TARGET           1970
+#define IDC_CHK_TERM_AUTO_TIME          1971
+#define IDC_EDIT_TERM_TIME              1972
+#define IDC_EDIT_TERM_FORWARD           1973
+#define IDC_EDIT_TERM_RIGHT             1974
+#define IDC_EDIT_TERM_UP                1975
+#define IDC_LBL_TERM_TARGET_SIZE        1976
 #define IDC_COMBO_MAP_LAYER             1869
 #define IDC_COMBO_MAP_PLACE             1870
 #define IDC_BTN_MAP_ADDPLACE            1871
@@ -1010,9 +1026,9 @@
 // 
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        312
+#define _APS_NEXT_RESOURCE_VALUE        313
 #define _APS_NEXT_COMMAND_VALUE         32100
-#define _APS_NEXT_CONTROL_VALUE         1967
+#define _APS_NEXT_CONTROL_VALUE         1977
 #define _APS_NEXT_SYMED_VALUE           34000
 #endif
 #endif

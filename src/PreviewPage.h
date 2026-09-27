@@ -58,6 +58,10 @@ public:
     // the four view drop-downs from its [Preview] section. Called by the host
     // dialog's RefreshUiFromScenario; safe before the page has a window.
     void OnScenarioLoaded();
+    // The model was EDITED in place (an entity added, a course plotted): refresh
+    // what derives from it without touching the view. Only a replaced model
+    // (OnScenarioLoaded) is allowed to re-fit the map.
+    void OnScenarioEdited();
 
     // Canvas reads this every paint to project entities onto the screen.
     const PreviewRenderState& GetRenderState() const { return m_state; }
@@ -186,6 +190,11 @@ public:
     // and updating its label to the new type's name.
     void ChangeEntity(size_t idx);
 
+    // Right-click context menu action: prompt for how many deck crew entity `idx`
+    // carries in the visualizer (0..kMaxDeckCrew). DeckCrew() reads it for the label.
+    void SetDeckCrew(size_t idx);
+    int  DeckCrew(size_t idx) const;
+
     // Right-click context menu action: remove entity `idx` (keeps at least one).
     void DeleteEntity(size_t idx);
 
@@ -222,6 +231,19 @@ public:
     // (enuE,enuN); EndLineEndDrag commits (reload tabs + mark dirty) on release.
     void DragLineEnd(size_t entityIdx, size_t segIdx, double enuE, double enuN);
     void EndLineEndDrag();
+
+    // Entity-dot "Terminate Explosion...": pick a target entity for `idx` to
+    // crash into. The entity's last Line becomes an impact leg ending on the
+    // target (a new leg is appended when the course does not end in a Line),
+    // drawn with a red star. Re-opening edits the existing explosion.
+    void TerminateExplosion(size_t idx);
+    bool HasTerminalExplosion(size_t idx) const;
+    // Turn the impact leg back into an ordinary Line ending where it hit.
+    void RemoveTerminalExplosion(size_t idx);
+    // Drag the red star of entity `entityIdx`'s impact leg `segIdx` to (enuE,enuN):
+    // the point is re-expressed on the target at the impact instant and kept on
+    // its catalogued footprint. EndLineEndDrag commits.
+    void DragImpactPoint(size_t entityIdx, size_t segIdx, double enuE, double enuN);
 
     // After editing one leg's timing, re-glue every following enabled segment so
     // the whole course stays time-contiguous (no frozen inter-segment gap).
@@ -369,6 +391,14 @@ private:
     // IDC_COMBO_CAM_ENTITY, or "" when none is selected or the hanger map is unavailable.
     std::string SelectedCameraEntityTypeKey() const;
     void AddCameraFrame(CameraFrame&& f);   // split the schedule at the scrub time
+    // The width a fresh camera box gets when nobody typed one: a tenth of the
+    // time the strip currently shows. Shown in the New Camera dialog so the
+    // operator can retype it before the box exists.
+    double DefaultCameraWidthSec() const;
+    // Timing the New Camera dialog asked for, consumed by the next AddCameraFrame.
+    // Begin < 0 = auto-place; width <= 0 = default width.
+    double m_newCameraBeginSec = -1.0;
+    double m_newCameraWidthSec = -1.0;
     void NormalizeCameraSchedule();         // clamp, sort, and de-overlap the schedule
     // Sync the camera-strip horizontal scroll bar (range/page/pos) to the current
     // time scale + duration; disable it when the whole schedule fits on screen.
@@ -424,6 +454,13 @@ private:
                                 MotionSegment& s, double east, double north) const;
     // Auto-zoom/pan so the whole scenario (and any terrain overlay) fits the canvas.
     void FitScenario();
+    // Copy each impact leg's resolved impact point into its stored end triple,
+    // so the Motion tab, leg-length re-timing and readers that do not know the
+    // impact keys all see where the leg really ends after the target moved.
+    void SyncImpactEnds();
+    // Catalogued footprint (length along the heading, width across) of entity
+    // `idx`, 0,0 when the catalog has no dimensions for its type.
+    void EntityFootprint(size_t idx, double& lengthM, double& widthM) const;
     // Self-hosted Cesium terrain server (WSL python3 serve.py on :8088) controls.
     // Resolve DISBrowser\Scripts\<fileName> from the configured project dir (Run tab).
     CString ResolveDisBrowserScript(const CString& fileName) const;

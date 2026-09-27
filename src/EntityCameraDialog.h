@@ -90,6 +90,13 @@ public:
     double             VantEastM()         const { return m_vantEastM; }
     double             VantNorthM()        const { return m_vantNorthM; }
     double             VantUpM()           const { return m_vantUpM; }
+    // Timing. New camera: Start < 0 means "place it for me" (the strip's free-slot
+    // rule) and Duration is the strip's default box width unless retyped. Edit:
+    // both are the frame's own values; TimingChanged() says whether to re-place.
+    double             BeginSecond()       const { return m_beginSecond; }
+    double             DurationSec()       const { return m_durationSec; }
+    bool               TimingChanged()     const { return m_timingChanged; }
+    void SetDefaultDuration(double seconds) { m_durationSec = seconds; }
 
     // ----- The mounted preset's gimbal envelope (Cameras.ini, shared) -----
     // EnvelopeChanged() is false unless the operator actually altered something,
@@ -186,6 +193,9 @@ private:
     double           m_transitionSeconds = 0.5;
     std::string      m_label;
     double           m_vantEastM = 0.0, m_vantNorthM = 0.0, m_vantUpM = 0.0;
+    double           m_beginSecond = -1.0;     // < 0 = auto-place (New only)
+    double           m_durationSec = 0.0;      // seconds of scenario time on this shot
+    bool             m_timingChanged = false;
 
     // The mounted preset's envelope, as loaded and as edited.
     CameraPresetIO::GimbalEnvelope m_env;

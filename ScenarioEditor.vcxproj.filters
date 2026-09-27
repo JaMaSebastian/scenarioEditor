@@ -46,6 +46,7 @@
     <ClInclude Include="src\PduBuilder.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\UdpSender.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\TcpSender.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\CameraChannelProducer.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\ProcessSupervisor.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\ScenarioIO.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\EntityTypeCatalog.h"><Filter>Header Files</Filter></ClInclude>
@@ -84,6 +85,7 @@
     <ClCompile Include="src\PduBuilder.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\UdpSender.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\TcpSender.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\CameraChannelProducer.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\ProcessSupervisor.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\ScenarioIO.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\EntityTypeCatalog.cpp"><Filter>Source Files</Filter></ClCompile>

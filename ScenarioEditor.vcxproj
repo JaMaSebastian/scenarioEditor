@@ -62,6 +62,7 @@
       <PreprocessorDefinitions>WIN32;_WINDOWS;_DEBUG;_AFXDLL;HAVE_WEBVIEW2;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <AdditionalIncludeDirectories>$(ProjectDir)src;$(ProjectDir);$(ProjectDir)..\open-dis-cpp-master\src;$(ProjectDir)..\open-dis-cpp-master\build\src</AdditionalIncludeDirectories>
       <Optimization>Disabled</Optimization>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
@@ -91,6 +92,7 @@
       <PreprocessorDefinitions>WIN32;_WINDOWS;NDEBUG;_AFXDLL;HAVE_WEBVIEW2;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <AdditionalIncludeDirectories>$(ProjectDir)src;$(ProjectDir);$(ProjectDir)..\open-dis-cpp-master\src;$(ProjectDir)..\open-dis-cpp-master\build\src</AdditionalIncludeDirectories>
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
@@ -148,6 +150,7 @@
     <ClInclude Include="src\PduBuilder.h" />
     <ClInclude Include="src\UdpSender.h" />
     <ClInclude Include="src\TcpSender.h" />
+    <ClInclude Include="src\CameraChannelProducer.h" />
     <ClInclude Include="src\ProcessSupervisor.h" />
     <ClInclude Include="src\ScenarioIO.h" />
     <ClInclude Include="src\EntityTypeCatalog.h" />
@@ -206,6 +209,9 @@
     <ClCompile Include="src\PduBuilder.cpp" />
     <ClCompile Include="src\UdpSender.cpp" />
     <ClCompile Include="src\TcpSender.cpp" />
+    <ClCompile Include="src\CameraChannelProducer.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="src\ProcessSupervisor.cpp" />
     <ClCompile Include="src\ScenarioIO.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>

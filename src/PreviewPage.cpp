@@ -239,6 +239,109 @@ namespace
         int m_sel = -1;
     };
 
+    // Modal "Terminate Explosion": the source entity (read-only), a Target Entity
+    // drop-down, when the impact happens (auto = intercept at cruise speed, or a
+    // typed time) and where on the target (forward / right / up metres in the
+    // target's own frame). The caller supplies the candidate targets, already
+    // excluding the source, plus a size line per candidate.
+    class CTerminateExplosionDialog : public CDialogEx
+    {
+    public:
+        enum { IDD = IDD_TERMINATE_EXPLOSION };
+        CTerminateExplosionDialog(const CString& source,
+                                  const std::vector<CString>& targets,
+                                  const std::vector<CString>& targetSizes, CWnd* parent)
+            : CDialogEx(IDD, parent), m_source(source), m_targets(targets),
+              m_sizes(targetSizes) {}
+
+        // In: initial values. Out: accepted values.
+        int    m_sel       = 0;       // index into targets
+        bool   m_autoTime  = true;
+        double m_timeSec   = 0.0;
+        double m_minTime   = 0.0;     // the leg's start: an impact must come after it
+        double m_forwardM  = 0.0;
+        double m_rightM    = 0.0;
+        double m_upM       = 0.0;
+        // New explosions: the Up box follows the chosen target's suggested aim
+        // height (on a ship's hull rather than its waterline). Empty = never.
+        std::vector<double> m_upDefaults;
+
+    protected:
+        BOOL OnInitDialog() override
+        {
+            CDialogEx::OnInitDialog();
+            SetDlgItemText(IDC_EDIT_TERM_SOURCE, m_source);
+            if (CComboBox* cb = (CComboBox*)GetDlgItem(IDC_COMBO_TERM_TARGET))
+            {
+                for (const CString& s : m_targets) cb->AddString(s);
+                cb->SetCurSel(m_targets.empty() ? -1 : m_sel);
+            }
+            CheckDlgButton(IDC_CHK_TERM_AUTO_TIME, m_autoTime ? BST_CHECKED : BST_UNCHECKED);
+            CString s;
+            s.Format(_T("%.2f"), m_timeSec);  SetDlgItemText(IDC_EDIT_TERM_TIME, s);
+            s.Format(_T("%.1f"), m_forwardM); SetDlgItemText(IDC_EDIT_TERM_FORWARD, s);
+            s.Format(_T("%.1f"), m_rightM);   SetDlgItemText(IDC_EDIT_TERM_RIGHT, s);
+            s.Format(_T("%.1f"), m_upM);      SetDlgItemText(IDC_EDIT_TERM_UP, s);
+            SyncControls();
+            SeedUpFromTarget();
+            if (CWnd* cb = GetDlgItem(IDC_COMBO_TERM_TARGET)) { cb->SetFocus(); return FALSE; }
+            return TRUE;
+        }
+        BOOL OnCommand(WPARAM wParam, LPARAM lParam) override
+        {
+            const UINT id = LOWORD(wParam), code = HIWORD(wParam);
+            if ((id == IDC_COMBO_TERM_TARGET && code == CBN_SELCHANGE) ||
+                (id == IDC_CHK_TERM_AUTO_TIME && code == BN_CLICKED))
+                SyncControls();
+            if (id == IDC_COMBO_TERM_TARGET && code == CBN_SELCHANGE)
+                SeedUpFromTarget();
+            return CDialogEx::OnCommand(wParam, lParam);
+        }
+        // Size line for the chosen target; time box only when not automatic.
+        void SyncControls()
+        {
+            const CComboBox* cb = (CComboBox*)GetDlgItem(IDC_COMBO_TERM_TARGET);
+            const int sel = cb ? cb->GetCurSel() : -1;
+            SetDlgItemText(IDC_LBL_TERM_TARGET_SIZE,
+                           (sel >= 0 && sel < static_cast<int>(m_sizes.size())) ? m_sizes[sel] : CString());
+            if (CWnd* t = GetDlgItem(IDC_EDIT_TERM_TIME))
+                t->EnableWindow(IsDlgButtonChecked(IDC_CHK_TERM_AUTO_TIME) != BST_CHECKED);
+        }
+        // Put the chosen target's suggested aim height in the Up box.
+        void SeedUpFromTarget()
+        {
+            const CComboBox* cb = (CComboBox*)GetDlgItem(IDC_COMBO_TERM_TARGET);
+            const int sel = cb ? cb->GetCurSel() : -1;
+            if (sel < 0 || sel >= static_cast<int>(m_upDefaults.size())) return;
+            CString s;
+            s.Format(_T("%.1f"), m_upDefaults[static_cast<size_t>(sel)]);
+            SetDlgItemText(IDC_EDIT_TERM_UP, s);
+        }
+        void OnOK() override
+        {
+            const CComboBox* cb = (CComboBox*)GetDlgItem(IDC_COMBO_TERM_TARGET);
+            m_sel = cb ? cb->GetCurSel() : -1;
+            if (m_sel < 0) { AfxMessageBox(_T("Choose a target entity.")); return; }
+            m_autoTime = IsDlgButtonChecked(IDC_CHK_TERM_AUTO_TIME) == BST_CHECKED;
+            CString s;
+            GetDlgItemText(IDC_EDIT_TERM_TIME, s);    m_timeSec  = _tstof(s);
+            GetDlgItemText(IDC_EDIT_TERM_FORWARD, s); m_forwardM = _tstof(s);
+            GetDlgItemText(IDC_EDIT_TERM_RIGHT, s);   m_rightM   = _tstof(s);
+            GetDlgItemText(IDC_EDIT_TERM_UP, s);      m_upM      = _tstof(s);
+            if (!m_autoTime && m_timeSec <= m_minTime)
+            {
+                CString msg;
+                msg.Format(_T("The impact time must be after the leg starts (%.2f s)."), m_minTime);
+                AfxMessageBox(msg);
+                return;
+            }
+            CDialogEx::OnOK();
+        }
+        CString              m_source;
+        std::vector<CString> m_targets;
+        std::vector<CString> m_sizes;
+    };
+
     // Modal "Add Location": label + latitude + longitude + altitude. The numeric
     // fields are prefilled from the captured/current view so the common case is
     // one keystroke (the label). Altitude is the eye/viewing height in metres.
@@ -480,6 +583,9 @@ namespace
     // a phantom point and blanks the map. Those fall through to the origin-framed
     // fallback so the satellite/map backdrop stays visible.
     constexpr double kFitMaxOffsetM   = 5.0e6;   // 5000 km
+    // Smallest extent FitScenario will frame: a lone stationary entity is shown
+    // with this much map around it rather than zoomed to a single dot.
+    constexpr double kFitMinExtentM   = 5000.0;  // 5 km
     // Default zoom when there's nothing meaningful to fit (empty/fresh scenario, or
     // all entities skipped as far-flung): a comfortable ~10 km-across view of the
     // origin so the satellite/map backdrop is visible and navigable.
@@ -850,7 +956,7 @@ void CPreviewPage::PushCesiumEntities()
     pts.reserve(m_state.poses.size());
     for (const PreviewEntityPose& p : m_state.poses)
     {
-        if (!p.enabled) continue;
+        if (!p.enabled || p.exploded) continue;
         double X, Y, Z, lat, lon, alt;
         CoordTransforms::LocalEnuToEcefDeg(p.enuE, p.enuN, p.enuU,
             m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM, X, Y, Z);
@@ -1708,6 +1814,26 @@ void CPreviewPage::OnScenarioLoaded()
     FitScenario();
     ApplyPreviewViewFromScenario();
     RefreshMapView();
+    if (m_timeline.GetSafeHwnd()) m_timeline.Invalidate(FALSE);
+}
+
+//
+// OnScenarioEdited — the same model, edited in place. Everything derived from
+//   it is rebuilt (paths, camera combos, slider range, render state) but the
+//   view is left exactly where the operator has it. Plot > Line used to come
+//   through OnScenarioLoaded, whose FitScenario re-framed the whole scenario on
+//   every edit: the 2 km starter course vanished at that zoom and the operator
+//   lost the entity they were working on.
+//
+void CPreviewPage::OnScenarioEdited()
+{
+    if (!GetSafeHwnd()) return;
+    RebuildPathsCache();
+    PopulateCameraCombos();
+    UpdateSliderRange();
+    UpdateCameraScrollBar();
+    RebuildRenderState();
+    if (m_canvas.GetSafeHwnd())   m_canvas.Invalidate(FALSE);
     if (m_timeline.GetSafeHwnd()) m_timeline.Invalidate(FALSE);
 }
 
@@ -3477,6 +3603,39 @@ void CPreviewPage::RenameEntity(size_t idx)
         top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
 }
 
+int CPreviewPage::DeckCrew(size_t idx) const
+{
+    if (!m_scenario || idx >= m_scenario->entities.size()) return 0;
+    return m_scenario->entities[idx].deckCrew;
+}
+
+void CPreviewPage::SetDeckCrew(size_t idx)
+{
+    if (!m_scenario || idx >= m_scenario->entities.size()) return;
+    Entity& e = m_scenario->entities[idx];
+
+    // How many of the crew authored for this ship type in the DISBrowser hanger
+    // the visualizer puts on this entity (extra ones get random deck spots).
+    constexpr int kMaxDeckCrew = 50;
+    CString initial;
+    initial.Format(_T("%d"), e.deckCrew);
+    CPromptDialog dlg(_T("Deck Crew"), _T("Crew on deck (0-50):"), initial, this);
+    if (dlg.DoModal() != IDOK) return;
+
+    CString v = dlg.Value();
+    v.Trim();
+    if (v.IsEmpty() || v.SpanIncluding(_T("0123456789")) != v)
+    {
+        AfxMessageBox(_T("Enter a whole number from 0 to 50."), MB_ICONWARNING);
+        return;
+    }
+    const int n = _ttoi(v);
+    e.deckCrew = std::min(std::max(n, 0), kMaxDeckCrew);
+
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+}
+
 void CPreviewPage::ChangeEntity(size_t idx)
 {
     if (!m_scenario) return;
@@ -3714,23 +3873,39 @@ void CPreviewPage::UpdateCameraScrollBar()
 //   which surfaced once the schedule sort became stable). The box remains fully
 //   movable and resizable afterward.
 //
+double CPreviewPage::DefaultCameraWidthSec() const
+{
+    const double D   = EffectivePreviewDuration();
+    const double vis = m_timeline.GetSafeHwnd() ? m_timeline.VisibleSpanSeconds() : 0.0;
+    double width = (vis > 0.0 ? vis : D) * 0.1;
+    if (width > D)    width = D;
+    if (width <= 0.0) width = 1.0;
+    return width;
+}
+
 void CPreviewPage::AddCameraFrame(CameraFrame&& f)
 {
     if (!m_scenario) return;
     auto& cams = m_scenario->cameras;
     const double D = EffectivePreviewDuration();
 
+    // Timing the dialog asked for, if any. Consumed here, once, so a later
+    // programmatic add cannot inherit it.
+    const double askedBegin = m_newCameraBeginSec;
+    const double askedWidth = m_newCameraWidthSec;
+    m_newCameraBeginSec = -1.0;
+    m_newCameraWidthSec = -1.0;
+
     // Cache the target's catalogued size here rather than at each of the three
     // creation sites, so no path can produce a frame with an unresolved target.
     CameraTargetExtents::Apply(*m_scenario, f);
 
-    // Default width = one tenth of the time currently visible in the strip (the
-    // parent camera-duration control), so a fresh box is a readable slice at any
-    // zoom. Fall back to a tenth of the full duration before the strip is realized.
-    const double vis = m_timeline.VisibleSpanSeconds();
-    double width = (vis > 0.0 ? vis : D) * 0.1;
+    // Width: what the operator typed, else a tenth of the time currently visible
+    // in the strip so a fresh box is a readable slice at any zoom.
+    double width = (askedWidth > 0.0) ? askedWidth : DefaultCameraWidthSec();
     if (width > D)    width = D;
     if (width <= 0.0) width = 1.0;
+    const double vis = m_timeline.VisibleSpanSeconds();
 
     // The window currently on screen: [visLo, visHi]. When the strip isn't realized
     // yet, treat the whole [0, D] as visible.
@@ -3785,6 +3960,10 @@ void CPreviewPage::AddCameraFrame(CameraFrame&& f)
     if (begin < 0.0)                                 // window fully packed — accept a
         begin = std::min(anchor, std::max(0.0, D - width));  // clamped anchor; Normalize tidies
     if (begin < 0.0) begin = 0.0;
+
+    // A typed start wins over the free-slot search; Normalize below still keeps
+    // it inside the play and pushes any overlap apart.
+    if (askedBegin >= 0.0) begin = std::min(askedBegin, std::max(0.0, D - width));
 
     f.beginSecond = begin;
     f.endSecond   = std::min(D, begin + width);
@@ -3923,6 +4102,12 @@ void CPreviewPage::CreateCameraFromDialog(const CEntityCameraDialog& dlg)
 
     const uint16_t srcId = dlg.SourceEntityId();
 
+    // Timing from the dialog rides along to AddCameraFrame through these two
+    // members (the mounted path goes through AddEntityCameraFrame's long
+    // signature, which is not worth widening for it).
+    m_newCameraBeginSec = dlg.BeginSecond();
+    m_newCameraWidthSec = dlg.DurationSec();
+
     if (srcId != 0)
     {
         // Mounted on an entity: reuse the existing Entity-camera path, which also
@@ -3941,6 +4126,7 @@ void CPreviewPage::CreateCameraFromDialog(const CEntityCameraDialog& dlg)
             ApplyEnvelopeFromDialog(dlg);
             return;
         }
+        m_newCameraBeginSec = m_newCameraWidthSec = -1.0;
         return;   // source vanished between opening the dialog and OK
     }
 
@@ -4009,6 +4195,7 @@ void CPreviewPage::OnNewCamera()
 
     CEntityCameraDialog dlg(this);
     dlg.SetContext(m_scenario, 0);      // 0 = "(none)"
+    dlg.SetDefaultDuration(DefaultCameraWidthSec());
     if (dlg.DoModal() != IDOK) return;
 
     CreateCameraFromDialog(dlg);
@@ -4159,6 +4346,7 @@ void CPreviewPage::NewEntityCameraViaDialog(size_t entityIdx)
 
     CEntityCameraDialog dlg(this);
     dlg.SetContext(m_scenario, m_scenario->entities[entityIdx].entityId);
+    dlg.SetDefaultDuration(DefaultCameraWidthSec());
     if (dlg.DoModal() != IDOK) return;
 
     CreateCameraFromDialog(dlg);
@@ -4256,8 +4444,9 @@ void CPreviewPage::EditCameraViaDialog(size_t frameIdx)
 //   1. The frame is re-located before it is written. NormalizeCameraSchedule and
 //      CCameraTimeline::ReindexDraggedFrame both reorder Scenario::cameras, so an
 //      index captured before a modal is a hint, not an address.
-//   2. beginSecond/endSecond are never touched, and the schedule is NOT
-//      re-normalised: editing a camera's settings must not move its box.
+//   2. beginSecond/endSecond change only when the operator retyped Start or
+//      Duration, and only then is the schedule re-normalised: editing any other
+//      setting must not move the box.
 //   3. The label is only regenerated when it was never customised (see below).
 //
 void CPreviewPage::UpdateCameraFromDialog(size_t frameIdx,
@@ -4359,10 +4548,23 @@ void CPreviewPage::UpdateCameraFromDialog(size_t frameIdx,
     // is why everything above reads PresetType()/PresetAngle() instead.
     ApplyEnvelopeFromDialog(dlg);
 
-    // Deliberately NO NormalizeCameraSchedule() — begin/end are untouched, so the
-    // running order cannot have changed, and re-sorting would only risk moving the
-    // box the operator just edited. (WM_APP_REFRESH_UI below is what marks the
-    // scenario dirty, the same as every other camera mutator on this page.)
+    // Timing: only when retyped. Then the schedule is re-normalised, because a
+    // longer box can now overlap its neighbour and a moved one can change the
+    // running order; otherwise the box stays exactly where it was. The box in the
+    // strip is drawn from begin/end, so this is what resizes it.
+    if (dlg.TimingChanged())
+    {
+        const double D = EffectivePreviewDuration();
+        double begin = std::max(0.0, dlg.BeginSecond());
+        double dur   = std::max(kCameraMinDurationSec, dlg.DurationSec());
+        if (begin + dur > D) begin = std::max(0.0, D - dur);
+        f.beginSecond = begin;
+        f.endSecond   = std::min(D, begin + dur);
+        NormalizeCameraSchedule();
+        UpdateCameraScrollBar();
+    }
+    // (WM_APP_REFRESH_UI below is what marks the scenario dirty, the same as every
+    // other camera mutator on this page.)
     RebuildRenderState();
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
     if (m_timeline.GetSafeHwnd()) m_timeline.Invalidate(FALSE);
@@ -4508,6 +4710,14 @@ void CPreviewPage::DeleteEntity(size_t idx)
     if (!m_scenario) return;
     if (m_scenario->entities.size() <= 1) return;   // keep at least one (matches the Assets page)
     if (idx >= m_scenario->entities.size()) return;
+
+    // Explosions aimed at this entity lose their target: each becomes an
+    // ordinary Line ending where it last hit (explosion.md: cascade deletes).
+    SyncImpactEnds();
+    const int goneId = static_cast<int>(m_scenario->entities[idx].entityId);
+    for (Entity& other : m_scenario->entities)
+        for (MotionSegment& s : other.motionSegments)
+            if (s.impactEntityId == goneId) s.impactEntityId = -1;
 
     m_scenario->entities.erase(m_scenario->entities.begin() + static_cast<std::ptrdiff_t>(idx));
 
@@ -4817,6 +5027,278 @@ void CPreviewPage::PlotEntityEllipse(size_t idx, bool clockwise)
     if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
     if (CWnd* top = GetTopLevelParent())
         top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+}
+
+//
+// ClampImpactOffset — keep an impact point on the target: inside its catalogued
+//   footprint (half-length along, half-width across), or within a small radius of
+//   its reference point when the catalog has no size for it.
+//
+static void ClampImpactOffset(double& forwardM, double& rightM, double lengthM, double widthM)
+{
+    constexpr double kUncataloguedRadiusM = 10.0;
+    if (lengthM > 0.0 && widthM > 0.0)
+    {
+        forwardM = std::min(std::max(forwardM, -0.5 * lengthM), 0.5 * lengthM);
+        rightM   = std::min(std::max(rightM,   -0.5 * widthM),  0.5 * widthM);
+        return;
+    }
+    const double r = std::hypot(forwardM, rightM);
+    if (r > kUncataloguedRadiusM)
+    {
+        forwardM *= kUncataloguedRadiusM / r;
+        rightM   *= kUncataloguedRadiusM / r;
+    }
+}
+
+void CPreviewPage::EntityFootprint(size_t idx, double& lengthM, double& widthM) const
+{
+    lengthM = widthM = 0.0;
+    if (!m_scenario || idx >= m_scenario->entities.size()) return;
+    const Entity& t = m_scenario->entities[idx];
+    const AirframeProfile prof = theApp.Catalog().Profile(t.kind, t.domain, t.category, t.subcategory);
+    if (!prof.valid) return;
+    lengthM = prof.lengthM;
+    widthM  = prof.wingspanM;
+}
+
+bool CPreviewPage::HasTerminalExplosion(size_t idx) const
+{
+    return m_scenario && idx < m_scenario->entities.size() &&
+           MotionSampler::TerminalImpactSegment(m_scenario->entities[idx]) != nullptr;
+}
+
+void CPreviewPage::SyncImpactEnds()
+{
+    if (!m_scenario) return;
+    for (Entity& e : m_scenario->entities)
+        for (MotionSegment& s : e.motionSegments)
+        {
+            double p[3];
+            if (s.impactEntityId < 0 || !MotionSampler::ImpactPointEcef(s, *m_scenario, p)) continue;
+            s.endEcefX = p[0]; s.endEcefY = p[1]; s.endEcefZ = p[2];
+            MotionSampler::SyncSegmentEndpoint(s, /*isEnd*/true, CoordMode::ECEF,
+                m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM);
+        }
+}
+
+void CPreviewPage::TerminateExplosion(size_t idx)
+{
+    if (!m_scenario || idx >= m_scenario->entities.size()) return;
+    Scenario& scn = *m_scenario;
+
+    // Candidate targets: every other enabled entity, with its catalogued size so
+    // the operator knows what the star can be moved over.
+    std::vector<CString> labels, sizes;
+    std::vector<size_t>  indices;
+    for (size_t j = 0; j < scn.entities.size(); ++j)
+    {
+        const Entity& t = scn.entities[j];
+        if (j == idx || !t.enabled) continue;
+        CString label;
+        label.Format(_T("%s  (ID %u)"), CString(EntityDisplayName(t).c_str()).GetString(),
+                     static_cast<unsigned>(t.entityId));
+        labels.push_back(label);
+        double L = 0.0, W = 0.0;
+        EntityFootprint(j, L, W);
+        CString size;
+        if (L > 0.0 && W > 0.0) size.Format(_T("Target size: %.1f m long x %.1f m wide"), L, W);
+        else                    size = _T("Target size not catalogued: the star stays within 10 m of it.");
+        sizes.push_back(size);
+        indices.push_back(j);
+    }
+    if (indices.empty())
+    {
+        AfxMessageBox(_T("There are no other entities to crash into. Add another entity first."),
+                      MB_ICONWARNING);
+        return;
+    }
+
+    // Which leg ends in the explosion: the existing impact leg; else the course's
+    // last Line (the plotted line is redirected into the target); else a new leg
+    // appended where the course ends (after an orbit or a hold, or from the
+    // entity's start when it has no course at all). Take-off rolls are never
+    // converted: they accelerate from a stop and belong on the runway.
+    const Entity& src = scn.entities[idx];
+    int legIdx = -1;
+    bool append = false;
+    if (const MotionSegment* ex = MotionSampler::TerminalImpactSegment(src))
+        legIdx = static_cast<int>(ex - src.motionSegments.data());
+    else
+    {
+        int lastIdx = -1;
+        for (int k = static_cast<int>(src.motionSegments.size()) - 1; k >= 0; --k)
+            if (src.motionSegments[k].enabled) { lastIdx = k; break; }
+        if (lastIdx >= 0 && src.motionSegments[lastIdx].type == MotionType::Line &&
+            !src.motionSegments[lastIdx].accelerateFromStop)
+            legIdx = lastIdx;
+        else
+        {
+            append = true;
+            legIdx = lastIdx;   // the leg the new one chains off (-1 = none)
+        }
+    }
+    const double legStart = append
+        ? (legIdx >= 0 ? src.motionSegments[legIdx].endSecond : 0.0)
+        : src.motionSegments[legIdx].startSecond;
+
+    CTerminateExplosionDialog dlg(CString(EntityDisplayName(src).c_str()), labels, sizes, this);
+    dlg.m_minTime = legStart;
+    if (!append && src.motionSegments[legIdx].impactEntityId >= 0)
+    {
+        // Editing: seed from the existing explosion, keeping its time.
+        const MotionSegment& ex = src.motionSegments[legIdx];
+        for (size_t k = 0; k < indices.size(); ++k)
+            if (static_cast<int>(scn.entities[indices[k]].entityId) == ex.impactEntityId)
+                dlg.m_sel = static_cast<int>(k);
+        dlg.m_autoTime = false;
+        dlg.m_timeSec  = ex.endSecond;
+        dlg.m_forwardM = ex.impactForwardM;
+        dlg.m_rightM   = ex.impactRightM;
+        dlg.m_upM      = ex.impactUpM;
+    }
+    else
+    {
+        dlg.m_timeSec = append ? legStart + 60.0 : src.motionSegments[legIdx].endSecond;
+        // Suggested aim height per target. A ship's reference point is its
+        // waterline, so aim a quarter of its catalogued height up the hull (at
+        // least the sampler's 2 m floor); air and land targets aim at their
+        // reference point.
+        for (size_t j : indices)
+        {
+            const Entity& t = scn.entities[j];
+            double up = 0.0;
+            if (t.domain == 3)
+            {
+                const AirframeProfile prof =
+                    theApp.Catalog().Profile(t.kind, t.domain, t.category, t.subcategory);
+                up = std::max(2.0, prof.valid ? 0.25 * prof.heightM : 0.0);
+            }
+            dlg.m_upDefaults.push_back(up);
+        }
+    }
+    if (dlg.DoModal() != IDOK) return;
+
+    Entity& e = scn.entities[idx];
+    const size_t targetIdx = indices[static_cast<size_t>(dlg.m_sel)];
+    const Entity& target = scn.entities[targetIdx];
+
+    if (append)
+    {
+        // New leg from wherever the course leaves the entity at legStart.
+        const SampledPose p0 = MotionSampler::SamplePose(e, scn, legStart);
+        double east = 0.0, north = 0.0, up = 0.0;
+        CoordTransforms::EcefToLocalEnuDeg(p0.ecefX, p0.ecefY, p0.ecefZ,
+            scn.originLatDeg, scn.originLonDeg, scn.originAltM, east, north, up);
+        MotionSegment seg;
+        seg.type        = MotionType::Line;
+        seg.coordMode   = CoordMode::Local;
+        seg.startSecond = legStart;
+        seg.endSecond   = legStart + 60.0;
+        seg.speedMps    = (legIdx >= 0 && e.motionSegments[legIdx].speedMps > 0.0)
+                              ? e.motionSegments[legIdx].speedMps : SeedCruiseSpeedMps(&e);
+        seg.startLocalX = east;  seg.startLocalY = north;  seg.startLocalZ = up;
+        seg.endLocalX   = east;  seg.endLocalY   = north;  seg.endLocalZ   = up;
+        MotionSampler::SyncSegmentEndpoint(seg, /*isEnd*/false, CoordMode::Local,
+            scn.originLatDeg, scn.originLonDeg, scn.originAltM);
+        e.motionSegments.push_back(std::move(seg));
+        legIdx = static_cast<int>(e.motionSegments.size()) - 1;
+    }
+
+    // The explosion ends the course: nothing authored after it can play.
+    e.motionSegments.erase(e.motionSegments.begin() + legIdx + 1, e.motionSegments.end());
+
+    MotionSegment& seg = e.motionSegments[static_cast<size_t>(legIdx)];
+    seg.impactEntityId = static_cast<int>(target.entityId);
+    seg.impactForwardM = dlg.m_forwardM;
+    seg.impactRightM   = dlg.m_rightM;
+    seg.impactUpM      = dlg.m_upM;
+    {
+        double L = 0.0, W = 0.0;
+        EntityFootprint(targetIdx, L, W);
+        ClampImpactOffset(seg.impactForwardM, seg.impactRightM, L, W);
+    }
+    if (seg.speedMps <= 0.0) seg.speedMps = SeedCruiseSpeedMps(&e);
+
+    if (dlg.m_autoTime)
+    {
+        // Meet the target where it WILL be: solve the intercept at cruise speed.
+        const SampledPose s0 = MotionSampler::EvaluateSegment(seg, 0.0, &scn, true);
+        const double start[3] = { s0.ecefX, s0.ecefY, s0.ecefZ };
+        const double horizon = seg.startSecond + std::max(3600.0, EffectivePreviewDuration());
+        seg.endSecond = MotionSampler::SolveImpactTime(seg, scn, start, seg.startSecond,
+                                                       seg.speedMps, horizon);
+    }
+    else
+    {
+        seg.endSecond = dlg.m_timeSec;
+    }
+
+    // Keep the entity's own ES window open until it hits.
+    if (e.endSecond < seg.endSecond) e.endSecond = seg.endSecond;
+
+    SyncImpactEnds();
+    RebuildPathsCache();
+    UpdateSliderRange();
+    RebuildRenderState();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+
+    if (scn.durationSeconds > 0.0 && seg.endSecond > scn.durationSeconds)
+    {
+        CString msg;
+        msg.Format(_T("The impact happens at %.1f s, after the scenario ends (%.1f s).\n")
+                   _T("Raise the scenario duration or the explosion will not be sent on Run."),
+                   seg.endSecond, scn.durationSeconds);
+        AfxMessageBox(msg, MB_ICONWARNING);
+    }
+}
+
+void CPreviewPage::RemoveTerminalExplosion(size_t idx)
+{
+    if (!m_scenario || idx >= m_scenario->entities.size()) return;
+    SyncImpactEnds();   // the leg keeps ending where it last hit
+    for (MotionSegment& s : m_scenario->entities[idx].motionSegments)
+        s.impactEntityId = -1;
+
+    RebuildPathsCache();
+    RebuildRenderState();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
+    if (CWnd* top = GetTopLevelParent())
+        top->SendMessage(WM_APP_REFRESH_UI, 0, 0);
+}
+
+void CPreviewPage::DragImpactPoint(size_t entityIdx, size_t segIdx, double enuE, double enuN)
+{
+    if (!m_scenario || entityIdx >= m_scenario->entities.size()) return;
+    Entity& e = m_scenario->entities[entityIdx];
+    if (segIdx >= e.motionSegments.size()) return;
+    MotionSegment& seg = e.motionSegments[segIdx];
+    const int ti = MotionSampler::ImpactTargetIndex(seg, *m_scenario);
+    if (ti < 0) return;
+
+    // Re-express the dropped point relative to the target at the impact instant,
+    // in its heading frame -- the same frame the sampler rebuilds it from.
+    const SampledPose tp = MotionSampler::SamplePose(
+        m_scenario->entities[static_cast<size_t>(ti)], *m_scenario, seg.endSecond);
+    double te = 0.0, tn = 0.0, tu = 0.0;
+    CoordTransforms::EcefToLocalEnuDeg(tp.ecefX, tp.ecefY, tp.ecefZ,
+        m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM, te, tn, tu);
+    const double dE = enuE - te, dN = enuN - tn;
+    const double h  = tp.headingDeg * (3.14159265358979323846 / 180.0);
+    double fwd   = dE * std::sin(h) + dN * std::cos(h);
+    double right = dE * std::cos(h) - dN * std::sin(h);
+
+    double L = 0.0, W = 0.0;
+    EntityFootprint(static_cast<size_t>(ti), L, W);
+    ClampImpactOffset(fwd, right, L, W);
+    seg.impactForwardM = fwd;
+    seg.impactRightM   = right;
+
+    RebuildPathsCache();   // re-syncs the stored end
+    RebuildRenderState();
+    if (m_canvas.GetSafeHwnd()) m_canvas.Invalidate(FALSE);
 }
 
 void CPreviewPage::DragEllipseFocus(size_t entityIdx, size_t segIdx, int focusIdx,
@@ -5654,6 +6136,9 @@ void CPreviewPage::RebuildPathsCache()
 {
     m_pathsCache.clear();
     m_ellipseTargets.clear();
+    // Impact legs end on a target that may have been re-routed since: refresh
+    // their stored end triples (derived data; not an edit, nothing marked dirty).
+    SyncImpactEnds();
     // Painted foliage areas -> ENU for drawing. Projecting all four corners and
     // taking the bounding box keeps the rectangle honest under any origin skew,
     // the same way the boundary paint does in reverse.
@@ -5976,9 +6461,14 @@ void CPreviewPage::FitScenario()
         return;
     }
 
-    // 10% padding around the bounding box; ensure non-zero extent.
-    double boxW = std::max(1.0, (maxE - minE)) * 1.10;
-    double boxH = std::max(1.0, (maxN - minN)) * 1.10;
+    // 10% padding around the bounding box. A degenerate box (one stationary
+    // entity, or a formation parked on a single point) used to fit to the
+    // 0.01 m/px floor -- a 25 m wide canvas in which the entity dot filled the
+    // screen and a freshly plotted 2 km starter course ran straight off it.
+    // Frame at least kFitMinExtentM so a lone entity gets some map around it
+    // and Plot > Line's starter segment lands on screen.
+    double boxW = std::max(kFitMinExtentM, (maxE - minE)) * 1.10;
+    double boxH = std::max(kFitMinExtentM, (maxN - minN)) * 1.10;
     m_centerEnuE = 0.5 * (minE + maxE);
     m_centerEnuN = 0.5 * (minN + maxN);
 
@@ -6098,6 +6588,9 @@ void CPreviewPage::RebuildRenderState()
         ep.forceId    = e.forceId;
         ep.entityId   = e.entityId;
         ep.name       = e.marking.empty() ? e.name : e.marking;
+        if (const MotionSegment* imp = MotionSampler::TerminalImpactSegment(e))
+            ep.exploded = MotionSampler::ImpactTargetIndex(*imp, *m_scenario) >= 0 &&
+                          m_previewTimeSec >= imp->endSecond;
         m_state.poses.push_back(std::move(ep));
 
         if (advanceTrail)
@@ -6173,6 +6666,7 @@ void CPreviewPage::RebuildRenderState()
         {
             const MotionSegment& sg = en.motionSegments[si];
             if (sg.type != MotionType::Line || sg.coordMode != CoordMode::Local) continue;
+            if (sg.impactEntityId >= 0) continue;   // ends on its target: the red star instead
             PreviewLineAnchor a;
             a.entityIdx = ei;
             a.segIdx    = si;
@@ -6180,6 +6674,37 @@ void CPreviewPage::RebuildRenderState()
             a.enuN      = sg.endLocalY;
             m_state.lineAnchors.push_back(a);
         }
+    }
+
+    // Terminal explosions: the red star at each impact point, over the target's
+    // footprint at the impact instant (see PreviewImpactMarker).
+    m_state.impacts.clear();
+    for (size_t ei = 0; ei < m_scenario->entities.size(); ++ei)
+    {
+        const Entity& en = m_scenario->entities[ei];
+        if (!en.enabled) continue;
+        const MotionSegment* imp = MotionSampler::TerminalImpactSegment(en);
+        if (!imp) continue;
+        const int ti = MotionSampler::ImpactTargetIndex(*imp, *m_scenario);
+        double p[3];
+        if (ti < 0 || !MotionSampler::ImpactPointEcef(*imp, *m_scenario, p)) continue;
+
+        PreviewImpactMarker m;
+        m.entityIdx = ei;
+        m.segIdx    = static_cast<size_t>(imp - en.motionSegments.data());
+        double u = 0.0;
+        CoordTransforms::EcefToLocalEnuDeg(p[0], p[1], p[2],
+            m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM,
+            m.enuE, m.enuN, u);
+        const SampledPose tp = MotionSampler::SamplePose(
+            m_scenario->entities[static_cast<size_t>(ti)], *m_scenario, imp->endSecond);
+        CoordTransforms::EcefToLocalEnuDeg(tp.ecefX, tp.ecefY, tp.ecefZ,
+            m_scenario->originLatDeg, m_scenario->originLonDeg, m_scenario->originAltM,
+            m.targetE, m.targetN, u);
+        m.headingDeg = tp.headingDeg;
+        EntityFootprint(static_cast<size_t>(ti), m.lengthM, m.widthM);
+        m.detonated  = m_previewTimeSec >= imp->endSecond;
+        m_state.impacts.push_back(m);
     }
 
     // Draggable focus handles for Local Ellipse segments (F1 then F2 per orbit,

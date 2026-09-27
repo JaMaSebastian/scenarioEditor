@@ -23,6 +23,17 @@ namespace
     // match dis-service's kTakeoffTaper so both apps fly the same profile.
     constexpr double kTakeoffTaper = 3.0;
 
+    // Terminal explosion into a ship: the lowest the aim point may sit above the
+    // waterline (the ship's reference point), metres. Anything lower puts the
+    // attacker in the water before it reaches the hull.
+    constexpr uint8_t kDomainSurfaceImpact      = 3;
+    constexpr double  kMinShipImpactAboveWaterM = 2.0;
+
+    // Terminal dive: an impact leg holds its start altitude and only descends
+    // over the final stretch, at this angle below the horizon, so it never
+    // skims the surface on a long shallow glide before reaching the target.
+    constexpr double kTerminalDiveDeg = 20.0;
+
     double Lerp(double a, double b, double u) { return a + (b - a) * u; }
 
     // Resolve a segment's start position to ECEF + geodetic lat/lon/alt,
@@ -160,6 +171,41 @@ static bool ResolveFollowCenterEcef(const MotionSegment& s, const Scenario* scen
         return true;
     }
     return false;
+}
+
+// Terminal explosion: an impact Line's END is the target's pose at the leg's
+// endSecond plus the impact offset in the target's heading frame. Returns false
+// (callers fall back to the stored end) when the leg is not an impact leg, the
+// scenario is null, `allowFollow` is off (one-level recursion guard, so two
+// entities aimed at each other cannot recurse), or the target is missing or
+// disabled. The target is sampled with follow disabled, like a follow centre.
+static bool ResolveImpactEndEcef(const MotionSegment& s, const Scenario* scenario,
+                                 bool allowFollow, double out[3])
+{
+    if (!allowFollow || !scenario || s.type != MotionType::Line || s.impactEntityId < 0)
+        return false;
+    const int ti = MotionSampler::ImpactTargetIndex(s, *scenario);
+    if (ti < 0) return false;
+
+    const Entity& target = scenario->entities[static_cast<size_t>(ti)];
+    const SampledPose tp = SamplePoseImpl(target, *scenario, s.endSecond, /*allowFollow*/false);
+
+    double lat = 0.0, lon = 0.0, alt = 0.0;
+    CoordTransforms::EcefToGeodeticDeg(tp.ecefX, tp.ecefY, tp.ecefZ, lat, lon, alt);
+    constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
+    const double h = tp.headingDeg * kDegToRad;
+    // Compass heading: forward = (sin h, cos h) in East/North, right = (cos h, -sin h).
+    const double east  = s.impactForwardM * std::sin(h) + s.impactRightM * std::cos(h);
+    const double north = s.impactForwardM * std::cos(h) - s.impactRightM * std::sin(h);
+    // A ship's reference point IS the waterline (ClampSurfaceToSeaLevel pins it
+    // there), so an impact authored at Up <= 0 would aim the attacker into the
+    // sea. Keep the aim on the hull, above the water.
+    double up = s.impactUpM;
+    if (target.domain == kDomainSurfaceImpact && up < kMinShipImpactAboveWaterM)
+        up = kMinShipImpactAboveWaterM;
+    CoordTransforms::LocalEnuToEcefDeg(east, north, up, lat, lon, alt,
+                                       out[0], out[1], out[2]);
+    return true;
 }
 
 // A Line that hands off to an Entity-Ellipse must keep its END point welded to
@@ -414,6 +460,18 @@ static SampledPose EvaluateSegmentImpl(const MotionSegment& s, double u,
             {
                 end = ResolveEnd(s, scenario);
             }
+            // Terminal explosion: the end rides on the target (see header).
+            double impactEnd[3];
+            const bool isImpact =
+                !overrideEndEcef && ResolveImpactEndEcef(s, scenario, allowFollow, impactEnd);
+            if (isImpact)
+            {
+                end.x = impactEnd[0];
+                end.y = impactEnd[1];
+                end.z = impactEnd[2];
+                CoordTransforms::EcefToGeodeticDeg(end.x, end.y, end.z,
+                                                   end.lat, end.lon, end.alt);
+            }
             // Take-off: a jet acceleration profile — strong push at brake release
             // that TAPERS as speed builds, flattening as it reaches cruise. This is
             // the physics model dv/dt = A - B*v^2, whose solution from a standstill is
@@ -435,7 +493,40 @@ static SampledPose EvaluateSegmentImpl(const MotionSegment& s, double u,
                 up = u;
             const double lat = Lerp(start.lat, end.lat, up);
             const double lon = Lerp(start.lon, end.lon, up);
-            const double alt = Lerp(start.alt, end.alt, up);
+            double alt = Lerp(start.alt, end.alt, up);
+
+            // Terminal dive (impact legs coming DOWN onto the target): hold the
+            // start altitude, then descend at kTerminalDiveDeg over just the last
+            // stretch. A straight glide from cruise height down to a ship's hull
+            // spends kilometres a few metres above the sea and dips into it
+            // before it arrives. diveDeg is the nose-down pitch while diving.
+            double diveDeg = 0.0;
+            if (isImpact && start.alt > end.alt)
+            {
+                constexpr double kPi = 3.14159265358979323846;
+                const double midLatRad = 0.5 * (start.lat + end.lat) * (kPi / 180.0);
+                const double hDist = std::hypot((end.lon - start.lon) * 111320.0 * std::cos(midLatRad),
+                                                (end.lat - start.lat) * 111320.0);
+                const double drop    = start.alt - end.alt;
+                const double diveLen = drop / std::tan(kTerminalDiveDeg * (kPi / 180.0));
+                if (hDist > 1e-6 && diveLen < hDist)
+                {
+                    const double uDive = 1.0 - diveLen / hDist;   // where the dive begins
+                    if (up > uDive)
+                    {
+                        alt = Lerp(start.alt, end.alt, (up - uDive) / (1.0 - uDive));
+                        diveDeg = kTerminalDiveDeg;
+                    }
+                    else
+                    {
+                        alt = start.alt;
+                    }
+                }
+                else if (hDist > 1e-6)
+                {
+                    diveDeg = std::atan2(drop, hDist) * (180.0 / kPi);   // steeper than the dive: straight in
+                }
+            }
             CoordTransforms::GeodeticToEcefDeg(lat, lon, alt,
                                                out.ecefX, out.ecefY, out.ecefZ);
 
@@ -444,7 +535,9 @@ static SampledPose EvaluateSegmentImpl(const MotionSegment& s, double u,
             // expects the entity to face along the path. Compute heading
             // from the geodetic delta (East/North bearing). Otherwise lerp
             // the authored values.
-            if (s.startHeadingDeg == 0.0 && s.endHeadingDeg == 0.0)
+            // An impact leg always faces along its path: its end moves with the
+            // target, so no authored heading can stay pointed at it.
+            if ((s.startHeadingDeg == 0.0 && s.endHeadingDeg == 0.0) || s.impactEntityId >= 0)
             {
                 const double dLat = end.lat - start.lat;
                 const double dLon = end.lon - start.lon;
@@ -470,6 +563,7 @@ static SampledPose EvaluateSegmentImpl(const MotionSegment& s, double u,
             }
             out.pitchDeg   = Lerp(s.startPitchDeg,   s.endPitchDeg,   u);
             out.rollDeg    = Lerp(s.startRollDeg,    s.endRollDeg,    u);
+            if (isImpact) out.pitchDeg = -diveDeg;   // nose on the target while diving
             break;
         }
         case MotionType::Ellipse: {
@@ -665,8 +759,10 @@ static SampledPose SamplePoseRaw(const Entity& entity, const Scenario& scenario,
         ResolveLineEndOnFollowEllipse(entity, *active, scn, scenarioTimeSec,
                                       allowFollow, lineEnd);
 
+    // An impact leg is excluded for the same reason: its end follows the target,
+    // and only the duration-based u puts the entity on the target at endSecond.
     if (active->type == MotionType::Line && active->speedMps > 0.0 &&
-        !active->accelerateFromStop && !hasDynEnd)
+        !active->accelerateFromStop && !hasDynEnd && active->impactEntityId < 0)
     {
         const ResolvedPoint sp = ResolveStart(*active, scn);
         const ResolvedPoint ep = ResolveEnd(*active, scn);
@@ -710,7 +806,11 @@ static SampledPose SamplePoseRaw(const Entity& entity, const Scenario& scenario,
 }
 
 //
-// ClampSurfaceToSeaLevel - pin a DIS Domain 3 (Surface) platform to altitude 0.
+// ClampSurfaceToSeaLevel - pin a DIS Domain 3 (Surface) platform to the sea surface,
+//   which is the scenario ORIGIN ALTITUDE, not ellipsoid 0. Mean sea level sits on the
+//   geoid, and the geoid is ~20 m above the ellipsoid around Taiwan (and below it in
+//   places): a ship clamped to 0 there floated 20 m under the water in the visualizer.
+//   Whoever places the origin says where the water is, once, and every ship follows.
 //
 //   A surface ship floats on the sea by definition, so its geodetic altitude is 0 no
 //   matter what the authored path works out to. This exists because the editor Local
@@ -723,7 +823,7 @@ static SampledPose SamplePoseRaw(const Entity& entity, const Scenario& scenario,
 //   Domain 4 (Subsurface) is deliberately NOT clamped - depth is meaningful there. Air
 //   and land keep their authored altitude too; only Surface is unambiguous.
 //
-void MotionSampler::ClampSurfaceToSeaLevel(const Entity& entity,
+void MotionSampler::ClampSurfaceToSeaLevel(const Entity& entity, double seaLevelM,
                                            double& ecefX, double& ecefY, double& ecefZ)
 {
     constexpr uint8_t kDomainSurface = 3;
@@ -731,13 +831,13 @@ void MotionSampler::ClampSurfaceToSeaLevel(const Entity& entity,
 
     double lat = 0.0, lon = 0.0, alt = 0.0;
     CoordTransforms::EcefToGeodeticDeg(ecefX, ecefY, ecefZ, lat, lon, alt);
-    if (std::fabs(alt) < 1e-6) return;           // already at sea level
-    CoordTransforms::GeodeticToEcefDeg(lat, lon, 0.0, ecefX, ecefY, ecefZ);
+    if (std::fabs(alt - seaLevelM) < 1e-6) return;           // already at sea level
+    CoordTransforms::GeodeticToEcefDeg(lat, lon, seaLevelM, ecefX, ecefY, ecefZ);
 }
 
-static void ClampSurfaceToSeaLevel(const Entity& entity, SampledPose& p)
+static void ClampSurfaceToSeaLevel(const Entity& entity, const Scenario& scenario, SampledPose& p)
 {
-    MotionSampler::ClampSurfaceToSeaLevel(entity, p.ecefX, p.ecefY, p.ecefZ);
+    MotionSampler::ClampSurfaceToSeaLevel(entity, scenario.originAltM, p.ecefX, p.ecefY, p.ecefZ);
 }
 
 //
@@ -749,7 +849,7 @@ static SampledPose SamplePoseImpl(const Entity& entity, const Scenario& scenario
                                   double scenarioTimeSec, bool allowFollow)
 {
     SampledPose p = SamplePoseRaw(entity, scenario, scenarioTimeSec, allowFollow);
-    ClampSurfaceToSeaLevel(entity, p);
+    ClampSurfaceToSeaLevel(entity, scenario, p);
     return p;
 }
 
@@ -810,6 +910,96 @@ void MotionSampler::SyncSegmentEndpoint(MotionSegment& s, bool isEnd,
         s.startLocalX = localE; s.startLocalY = localN; s.startLocalZ = localU;
         s.startLat = lat; s.startLon = lon; s.startAlt = alt;
     }
+}
+
+//
+// TerminalImpactSegment — the first enabled impact Line of an entity, or nullptr.
+//
+const MotionSegment* MotionSampler::TerminalImpactSegment(const Entity& entity)
+{
+    for (const MotionSegment& s : entity.motionSegments)
+        if (s.enabled && s.type == MotionType::Line && s.impactEntityId >= 0)
+            return &s;
+    return nullptr;
+}
+
+//
+// ImpactTargetIndex — index of an impact leg's (enabled) target entity, or -1.
+//
+int MotionSampler::ImpactTargetIndex(const MotionSegment& s, const Scenario& scenario)
+{
+    if (s.impactEntityId < 0) return -1;
+    for (size_t j = 0; j < scenario.entities.size(); ++j)
+    {
+        const Entity& t = scenario.entities[j];
+        if (static_cast<int>(t.entityId) == s.impactEntityId)
+            return t.enabled ? static_cast<int>(j) : -1;
+    }
+    return -1;
+}
+
+//
+// ImpactPointEcef — public wrapper over ResolveImpactEndEcef (follow enabled).
+//
+bool MotionSampler::ImpactPointEcef(const MotionSegment& s, const Scenario& scenario,
+                                    double outEcef[3])
+{
+    return ResolveImpactEndEcef(s, &scenario, /*allowFollow*/true, outEcef);
+}
+
+//
+// SolveImpactTime — march forward from startSecond until the leg, flown at
+//   speedMps, can reach where the target will be; bisect that crossing. The gap
+//   function g(t) = |impact(t) - start| - speed*(t - start) starts positive (the
+//   target is some distance away) and goes <= 0 at the first catchable instant.
+//   A target that out-runs the leg never crosses zero, so the instant with the
+//   smallest shortfall is returned instead and the sampler simply flies that leg
+//   faster than cruise to make it.
+//
+double MotionSampler::SolveImpactTime(const MotionSegment& segment, const Scenario& scenario,
+                                      const double startEcef[3], double startSecond,
+                                      double speedMps, double maxSecond)
+{
+    if (speedMps <= 0.0) speedMps = 100.0;
+    if (maxSecond <= startSecond) maxSecond = startSecond + 3600.0;
+
+    MotionSegment probe = segment;
+    auto gap = [&](double t) -> double
+    {
+        probe.endSecond = t;
+        double p[3];
+        if (!ImpactPointEcef(probe, scenario, p)) return 0.0;
+        const double dx = p[0] - startEcef[0];
+        const double dy = p[1] - startEcef[1];
+        const double dz = p[2] - startEcef[2];
+        return std::sqrt(dx * dx + dy * dy + dz * dz) - speedMps * (t - startSecond);
+    };
+
+    constexpr int kSteps = 2000;
+    const double step = (maxSecond - startSecond) / kSteps;
+    double prevT = startSecond;
+    double prevG = gap(prevT);
+    if (prevG <= 0.0) return startSecond;          // already on the target
+
+    double bestT = startSecond, bestG = prevG;
+    for (int i = 1; i <= kSteps; ++i)
+    {
+        const double t = startSecond + step * i;
+        const double g = gap(t);
+        if (g <= 0.0)
+        {
+            double lo = prevT, hi = t;
+            for (int k = 0; k < 40; ++k)
+            {
+                const double mid = 0.5 * (lo + hi);
+                if (gap(mid) > 0.0) lo = mid; else hi = mid;
+            }
+            return hi;
+        }
+        if (g < bestG) { bestG = g; bestT = t; }
+        prevT = t; prevG = g;
+    }
+    return (bestT > startSecond) ? bestT : startSecond + 1.0;
 }
 
 //

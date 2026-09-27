@@ -14,6 +14,7 @@
 #include <vector>
 
 #include <dis7/EntityStatePdu.h>
+#include <dis7/DetonationPdu.h>
 
 struct Scenario;
 struct Entity;
@@ -31,6 +32,16 @@ namespace PduBuilder
     // path) instead of the static t=0 value.
     DIS::EntityStatePdu BuildEntityStatePdu(const Scenario& scenario, const Entity& entity,
                                             double velX, double velY, double velZ);
+
+    // Build a DIS v7 Detonation PDU for `exploding` blowing up at ECEF `ecefM`
+    // (explosion.md section 3). The exploding entity is the thing that detonates,
+    // so its own site:app:entity goes in Exploding Entity ID; `target` (may be
+    // null) fills Target Entity ID for other DIS tools. Event ID is the
+    // scenario's site:app plus `eventNumber`. Result 1 = Entity Impact.
+    DIS::DetonationPdu BuildDetonationPdu(const Scenario& scenario, const Entity& exploding,
+                                          const Entity* target, const double ecefM[3],
+                                          const double velocityMps[3],
+                                          unsigned short eventNumber);
 
     // Marshal a PDU into a big-endian wire-format byte buffer. The buffer
     // is resized to fit. Returns the number of bytes written.

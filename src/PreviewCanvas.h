@@ -36,8 +36,27 @@ struct PreviewEntityPose
     double      headingDeg = 0.0;
     uint8_t     forceId = 1;
     bool        enabled = true;   // disabled entities are not pickable/draggable
+    bool        exploded = false; // past its terminal explosion: not drawn or pickable
     uint16_t    entityId = 0;     // DIS EntityID (for the camera "Target" submenu)
     std::string name;
+};
+
+// A terminal explosion ("Terminate Explosion"): the red star where entity
+// `entityIdx`'s impact leg `segIdx` hits its target, plus the target's footprint
+// AT THE IMPACT INSTANT so the star can be seen (and dragged) on the target even
+// while the target's dot is elsewhere at the current preview time. ENU metres.
+struct PreviewImpactMarker
+{
+    size_t entityIdx  = 0;
+    size_t segIdx     = 0;
+    double enuE       = 0.0;   // the star: impact point
+    double enuN       = 0.0;
+    double targetE    = 0.0;   // target reference point at impact
+    double targetN    = 0.0;
+    double headingDeg = 0.0;   // target heading at impact
+    double lengthM    = 0.0;   // target footprint (0 = not catalogued)
+    double widthM     = 0.0;
+    bool   detonated  = false; // preview time has reached the impact
 };
 
 // A camera vantage marker drawn on the canvas. Stationary cameras sit at their
@@ -141,6 +160,7 @@ struct PreviewRenderState
     std::vector<bool>                          selectError;   // refresh-failed -> draw ring red
     std::vector<PreviewFocusHandle>            focusHandles;  // draggable ellipse foci (orange dots)
     std::vector<PreviewCameraBox>              cameras;       // camera vantage boxes (pink)
+    std::vector<PreviewImpactMarker>           impacts;       // terminal explosions (red stars)
 
     double  zoomMetersPerPx = 1.0;
     double  centerEnuE      = 0.0;
@@ -235,6 +255,11 @@ private:
     int  HitTestEntity(CPoint pxPt) const;
     // Nearest Line end-anchor ("pink dot") to a physical-pixel point, or -1.
     int  HitTestLineAnchor(CPoint pxPt) const;
+    // Nearest terminal-explosion star to a physical-pixel point, or -1. Index
+    // into state.impacts.
+    int  HitTestImpact(CPoint pxPt) const;
+    // Fill a 5-point star centred on `c` (DIPs) with `fill`, rimmed in white.
+    void DrawStar(D2D1_POINT_2F c, float outerR, ID2D1Brush* fill);
     // Entity whose drawn course (path polyline) is under a physical-pixel point,
     // or -1. Used to right-click a line and extend it.
     int  HitTestLineSegment(CPoint pxPt) const;
@@ -290,11 +315,25 @@ private:
     bool    m_draggingEntity = false;
     int     m_dragEntityIdx  = -1;
 
+    // Click-to-select: the entity under a left press, and whether the mouse has
+    // moved past the click slop since. A press that ends without moving selects
+    // that entity exactly as a one-entity rubber band would; a press that moves
+    // is a drag (entity at t=0, else a pan) and selects nothing.
+    int     m_clickEntity = -1;
+    CPoint  m_clickStart;
+    bool    m_clickMoved  = false;
+
     // Line end-anchor ("pink dot") drag state — the entity+segment whose Line
     // end is being dragged (stable identifiers; survive render-state rebuilds).
     bool    m_draggingAnchor   = false;
     int     m_dragAnchorEntity = -1;
     int     m_dragAnchorSeg    = -1;
+
+    // Terminal-explosion star drag state — the exploding entity + its impact leg
+    // (stable identifiers; survive render-state rebuilds).
+    bool    m_draggingImpact   = false;
+    int     m_dragImpactEntity = -1;
+    int     m_dragImpactSeg    = -1;
 
     // Stationary-camera box drag state — the camera FRAME index being moved
     // (stable across render-state rebuilds).

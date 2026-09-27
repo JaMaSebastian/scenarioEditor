@@ -157,6 +157,10 @@ AirframeProfile EntityTypeCatalog::Profile(uint8_t kindId, uint8_t domainId,
     p.name                = sub->name;
     p.lengthM             = getD("LengthMeters");
     p.wingspanM           = getD("WingspanMeters");
+    // Ships are catalogued with a beam instead of a wingspan; it is the same
+    // across-track width to everything that sizes an entity (camera fit,
+    // explosion footprint), so fall back to it.
+    if (p.wingspanM <= 0.0) p.wingspanM = getD("BeamMeters");
     p.heightM             = getD("HeightMeters");
     p.maxSpeedMps         = getD("MaxSpeedMetersPerSecond");
     p.cruiseSpeedMps      = getD("CruiseSpeedMetersPerSecond");

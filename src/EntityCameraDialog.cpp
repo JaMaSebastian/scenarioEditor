@@ -90,6 +90,8 @@ void CEntityCameraDialog::SetEditContext(const Scenario* scn, const CameraFrame&
     m_transition        = f.transition;
     m_transitionSeconds = f.transitionSeconds;
     m_label             = f.label;
+    m_beginSecond       = f.beginSecond;
+    m_durationSec       = f.endSecond - f.beginSecond;
 
     m_vantEastM  = f.vantEastM;
     m_vantNorthM = f.vantNorthM;
@@ -200,6 +202,16 @@ BOOL CEntityCameraDialog::OnInitDialog()
 
     // The shot fields the dialog gained as an editor.
     SetDlgItemText(IDC_EDIT_ECAM_LABEL, CString(CA2W(m_label.c_str())));
+
+    // Timing. Scenario seconds, the numbers the play file stores and the director
+    // cuts on -- not the wall-clock seconds the preview strip shows at 10x.
+    {
+        CString s;
+        if (m_beginSecond >= 0.0) { s.Format(_T("%g"), m_beginSecond); SetDlgItemText(IDC_EDIT_ECAM_BEGIN, s); }
+        else                       SetDlgItemText(IDC_EDIT_ECAM_BEGIN, _T(""));   // blank = auto
+        s.Format(_T("%g"), m_durationSec);
+        SetDlgItemText(IDC_EDIT_ECAM_DURATION, s);
+    }
     {
         CString s;
         s.Format(_T("%g"), m_transitionSeconds);
@@ -822,6 +834,38 @@ void CEntityCameraDialog::OnOK()
             return;   // keep the dialog open
         }
         m_transitionSeconds = secs;
+
+        // Timing: Start may stay blank on a New camera (auto-place); Duration is
+        // always required and never shorter than the strip's minimum box.
+        {
+            const double beginBefore = m_beginSecond, durBefore = m_durationSec;
+
+            GetDlgItemText(IDC_EDIT_ECAM_BEGIN, s);
+            s.Trim();
+            double begin = -1.0;
+            if (!s.IsEmpty() || m_editing)
+            {
+                if (!ParseNum(s, begin) || begin < 0.0)
+                {
+                    AfxMessageBox(_T("Start must be a number of scenario seconds, 0 or more."));
+                    return;
+                }
+            }
+
+            GetDlgItemText(IDC_EDIT_ECAM_DURATION, s);
+            double dur = 0.0;
+            if (!ParseNum(s, dur) || dur < kCameraMinDurationSec)
+            {
+                CString msg;
+                msg.Format(_T("Duration must be at least %g seconds of scenario time."),
+                           kCameraMinDurationSec);
+                AfxMessageBox(msg);
+                return;
+            }
+            m_beginSecond   = begin;
+            m_durationSec   = dur;
+            m_timingChanged = (begin != beginBefore) || (dur != durBefore);
+        }
 
         GetDlgItemText(IDC_EDIT_ECAM_LABEL, s);
         s.Trim();

@@ -67,7 +67,11 @@ namespace MotionSampler
     // it builds ECEF points straight from the ellipse frame and never calls SamplePose.
     // A ship on a closed orbit is precisely the case that takes that path, so a clamp
     // that lived only in SamplePose missed the entity it existed to fix.
-    void ClampSurfaceToSeaLevel(const Entity& entity, double& ecefX, double& ecefY, double& ecefZ);
+    // seaLevelM is the ellipsoid height of the local sea surface: the scenario
+    // origin altitude, which is what the author sets it to (about +20 m around
+    // Taiwan, where the geoid sits that far above the ellipsoid).
+    void ClampSurfaceToSeaLevel(const Entity& entity, double seaLevelM,
+                                double& ecefX, double& ecefY, double& ecefZ);
 
     // ----- Ellipse geometry (shared by the time sampler and the playback
     //       equidistant-waypoint precompute) -----
@@ -138,6 +142,32 @@ namespace MotionSampler
     void SyncSegmentEndpoint(MotionSegment& s, bool isEnd, CoordMode fromMode,
                              double originLatDeg, double originLonDeg,
                              double originAltM);
+
+    // ----- Terminal explosion (MotionSegment::impactEntityId) -----
+
+    // The leg that ends `entity` in an explosion: its first ENABLED Line whose
+    // impactEntityId is set, or nullptr. The entity explodes at that leg's
+    // endSecond; anything authored after it never plays.
+    const MotionSegment* TerminalImpactSegment(const Entity& entity);
+
+    // Index of the target entity in scenario.entities for an impact leg, or -1
+    // when the leg has no target or the target is missing / disabled.
+    int ImpactTargetIndex(const MotionSegment& segment, const Scenario& scenario);
+
+    // ECEF point where an impact leg hits its target: the target's pose at the
+    // leg's endSecond, offset by impactForward/Right/Up in the target's heading
+    // frame. Returns false when the target cannot be resolved.
+    bool ImpactPointEcef(const MotionSegment& segment, const Scenario& scenario,
+                         double outEcef[3]);
+
+    // Solve the impact time for a leg that leaves `startEcef` at `startSecond` at
+    // `speedMps` toward `target` (+ the leg's impact offset): the earliest t with
+    // |impact(t) - start| <= speed * (t - startSecond), so a moving target is met
+    // where it will be, not where it was. Searches up to `maxSecond`; if the
+    // target cannot be caught by then, returns the time with the smallest shortfall.
+    double SolveImpactTime(const MotionSegment& segment, const Scenario& scenario,
+                           const double startEcef[3], double startSecond,
+                           double speedMps, double maxSecond);
 
     // ----- Take-off (accelerateFromStop) acceleration profile -----
     // A take-off Line starts at a full stop and accelerates along a jet profile:

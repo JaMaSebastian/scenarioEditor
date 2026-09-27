@@ -16,6 +16,7 @@
 #include "Scenario.h"
 #include "UdpSender.h"
 #include "TcpSender.h"
+#include "CameraChannelProducer.h"
 
 #include <windows.h>
 
@@ -58,6 +59,9 @@ struct RuntimeScenarioSnapshot
 {
     Scenario scenario;       // deep copy of editable model
     bool     replay = false; // true → worker reads scenario.output.replayPath
+    // Cameras.ini presets, copied from the app at Start: the worker thread
+    // must never read the app's catalog, which the UI can reload mid-run.
+    std::vector<CameraPreset> cameraPresets;
                              //         and forwards records over UDP
 };
 
@@ -104,4 +108,5 @@ private:
     UdpSender           m_udp;
     TcpSender           m_tcp;
     DisrecWriter        m_recorder;
+    CameraChannelProducer m_camera;    // URZA-12253 camera channel (generation runs only)
 };

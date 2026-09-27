@@ -184,6 +184,10 @@ constexpr double kZoomFillMaxPct = 100.0;
 // range; the dialog still accepts any 1..n value the operator types.
 constexpr double kTransitionMinSec = 0.1;
 constexpr double kTransitionMaxSec = 30.0;
+// Shortest camera shot the dialog accepts; matches the timeline's minimum box
+// width (NormalizeCameraSchedule's kMinW), so a typed value can never produce a
+// box the strip would then stretch.
+constexpr double kCameraMinDurationSec = 1.0;
 
 //-----------------------------------------------------------------------------
 // MotionSegment — one timed leg of an entity's trajectory
@@ -282,6 +286,22 @@ struct MotionSegment
     // time). -1 = static ellipse (normal behavior).
     int         followEntityId = -1;
 
+    // Terminal explosion (Line only, Preview "Terminate Explosion"): if >= 0,
+    // this leg ends by crashing into the entity with this EntityID and the
+    // entity carrying the leg explodes there at endSecond. The END point is not
+    // the stored end triple but the target's pose at endSecond plus the impact
+    // offset below, resolved at sample time, so the leg follows the target
+    // wherever it is at the moment of impact. The stored end triple is kept
+    // synced to the last resolved point for readers that do not know this key.
+    // -1 = an ordinary Line.
+    int         impactEntityId = -1;
+    // Impact point on the target, in metres in the target's own frame at
+    // impact: forward along its heading, right of it, and up. 0,0,0 = the
+    // target's reference point.
+    double      impactForwardM = 0.0;
+    double      impactRightM   = 0.0;
+    double      impactUpM      = 0.0;
+
     std::string description;
 };
 
@@ -303,6 +323,13 @@ struct Entity
     // playing exactly as it did. Field order mirrors dis-service's Entity:
     // straight after `description`, ahead of the Force ID.
     NpcBehavior behavior       = NpcBehavior::Directed;
+
+    // Deck crew shown on this entity in the visualizer (Preview "Deck Crew...").
+    // Not on the DIS wire: sent to the visualizer over the camera channel at the
+    // start of a run. Where each crew member stands and how it moves is authored
+    // per ship type in the DISBrowser hanger (Hanger.ini Crew= lines); this is how
+    // many of them this entity carries. 0 = none.
+    int         deckCrew       = 0;
 
     // ----- DIS Entity ID (wire) -----
     uint16_t    siteId         = 1;
@@ -414,6 +441,15 @@ struct OutputConfig
     uint16_t    tcpListenPort   = 3002;         // server mode: local port to accept on
     bool        tcpReconnect    = true;   // client mode: retry a dropped/refused connection
     int         tcpTimeoutMs    = 3000;   // connect / accept timeout
+
+    // URZA-12253 camera channel: during a run the authored [Camera.N] schedule
+    // is streamed as newline-delimited JSON to the visualizer, which LISTENS
+    // ([CameraChannel] Port in its DefaultGame.ini, 3011 by default) -- the
+    // editor dials out. Off, or a visualizer that is not playing, leaves the
+    // viewport undirected; the entities still move.
+    bool        cameraChannelEnabled = true;
+    std::string cameraChannelHost    = "127.0.0.1";
+    uint16_t    cameraChannelPort    = 3011;
 
     // File recording / replay
     std::string recordingPath;

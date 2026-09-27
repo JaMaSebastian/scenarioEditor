@@ -624,6 +624,7 @@ ScenarioIO::Result ScenarioIO::Save(const Scenario& scenario,
         // dis-service builds predating the key ignore it, and current builds
         // read Directed as their default anyway.
         WriteStr   (S, L"Behavior",       BehaviorName(e.behavior), path);
+        WriteInt   (S, L"DeckCrew",       e.deckCrew, path);
         WriteStr   (S, L"ForceID",        ForceIdName(e.forceId), path);
         WriteInt   (S, L"SiteID",         e.siteId, path);
         WriteInt   (S, L"ApplicationID",  e.applicationId, path);
@@ -737,6 +738,12 @@ ScenarioIO::Result ScenarioIO::Save(const Scenario& scenario,
             WriteStr   (M, L"Direction",            DirectionName(m.direction), path);
             WriteInt   (M, L"FollowTargetEntityID", m.followEntityId, path);
 
+            // Terminal explosion (Line only): crash into ImpactTargetEntityID.
+            WriteInt   (M, L"ImpactTargetEntityID", m.impactEntityId, path);
+            WriteDouble(M, L"ImpactForwardMeters",  m.impactForwardM, path);
+            WriteDouble(M, L"ImpactRightMeters",    m.impactRightM, path);
+            WriteDouble(M, L"ImpactUpMeters",       m.impactUpM, path);
+
             WriteStr   (M, L"Description",     Widen(m.description), path);
         }
     }
@@ -758,6 +765,9 @@ ScenarioIO::Result ScenarioIO::Save(const Scenario& scenario,
         WriteInt   (L"Output", L"TcpListenPort",     o.tcpListenPort, path);
         WriteInt   (L"Output", L"TcpReconnect",      o.tcpReconnect ? 1 : 0, path);
         WriteInt   (L"Output", L"TcpTimeoutMs",      o.tcpTimeoutMs, path);
+        WriteInt   (L"Output", L"CameraChannelEnabled", o.cameraChannelEnabled ? 1 : 0, path);
+        WriteStr   (L"Output", L"CameraChannelHost",    Widen(o.cameraChannelHost), path);
+        WriteInt   (L"Output", L"CameraChannelPort",    o.cameraChannelPort, path);
         WriteStr   (L"Output", L"RecordingPath",     Widen(o.recordingPath), path);
         WriteStr   (L"Output", L"ReplayPath",        Widen(o.replayPath), path);
         WriteDouble(L"Output", L"PlaybackSpeed",     o.playbackSpeed, path);
@@ -1000,6 +1010,7 @@ ScenarioIO::Result ScenarioIO::Load(Scenario& s, const std::wstring& path)
         e.behavior       = ParseBehavior(ReadStr(sec, L"Behavior",
                                                  BehaviorName(e.behavior), path),
                                          e.behavior);
+        e.deckCrew       = static_cast<int>(ReadInt(sec, L"DeckCrew", 0, path));
         e.forceId        = ParseForceId(ReadStr(sec, L"ForceID", ForceIdName(e.forceId), path),
                                         e.forceId);
 
@@ -1147,6 +1158,11 @@ ScenarioIO::Result ScenarioIO::Load(Scenario& s, const std::wstring& path)
                                               EllipseDirection::Clockwise);
             m.followEntityId = static_cast<int>(ReadInt(M, L"FollowTargetEntityID", -1, path));
 
+            m.impactEntityId = static_cast<int>(ReadInt(M, L"ImpactTargetEntityID", -1, path));
+            m.impactForwardM = ReadDouble(M, L"ImpactForwardMeters", 0.0, path);
+            m.impactRightM   = ReadDouble(M, L"ImpactRightMeters",   0.0, path);
+            m.impactUpM      = ReadDouble(M, L"ImpactUpMeters",      0.0, path);
+
             m.description    = Narrow(ReadStr(M, L"Description", L"", path));
 
             e.motionSegments.push_back(std::move(m));
@@ -1174,6 +1190,11 @@ ScenarioIO::Result ScenarioIO::Load(Scenario& s, const std::wstring& path)
         o.tcpListenPort    = static_cast<uint16_t>(ReadInt(L"Output", L"TcpListenPort", 3002, path));
         o.tcpReconnect     = ReadInt(L"Output", L"TcpReconnect", 1, path) != 0;
         o.tcpTimeoutMs     = static_cast<int>(ReadInt(L"Output", L"TcpTimeoutMs", 3000, path));
+        // Absent keys mean a play saved before the camera channel existed: on,
+        // local visualizer, its default port -- so the schedule just works.
+        o.cameraChannelEnabled = ReadInt(L"Output", L"CameraChannelEnabled", 1, path) != 0;
+        o.cameraChannelHost    = Narrow(ReadStr(L"Output", L"CameraChannelHost", L"127.0.0.1", path));
+        o.cameraChannelPort    = static_cast<uint16_t>(ReadInt(L"Output", L"CameraChannelPort", 3011, path));
         o.recordingPath    = Narrow(ReadStr(L"Output", L"RecordingPath", L"", path));
         o.replayPath       = Narrow(ReadStr(L"Output", L"ReplayPath",    L"", path));
         o.playbackSpeed    = ReadDouble(L"Output", L"PlaybackSpeed", 1.0, path);

@@ -74,7 +74,7 @@ namespace
         { IDC_COMBO_ENTITY_COORD_MODE,  _T("Coordinate system for this entity's initial position."), true },
         { IDC_EDIT_ENTITY_LAT,          _T("Initial position component A — meaning depends on Initial Coord Mode: Lat (deg) / Local X (m) / ECEF X (m)."), false },
         { IDC_EDIT_ENTITY_LON,          _T("Initial position component B — Lon (deg) / Local Y (m) / ECEF Y (m)."), false },
-        { IDC_EDIT_ENTITY_ALT,          _T("Initial position component C — altitude in metres above the ellipsoid for both Alt and Local Z (0 = sea level anywhere in the scenario) / ECEF Z (m)."), false },
+        { IDC_EDIT_ENTITY_ALT,          _T("Initial position component C — altitude in metres above the ellipsoid for both Alt and Local Z (the scenario origin altitude is where surface ships float) / ECEF Z (m)."), false },
         // Position edits use a single dynamic row; help text below covers
         // all three modes via IDC_EDIT_ENTITY_LAT/LON/ALT (the labels
         // relabel at runtime based on Initial Coord Mode).

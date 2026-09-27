@@ -181,9 +181,11 @@ void CCameraTimeline::OnPaint()
         mem.GetTextMetrics(&tm);
         const int lineH = (int)tm.tmHeight;
 
-        // Durations are reported as the wall-clock seconds the view is actually
-        // up, i.e. the scenario span divided by the preview playback rate — at
-        // 10x a 16.9 s frame is only on screen for about 2 s.
+        // Durations are the SCENARIO seconds the shot occupies: the number the
+        // play file stores, the Edit Camera dialog shows and the director cuts on.
+        // At a preview speed other than 1x the wall-clock time the box is on
+        // screen follows in brackets, so "18s (2s @10x)" cannot be misread as a
+        // two-second shot.
         const double spd = m_owner ? m_owner->GetPlaySpeed() : 1.0;
 
         for (size_t i = 0; i < cams->size(); ++i)
@@ -223,9 +225,15 @@ void CCameraTimeline::OnPaint()
 
                     mem.DrawText(label, &r1, kFlags | DT_TOP);
 
-                    const double span = c.endSecond - c.beginSecond;
-                    mem.DrawText(FormatDurationCompact((span > 0.0 ? span : 0.0) / spd),
-                                 &r2, kFlags | DT_TOP);
+                    const double span = (c.endSecond > c.beginSecond) ? c.endSecond - c.beginSecond : 0.0;
+                    CString dur = FormatDurationCompact(span);
+                    if (spd > 0.0 && std::fabs(spd - 1.0) > 1e-9)
+                    {
+                        CString wall;
+                        wall.Format(_T(" (%s @%gx)"), (LPCTSTR)FormatDurationCompact(span / spd), spd);
+                        dur += wall;
+                    }
+                    mem.DrawText(dur, &r2, kFlags | DT_TOP);
                 }
                 else
                 {

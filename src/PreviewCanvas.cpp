@@ -31,6 +31,7 @@ namespace
     constexpr float kOrientationLenPx  = 18.0f;
     constexpr float kLabelOffsetPx     = 9.0f;
     constexpr float kCameraBoxHalfPx   = 7.0f;  // pink camera vantage square (half-extent)
+    constexpr float kImpactStarRadiusPx = 10.0f; // red terminal-explosion star (outer radius)
 
     //
     // MakeRgb — build a Direct2D color from a 0xRRGGBB packed int (+ optional alpha).
@@ -85,6 +86,24 @@ void CPreviewCanvas::OnLButtonDown(UINT nFlags, CPoint pt)
     {
         CWnd::OnLButtonDown(nFlags, pt);
         return;
+    }
+
+    // Terminal-explosion star drag: moves the impact point over the target's
+    // footprint. Drawn on top of everything on the course, so it is picked first.
+    if (m_owner && !m_owner->IsStartPickArmed())
+    {
+        const int im = HitTestImpact(pt);
+        if (im >= 0)
+        {
+            const PreviewRenderState& s = m_owner->GetRenderState();
+            m_draggingImpact   = true;
+            m_dragImpactEntity = static_cast<int>(s.impacts[im].entityIdx);
+            m_dragImpactSeg    = static_cast<int>(s.impacts[im].segIdx);
+            SetCapture();
+            ::SetCursor(::LoadCursor(nullptr, IDC_SIZEALL));
+            CWnd::OnLButtonDown(nFlags, pt);
+            return;
+        }
     }
 
     // Line end-anchor drag: grabbing the pink destination dot moves the course's
@@ -159,11 +178,18 @@ void CPreviewCanvas::OnLButtonDown(UINT nFlags, CPoint pt)
         }
     }
 
+    // Click-to-select bookkeeping: remember the entity under the press. Whether
+    // it becomes a selection or a drag is decided by movement (see OnMouseMove /
+    // OnLButtonUp).
+    m_clickEntity = (m_owner && !m_owner->IsStartPickArmed()) ? HitTestEntity(pt) : -1;
+    m_clickStart  = pt;
+    m_clickMoved  = false;
+
     // Entity drag: when the preview is stopped at t=0, grabbing a dot relocates
     // its start location instead of panning the view.
     if (m_owner && !m_owner->IsStartPickArmed() && m_owner->IsEntityDragAllowed())
     {
-        const int hit = HitTestEntity(pt);
+        const int hit = m_clickEntity;
         if (hit >= 0)
         {
             m_draggingEntity = true;
@@ -241,6 +267,18 @@ void CPreviewCanvas::OnLButtonUp(UINT nFlags, CPoint pt)
         ReleaseCapture();
         if (m_owner) m_owner->EndLineEndDrag();
     }
+    else if (m_draggingImpact)
+    {
+        double e = 0.0, n = 0.0;
+        if (m_owner && m_dragImpactEntity >= 0 && UnprojectToEnu(pt, e, n))
+            m_owner->DragImpactPoint(static_cast<size_t>(m_dragImpactEntity),
+                                     static_cast<size_t>(m_dragImpactSeg), e, n);
+        m_draggingImpact   = false;
+        m_dragImpactEntity = -1;
+        m_dragImpactSeg    = -1;
+        ReleaseCapture();
+        if (m_owner) m_owner->EndLineEndDrag();
+    }
     else if (m_draggingAnchor)
     {
         double e = 0.0, n = 0.0;
@@ -255,14 +293,21 @@ void CPreviewCanvas::OnLButtonUp(UINT nFlags, CPoint pt)
     }
     else if (m_draggingEntity)
     {
-        // Final position, then commit (reload other tabs + mark dirty).
+        // A press that never moved is a click: select, don't relocate (the click
+        // point is a few pixels off the dot's centre and would nudge the start).
+        const bool moved = m_clickMoved;
         double e = 0.0, n = 0.0;
-        if (m_owner && m_dragEntityIdx >= 0 && UnprojectToEnu(pt, e, n))
+        if (moved && m_owner && m_dragEntityIdx >= 0 && UnprojectToEnu(pt, e, n))
             m_owner->DragEntityTo(static_cast<size_t>(m_dragEntityIdx), e, n);
+        const int clicked = m_dragEntityIdx;
         m_draggingEntity = false;
         m_dragEntityIdx  = -1;
         ReleaseCapture();
-        if (m_owner) m_owner->EndEntityDrag();
+        if (m_owner)
+        {
+            if (moved) m_owner->EndEntityDrag();   // commit (reload other tabs + mark dirty)
+            else       m_owner->SetSelectedEntities({ static_cast<size_t>(clicked) });
+        }
     }
     else if (m_draggingCamera)
     {
@@ -289,7 +334,12 @@ void CPreviewCanvas::OnLButtonUp(UINT nFlags, CPoint pt)
     {
         m_dragging = false;
         ReleaseCapture();
+        // Not at t=0, so the press on a dot started a pan; if it never moved it
+        // was a click on that entity: select it.
+        if (m_owner && !m_clickMoved && m_clickEntity >= 0)
+            m_owner->SetSelectedEntities({ static_cast<size_t>(m_clickEntity) });
     }
+    m_clickEntity = -1;
     CWnd::OnLButtonUp(nFlags, pt);
 }
 
@@ -300,6 +350,19 @@ void CPreviewCanvas::OnLButtonUp(UINT nFlags, CPoint pt)
 //
 void CPreviewCanvas::OnMouseMove(UINT nFlags, CPoint pt)
 {
+    // Click slop: under 3 px of travel a left press is still a click, so an
+    // unsteady hand selecting a dot neither drags it nor pans the map.
+    if ((m_draggingEntity || m_dragging) && !m_clickMoved)
+    {
+        const int dxp = pt.x - m_clickStart.x, dyp = pt.y - m_clickStart.y;
+        if (dxp * dxp + dyp * dyp <= 9)
+        {
+            CWnd::OnMouseMove(nFlags, pt);   // pan catches up on the first real move
+            return;
+        }
+        m_clickMoved = true;
+    }
+
     if (m_boundaryDragActive)
     {
         m_boundaryCur = pt;
@@ -331,6 +394,14 @@ void CPreviewCanvas::OnMouseMove(UINT nFlags, CPoint pt)
         if (UnprojectToEnu(pt, e, n))
             m_owner->DragEllipseShapeHandle(static_cast<size_t>(m_dragShapeEntity),
                                             static_cast<size_t>(m_dragShapeSeg), e, n);
+    }
+    else if (m_draggingImpact && m_owner && m_dragImpactEntity >= 0)
+    {
+        ::SetCursor(::LoadCursor(nullptr, IDC_SIZEALL));
+        double e = 0.0, n = 0.0;
+        if (UnprojectToEnu(pt, e, n))
+            m_owner->DragImpactPoint(static_cast<size_t>(m_dragImpactEntity),
+                                     static_cast<size_t>(m_dragImpactSeg), e, n);
     }
     else if (m_draggingAnchor && m_owner && m_dragAnchorEntity >= 0)
     {
@@ -665,7 +736,11 @@ void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
         const PreviewRenderState& gs = m_owner->GetRenderState();
         const bool thisSelected =
             (static_cast<size_t>(idx) < gs.selected.size() && gs.selected[idx]);
-        if (thisSelected)
+        // A lone click-selected entity keeps its full entity menu; the group
+        // menu is for a real group of two or more.
+        const size_t selCount =
+            static_cast<size_t>(std::count(gs.selected.begin(), gs.selected.end(), true));
+        if (thisSelected && selCount > 1)
         {
             enum { kGroupDur = 1, kGroupSpeed };
             CMenu gm;
@@ -687,7 +762,8 @@ void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
     // are local; TPM_RETURNCMD hands the chosen id straight back to us.
     enum { kPlotLine = 1, kEllipseCW, kEllipseCCW, kDuplicate, kRename, kDelete,
            kSetDuration, kRefreshSpeed, kSetDelay, kEntEllipseCW, kEntEllipseCCW,
-           kChangeEntity, kTakeoffLine, kNewCamera, kDeleteCamera };
+           kChangeEntity, kTakeoffLine, kNewCamera, kDeleteCamera,
+           kTerminateExplosion, kRemoveExplosion, kDeckCrew };
 
     CMenu ell;
     ell.CreatePopupMenu();
@@ -711,6 +787,12 @@ void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
     CMenu menu;
     menu.CreatePopupMenu();
     menu.AppendMenu(MF_POPUP, reinterpret_cast<UINT_PTR>(plot.GetSafeHmenu()), _T("Plot"));
+    // "Terminate Explosion...": end this entity's course by crashing it into a
+    // target entity (red star). Opens seeded from the existing one when there is
+    // one, which is then also removable.
+    menu.AppendMenu(MF_STRING, kTerminateExplosion, _T("Terminate Explosion..."));
+    if (m_owner && m_owner->HasTerminalExplosion(static_cast<size_t>(idx)))
+        menu.AppendMenu(MF_STRING, kRemoveExplosion, _T("Remove Explosion"));
     // "New Camera...": opens the modal to pick source / preset / target / transition.
     // Never grayed for a missing catalog — the dialog's source can be set to "(none)",
     // which builds a Stationary camera and needs no presets at all.
@@ -726,6 +808,12 @@ void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
     menu.AppendMenu(MF_STRING, kRefreshSpeed, _T("Refresh Speed"));
     menu.AppendMenu(MF_STRING, kDuplicate, _T("Duplicate"));
     menu.AppendMenu(MF_STRING, kRename,       _T("Rename"));
+    {
+        CString crewItem;
+        crewItem.Format(_T("Deck Crew (%d)..."),
+                        m_owner ? m_owner->DeckCrew(static_cast<size_t>(idx)) : 0);
+        menu.AppendMenu(MF_STRING, kDeckCrew, crewItem);
+    }
     menu.AppendMenu(MF_STRING, kChangeEntity, _T("Change Entity..."));
     menu.AppendMenu(MF_STRING, kDelete,       _T("Delete"));
     ell.Detach();    // owned by `plot` now
@@ -781,6 +869,15 @@ void CPreviewCanvas::OnRButtonUp(UINT nFlags, CPoint pt)
         break;
     case kDeleteCamera:
         if (m_owner) m_owner->DeleteCamerasForEntity(static_cast<size_t>(idx));
+        break;
+    case kTerminateExplosion:
+        if (m_owner) m_owner->TerminateExplosion(static_cast<size_t>(idx));
+        break;
+    case kDeckCrew:
+        if (m_owner) m_owner->SetDeckCrew(static_cast<size_t>(idx));
+        break;
+    case kRemoveExplosion:
+        if (m_owner) m_owner->RemoveTerminalExplosion(static_cast<size_t>(idx));
         break;
     case kDelete:
         if (m_owner) m_owner->DeleteEntity(static_cast<size_t>(idx));
@@ -1246,7 +1343,7 @@ int CPreviewCanvas::HitTestEntity(CPoint pxPt) const
 
     for (size_t i = 0; i < s.poses.size(); ++i)
     {
-        if (!s.poses[i].enabled) continue;
+        if (!s.poses[i].enabled || s.poses[i].exploded) continue;
         const D2D1_POINT_2F p =
             ProjectEnu(s.poses[i].enuE, s.poses[i].enuN, s, dip.width, dip.height);
         const double dx = p.x - clickX, dy = p.y - clickY;
@@ -1254,6 +1351,64 @@ int CPreviewCanvas::HitTestEntity(CPoint pxPt) const
         if (d2 < bestDist2) { bestDist2 = d2; best = static_cast<int>(i); }
     }
     return best;
+}
+
+//
+// HitTestImpact — index into state.impacts of the nearest terminal-explosion
+//   star to a physical-pixel point within the pick radius, or -1.
+//
+int CPreviewCanvas::HitTestImpact(CPoint pxPt) const
+{
+    if (!m_owner || !m_rt) return -1;
+    const PreviewRenderState& s = m_owner->GetRenderState();
+    if (s.impacts.empty() || !s.showPaths) return -1;
+
+    const D2D1_SIZE_F dip = m_rt->GetSize();
+    if (dip.width <= 0.0f || dip.height <= 0.0f) return -1;
+    const D2D1_POINT_2F click = ClientToDip(pxPt);
+
+    const double hitDip = kImpactStarRadiusPx + 4.0;
+    double bestDist2 = hitDip * hitDip;
+    int best = -1;
+    for (size_t i = 0; i < s.impacts.size(); ++i)
+    {
+        const D2D1_POINT_2F p =
+            ProjectEnu(s.impacts[i].enuE, s.impacts[i].enuN, s, dip.width, dip.height);
+        const double dx = p.x - click.x, dy = p.y - click.y;
+        const double d2 = dx * dx + dy * dy;
+        if (d2 < bestDist2) { bestDist2 = d2; best = static_cast<int>(i); }
+    }
+    return best;
+}
+
+//
+// DrawStar — fill a five-point star centred on c (DIPs), white rim for contrast.
+//
+void CPreviewCanvas::DrawStar(D2D1_POINT_2F c, float outerR, ID2D1Brush* fill)
+{
+    ID2D1Factory* factory = Direct2DContext::Factory();
+    if (!factory || !fill) return;
+    ComPtr<ID2D1PathGeometry> geo;
+    if (FAILED(factory->CreatePathGeometry(&geo)) || !geo) return;
+    ComPtr<ID2D1GeometrySink> sink;
+    if (FAILED(geo->Open(&sink)) || !sink) return;
+
+    constexpr float kPi = 3.14159265358979323846f;
+    const float innerR = outerR * 0.45f;
+    for (int k = 0; k < 10; ++k)
+    {
+        // Point up (screen -y) first, alternating outer / inner vertices.
+        const float a = -kPi / 2.0f + k * (kPi / 5.0f);
+        const float r = (k % 2 == 0) ? outerR : innerR;
+        const D2D1_POINT_2F v = D2D1::Point2F(c.x + r * std::cos(a), c.y + r * std::sin(a));
+        if (k == 0) sink->BeginFigure(v, D2D1_FIGURE_BEGIN_FILLED);
+        else        sink->AddLine(v);
+    }
+    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    sink->Close();
+
+    m_rt->FillGeometry(geo.Get(), fill);
+    if (m_brushOutline) m_rt->DrawGeometry(geo.Get(), m_brushOutline.Get(), 1.5f);
 }
 
 //
@@ -1842,6 +1997,7 @@ void CPreviewCanvas::Render(const PreviewRenderState& state)
         const auto& p = state.poses[i];
         const D2D1_POINT_2F sp = ProjectEnu(p.enuE, p.enuN, state, w, h);
         dotScreen[i] = sp;
+        if (p.exploded) continue;   // gone: its star marks where it ended
         ID2D1SolidColorBrush* b = BrushForForce(p.forceId);
         if (!b) continue;
 
@@ -1872,6 +2028,46 @@ void CPreviewCanvas::Render(const PreviewRenderState& state)
             m_rt->DrawLine(sp,
                            D2D1::Point2F(sp.x + dx, sp.y + dy),
                            b, 2.0f);
+        }
+    }
+
+    // Terminal explosions: the target's footprint at the impact instant (dashed
+    // red, oriented by its heading then; a ring when the catalog has no size) and
+    // a draggable red star at the impact point. Once the preview reaches the
+    // impact the star grows into a burst.
+    if (state.showPaths && m_brushSelectErr)
+    {
+        for (const PreviewImpactMarker& im : state.impacts)
+        {
+            const D2D1_POINT_2F tc = ProjectEnu(im.targetE, im.targetN, state, w, h);
+            if (im.lengthM > 0.0 && im.widthM > 0.0)
+            {
+                const double hr = im.headingDeg * 3.14159265358979323846 / 180.0;
+                const double fE = std::sin(hr), fN = std::cos(hr);   // forward
+                const double rE = std::cos(hr), rN = -std::sin(hr);  // right
+                const double hl = 0.5 * im.lengthM, hw = 0.5 * im.widthM;
+                const double corner[4][2] = { { hl,  hw }, { hl, -hw }, { -hl, -hw }, { -hl, hw } };
+                D2D1_POINT_2F pts[4];
+                for (int k = 0; k < 4; ++k)
+                    pts[k] = ProjectEnu(im.targetE + corner[k][0] * fE + corner[k][1] * rE,
+                                        im.targetN + corner[k][0] * fN + corner[k][1] * rN,
+                                        state, w, h);
+                for (int k = 0; k < 4; ++k)
+                    m_rt->DrawLine(pts[k], pts[(k + 1) % 4], m_brushSelectErr.Get(), 1.5f,
+                                   m_dashedStroke.Get());
+                // Nose tick so the operator can tell front from back.
+                m_rt->DrawLine(tc, ProjectEnu(im.targetE + hl * fE, im.targetN + hl * fN, state, w, h),
+                               m_brushSelectErr.Get(), 1.0f, m_dashedStroke.Get());
+            }
+            else
+            {
+                m_rt->DrawEllipse(D2D1::Ellipse(tc, 9.0f, 9.0f), m_brushSelectErr.Get(), 1.5f,
+                                  m_dashedStroke.Get());
+            }
+
+            const D2D1_POINT_2F sp = ProjectEnu(im.enuE, im.enuN, state, w, h);
+            DrawStar(sp, im.detonated ? kImpactStarRadiusPx * 1.8f : kImpactStarRadiusPx,
+                     m_brushSelectErr.Get());
         }
     }
 
@@ -1923,7 +2119,7 @@ void CPreviewCanvas::Render(const PreviewRenderState& state)
         for (size_t i = 0; i < n; ++i)
         {
             const CA2W wname(state.poses[i].name.c_str());
-            labels[i].text = wname.m_psz ? wname.m_psz : L"";
+            labels[i].text = (wname.m_psz && !state.poses[i].exploded) ? wname.m_psz : L"";
             labels[i].x = dotScreen[i].x + kLabelOffsetPx;
             labels[i].y = dotScreen[i].y - 8.0f;
             labels[i].w = 8.0f * static_cast<float>(labels[i].text.size()) + 6.0f;

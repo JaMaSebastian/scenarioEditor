@@ -99,7 +99,9 @@ private:
     void ApplyStatusBarPaneWidths();
     void PropagateHelpToggle();
     void UpdateStatusPduCount();
-    void RefreshUiFromScenario();
+    // bModelReplaced: true after File > New/Open or a Play (the preview re-fits);
+    // false for an in-place edit signalled by WM_APP_REFRESH_UI (view untouched).
+    void RefreshUiFromScenario(bool bModelReplaced = true);
     void UpdateTitle();
     void CaptureUiIntoScenario();
     void Revalidate();

@@ -195,6 +195,146 @@ int main()
         ExpectNear(p2.ecefZ, zH, 1.0, "ellipse.t=60.z");
     }
 
+    // ---- Case 6: Terminal explosion into a MOVING target. The target flies
+    //              due East at 50 m/s; the source starts 5 km North of it and
+    //              flies at 200 m/s. The impact leg must meet the target where
+    //              it will be at the solved intercept time, at the authored
+    //              offset in the target's heading frame. ----
+    {
+        Scenario s2;
+        s2.originLatDeg = 22.6; s2.originLonDeg = 120.25; s2.originAltM = 0.0;
+        s2.entities.resize(2);
+        Entity& tgt = s2.entities[0];
+        Entity& src = s2.entities[1];
+        tgt.entityId = 7;
+        src.entityId = 8;
+
+        MotionSegment tl;
+        tl.type = MotionType::Line;
+        tl.coordMode = CoordMode::Local;
+        tl.startSecond = 0.0; tl.endSecond = 200.0;
+        tl.startLocalX = 0.0;     tl.startLocalY = 0.0; tl.startLocalZ = 100.0;
+        tl.endLocalX   = 10000.0; tl.endLocalY   = 0.0; tl.endLocalZ   = 100.0;
+        tgt.motionSegments = { tl };
+
+        MotionSegment il;
+        il.type = MotionType::Line;
+        il.coordMode = CoordMode::Local;
+        il.startSecond = 0.0; il.endSecond = 1.0;
+        il.speedMps = 200.0;
+        il.startLocalX = 0.0; il.startLocalY = 5000.0; il.startLocalZ = 100.0;
+        il.impactEntityId = 7;
+        il.impactForwardM = 10.0;   // 10 m ahead of the target's reference point
+        src.motionSegments = { il };
+
+        const SampledPose s0 = MotionSampler::EvaluateSegment(il, 0.0, &s2, true);
+        const double start[3] = { s0.ecefX, s0.ecefY, s0.ecefZ };
+        const double T = MotionSampler::SolveImpactTime(il, s2, start, 0.0, 200.0, 200.0);
+        src.motionSegments[0].endSecond = T;
+
+        // Closed form (flat): |(50T + 10, -5000)| = 200T  ->  T ~= 25.83 s.
+        ExpectNear(T, 25.83, 0.05, "impact.solvedTime");
+
+        const SampledPose tp = MotionSampler::SamplePose(tgt, s2, T);
+        const SampledPose sp = MotionSampler::SamplePose(src, s2, T);
+        double te, tn, tu, se, sn, su;
+        CoordTransforms::EcefToLocalEnuDeg(tp.ecefX, tp.ecefY, tp.ecefZ,
+            s2.originLatDeg, s2.originLonDeg, s2.originAltM, te, tn, tu);
+        CoordTransforms::EcefToLocalEnuDeg(sp.ecefX, sp.ecefY, sp.ecefZ,
+            s2.originLatDeg, s2.originLonDeg, s2.originAltM, se, sn, su);
+        ExpectNear(se, te + 10.0, 0.05, "impact.onTarget.east (+10 m forward)");
+        ExpectNear(sn, tn,        0.05, "impact.onTarget.north");
+        ExpectNear(su, tu,        0.05, "impact.onTarget.up");
+
+        double ip[3];
+        const bool ok = MotionSampler::ImpactPointEcef(src.motionSegments[0], s2, ip);
+        ExpectNear(ok ? 1.0 : 0.0, 1.0, 0.0, "impact.ImpactPointEcef ok");
+        ExpectNear(sp.ecefX, ip[0], 1e-3, "impact.ImpactPointEcef.x");
+
+        // Re-route the target: the leg still ends on it at T, no re-authoring.
+        tgt.motionSegments[0].endLocalY = 4000.0;
+        const SampledPose tp2 = MotionSampler::SamplePose(tgt, s2, T);
+        const SampledPose sp2 = MotionSampler::SamplePose(src, s2, T);
+        const double miss = std::sqrt((tp2.ecefX - sp2.ecefX) * (tp2.ecefX - sp2.ecefX) +
+                                      (tp2.ecefY - sp2.ecefY) * (tp2.ecefY - sp2.ecefY) +
+                                      (tp2.ecefZ - sp2.ecefZ) * (tp2.ecefZ - sp2.ecefZ));
+        ExpectNear(miss, 10.0, 0.05, "impact.rerouted target still hit (10 m offset)");
+
+        // Terminal-impact lookup + a missing target disables the explosion.
+        ExpectNear(MotionSampler::TerminalImpactSegment(src) ? 1.0 : 0.0, 1.0, 0.0,
+                   "impact.TerminalImpactSegment");
+        tgt.enabled = false;
+        ExpectNear(MotionSampler::ImpactTargetIndex(src.motionSegments[0], s2), -1.0, 0.0,
+                   "impact.disabled target -> no explosion");
+    }
+
+    // ---- Case 7: plays/hanger.ini shape -- a LUCAS at 70 m crashing into a
+    //              Type 052C on the sea (origin altitude 20 m = sea level),
+    //              authored with Up = 0. The attacker must stay out of the
+    //              water all the way in and hit the hull above the waterline,
+    //              holding altitude until a short terminal dive. ----
+    {
+        Scenario s3;
+        s3.originLatDeg = 22.627169; s3.originLonDeg = 120.262939; s3.originAltM = 20.0;
+        s3.entities.resize(2);
+        Entity& ship  = s3.entities[0];
+        Entity& lucas = s3.entities[1];
+        ship.entityId = 21;  ship.domain = 3;    // Surface: pinned to sea level
+        lucas.entityId = 8;  lucas.domain = 2;   // Air
+
+        MotionSegment sl;
+        sl.type = MotionType::Line;
+        sl.coordMode = CoordMode::Local;
+        sl.startSecond = 0.0; sl.endSecond = 1000.0;
+        sl.startLocalX = -10600.0; sl.startLocalY = 1300.0;
+        sl.endLocalX   = -10600.0; sl.endLocalY   = 9000.0;   // steaming north
+        ship.motionSegments = { sl };
+
+        MotionSegment il;
+        il.type = MotionType::Line;
+        il.coordMode = CoordMode::Local;
+        il.startSecond = 0.0; il.endSecond = 197.5;
+        il.speedMps = 51.0;
+        il.startLocalX = -512.0; il.startLocalY = 1234.0; il.startLocalZ = 49.86;  // ~70 m
+        il.impactEntityId = 21;                                   // Up = 0 as authored
+        lucas.motionSegments = { il };
+
+        const double seaLevel = s3.originAltM;
+        double minAbove = 1e18;
+        for (int k = 0; k <= 2000; ++k)
+        {
+            const double t = il.endSecond * k / 2000.0;
+            const SampledPose p = MotionSampler::SamplePose(lucas, s3, t);
+            double lat, lon, alt;
+            CoordTransforms::EcefToGeodeticDeg(p.ecefX, p.ecefY, p.ecefZ, lat, lon, alt);
+            minAbove = std::min(minAbove, alt - seaLevel);
+        }
+        if (minAbove < 1.99) {
+            std::printf("  FAIL ship impact: attacker dipped to %.2f m above the sea\n", minAbove);
+            ++failures;
+        }
+
+        // Impact point on the hull: 2 m above the waterline, directly over the ship.
+        const SampledPose hit = MotionSampler::SamplePose(lucas, s3, il.endSecond);
+        const SampledPose tgt = MotionSampler::SamplePose(ship,  s3, il.endSecond);
+        double hLat, hLon, hAlt, tLat, tLon, tAlt;
+        CoordTransforms::EcefToGeodeticDeg(hit.ecefX, hit.ecefY, hit.ecefZ, hLat, hLon, hAlt);
+        CoordTransforms::EcefToGeodeticDeg(tgt.ecefX, tgt.ecefY, tgt.ecefZ, tLat, tLon, tAlt);
+        ExpectNear(tAlt, seaLevel, 1e-3, "ship.onSea");
+        ExpectNear(hAlt - seaLevel, 2.0, 0.05, "ship.impact 2 m above waterline");
+        ExpectNear(hLat, tLat, 1e-6, "ship.impact lat on target");
+        ExpectNear(hLon, tLon, 1e-6, "ship.impact lon on target");
+
+        // Level until the terminal dive: halfway in it is still at ~70 m, and
+        // just before impact it is pitched down in the dive.
+        const SampledPose mid = MotionSampler::SamplePose(lucas, s3, 0.5 * il.endSecond);
+        double mLat, mLon, mAlt;
+        CoordTransforms::EcefToGeodeticDeg(mid.ecefX, mid.ecefY, mid.ecefZ, mLat, mLon, mAlt);
+        ExpectNear(mAlt, 70.0, 0.5, "ship.cruise altitude held before the dive");
+        const SampledPose late = MotionSampler::SamplePose(lucas, s3, il.endSecond - 0.5);
+        ExpectNear(late.pitchDeg, -20.0, 1e-6, "ship.terminal dive pitch");
+    }
+
     if (failures == 0) {
         std::printf("\nMotion sampler PASS\n");
         return 0;

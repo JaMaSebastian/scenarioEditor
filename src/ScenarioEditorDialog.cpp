@@ -1101,6 +1101,7 @@ void CScenarioEditorDialog::OnPlaybackStart()
 
     auto snap = std::make_shared<RuntimeScenarioSnapshot>();
     snap->scenario = m_scenario;          // deep copy (includes OutputConfig)
+    snap->cameraPresets = theApp.CameraPresets().Presets();   // for the camera channel
 
     // Resolve "speed defaults to airframe cruise" for ellipse orbits that have
     // no explicit Speed: playback needs a concrete speed to space the
@@ -1343,7 +1344,7 @@ LRESULT CScenarioEditorDialog::OnMarkDirtyMessage(WPARAM /*w*/, LPARAM /*l*/)
 // the dirty handler off internally, so we MarkDirty afterwards.
 LRESULT CScenarioEditorDialog::OnRefreshUiMessage(WPARAM /*w*/, LPARAM /*l*/)
 {
-    RefreshUiFromScenario();
+    RefreshUiFromScenario(/*bModelReplaced*/ false);
     MarkDirty();
     return 0;
 }
@@ -1375,7 +1376,7 @@ bool CScenarioEditorDialog::MaybePromptSaveOnDiscard()
 // dirty tracking suppressed), update the title, and revalidate. Other pages
 // live in the Attributes notebook and refresh themselves when opened.
 //
-void CScenarioEditorDialog::RefreshUiFromScenario()
+void CScenarioEditorDialog::RefreshUiFromScenario(bool bModelReplaced)
 {
     // ReadFrom() helpers SetWindowText on every edit control, which fires
     // EN_CHANGE — gate the dirty handler off so a fresh load doesn't
@@ -1390,7 +1391,10 @@ void CScenarioEditorDialog::RefreshUiFromScenario()
     // scale), which live in the scenario's [Preview] section. The canvas itself
     // reads the model live, but those four controls hold state that has to be
     // pushed back into them when the model is replaced.
-    m_pagePreview.OnScenarioLoaded();
+    // A replaced model re-fits the map; an in-place edit must not, or the
+    // operator loses their place every time they plot a course.
+    if (bModelReplaced) m_pagePreview.OnScenarioLoaded();
+    else                m_pagePreview.OnScenarioEdited();
     m_suppressDirty = false;
     UpdateTitle();
     Revalidate();

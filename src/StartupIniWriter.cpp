@@ -142,11 +142,17 @@ bool StartupIniWriter::Write(const std::wstring& disBrowserProjectDir,
         // The terrain host is NOT always localhost: with [Terrain] Mode=Remote the
         // tiles are served by another machine, and DISBrowser has to be pointed at
         // it. terrainHost/terrainPort carry that through from settings.ini.
+        //
+        // {y}, NOT {reverseY}: ArcGIS numbers its tile rows from the NORTH, which is what
+        // both Cesium and DISBrowser's God-view basemap mean by {y}. {reverseY} is the
+        // south-up (TMS) index, and on this service it lands the imagery in the wrong
+        // hemisphere. MapTileService's esriOrder and CesiumView's own template have always
+        // used {y} — this line was the odd one out.
         char urlLines[1024];
         sprintf_s(urlLines, sizeof(urlLines),
             "CesiumTilesetUrl=\"http://%s:%u/layer.json\"\r\n"
             "CesiumRasterOverlayUrlTemplate=\"https://server.arcgisonline.com/ArcGIS/rest/services/"
-            "World_Imagery/MapServer/tile/{z}/{reverseY}/{x}\"\r\n",
+            "World_Imagery/MapServer/tile/{z}/{y}/{x}\"\r\n",
             terrainHost.empty() ? "localhost" : terrainHost.c_str(),
             static_cast<unsigned>(terrainPort ? terrainPort : 8088));
 

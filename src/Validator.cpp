@@ -416,6 +416,12 @@ Report Validator::Validate(const Scenario& s)
         if (e.lon < -180.0 || e.lon > 180.0)
             Add(r, Severity::Error, subj, "Initial longitude out of [-180, 180].");
 
+        // Deck crew are authored per ship type in the DISBrowser hanger; the
+        // visualizer puts them on a deck, which only a surface platform has.
+        if (e.deckCrew > 0 && e.domain != 3)
+            Add(r, Severity::Info, subj,
+                "Deck crew set on a non-surface entity; the visualizer only puts crew on ships.");
+
         if (e.updateRateHz < 0.0)
             Add(r, Severity::Error, subj, "Per-entity UpdateRateHz must be ≥ 0.");
 
@@ -474,6 +480,23 @@ Report Validator::Validate(const Scenario& s)
                     m.startAlt == m.endAlt)
                     Add(r, Severity::Info, msub,
                         "Line segment endpoints are identical — equivalent to Stationary.");
+            }
+            // Terminal explosion ("Terminate Explosion"): the target must exist
+            // and be enabled, and the impact must fall inside the run or no
+            // Detonation PDU is ever sent.
+            if (m.enabled && m.type == MotionType::Line && m.impactEntityId >= 0) {
+                const Entity* tgt = nullptr;
+                for (const Entity& t : s.entities)
+                    if (static_cast<int>(t.entityId) == m.impactEntityId) { tgt = &t; break; }
+                if (!tgt || !tgt->enabled || tgt == &e)
+                    Add(r, Severity::Warning, msub,
+                        "Explosion target is missing, disabled or the entity itself — no explosion will be sent.");
+                else if (s.durationSeconds > 0.0 && m.endSecond > s.durationSeconds)
+                    Add(r, Severity::Warning, msub,
+                        "Explosion happens after the scenario ends — no Detonation PDU will be sent.");
+                if (mi + 1 < e.motionSegments.size())
+                    Add(r, Severity::Warning, msub,
+                        "Segments after the explosion never play.");
             }
 
             prevEnd = m.endSecond;

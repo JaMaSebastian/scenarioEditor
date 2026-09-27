@@ -44,6 +44,10 @@ namespace
     // that 20–50 Hz intervals stay accurate (with timeBeginPeriod(1)) and
     // stop/pause stay responsive.
     constexpr auto kWakeCap = std::chrono::milliseconds(8);
+    // Camera channel: pose rate the visualizer's director expects, and how
+    // long Start may block dialling a visualizer that is not playing.
+    constexpr double kCameraPoseHz           = 30.0;
+    constexpr int    kCameraConnectTimeoutMs = 1500;
 
     void PostStatus(HWND hwnd, PlaybackState state)
     {
@@ -93,6 +97,14 @@ namespace
             tr.windowEnd   = (scn.durationSeconds > 0.0)
                            ? std::min(scn.durationSeconds, e.endSecond) : e.endSecond;
 
+            // Terminal explosion: the entity's ES stream stops at the impact so
+            // the visualizer and every other DIS receiver see it gone
+            // (explosion.md 1.2). The epsilon keeps a PDU that lands exactly on
+            // the impact instant.
+            if (const MotionSegment* imp = MotionSampler::TerminalImpactSegment(e))
+                if (MotionSampler::ImpactTargetIndex(*imp, scn) >= 0)
+                    tr.windowEnd = std::min(tr.windowEnd, imp->endSecond + 1e-6);
+
             // Ring-eligible iff exactly one enabled segment, an Ellipse, whose
             // [startSecond,endSecond] covers the whole emission window.
             const MotionSegment* onlyEll = nullptr;
@@ -141,7 +153,7 @@ namespace
                         // applied here as well or a ship orbiting on a single Ellipse -
                         // the exact shape that qualifies for this fast path - keeps the
                         // ellipse frame altitude and flies above the water.
-                        MotionSampler::ClampSurfaceToSeaLevel(e, w.ecefX, w.ecefY, w.ecefZ);
+                        MotionSampler::ClampSurfaceToSeaLevel(e, scn.originAltM, w.ecefX, w.ecefY, w.ecefZ);
 
                         double tx, ty, tz;
                         CoordTransforms::LocalEnuToEcefDeg(p.tEast, p.tNorth, 0.0,
@@ -168,6 +180,46 @@ namespace
             tr.k = 0;
             tracks.push_back(std::move(tr));
         }
+    }
+
+    // One terminal explosion, resolved before the run: who explodes, into whom,
+    // where (ECEF) and with what velocity. Only the Event ID is left for send time.
+    struct PendingDetonation
+    {
+        double        t = 0.0;
+        const Entity* exploding = nullptr;
+        const Entity* target    = nullptr;
+        double        ecef[3]   = { 0.0, 0.0, 0.0 };
+        double        vel[3]    = { 0.0, 0.0, 0.0 };
+    };
+
+    // Collect every enabled entity's terminal impact, sorted by time.
+    void BuildDetonations(const Scenario& scn, std::vector<PendingDetonation>& out)
+    {
+        for (const Entity& e : scn.entities)
+        {
+            if (!e.enabled) continue;
+            const MotionSegment* imp = MotionSampler::TerminalImpactSegment(e);
+            if (!imp) continue;
+            const int ti = MotionSampler::ImpactTargetIndex(*imp, scn);
+            if (ti < 0) continue;
+
+            PendingDetonation d;
+            d.t         = imp->endSecond;
+            d.exploding = &e;
+            d.target    = &scn.entities[static_cast<size_t>(ti)];
+            if (!MotionSampler::ImpactPointEcef(*imp, scn, d.ecef)) continue;
+
+            // Velocity on the way in: the last 0.1 s of the impact leg.
+            constexpr double kDt = 0.1;
+            const SampledPose a = MotionSampler::SamplePose(e, scn, d.t - kDt);
+            d.vel[0] = (d.ecef[0] - a.ecefX) / kDt;
+            d.vel[1] = (d.ecef[1] - a.ecefY) / kDt;
+            d.vel[2] = (d.ecef[2] - a.ecefZ) / kDt;
+            out.push_back(d);
+        }
+        std::sort(out.begin(), out.end(),
+                  [](const PendingDetonation& x, const PendingDetonation& y) { return x.t < y.t; });
     }
 }
 
@@ -430,6 +482,73 @@ void ScenarioWorker::RunGeneration()
     std::vector<EntityTrack> tracks;
     BuildTracks(scn, tracks);
 
+    // Terminal explosions, fired once each when the clock reaches them.
+    std::vector<PendingDetonation> detonations;
+    BuildDetonations(scn, detonations);
+    size_t         detCursor   = 0;   // next detonation to fire
+    unsigned short detEventNum = 0;   // Event ID counter, reset on every pass
+
+    // URZA-12253 camera channel: the authored [Camera.N] schedule goes to the
+    // visualizer alongside the PDUs, but only when PDUs leave this machine. A
+    // visualizer that is not listening is logged and the run goes on without
+    // a directed camera -- the camera is an enhancement, never a reason to stop.
+    // Deck crew counts ride the same channel, so a scenario with crew but no
+    // camera shots still opens it (Tick with no frames sends nothing more).
+    const bool anyCrew = std::any_of(scn.entities.begin(), scn.entities.end(),
+        [](const Entity& e) { return e.enabled && e.deckCrew > 0; });
+    const bool wantCamera = out.cameraChannelEnabled && (!scn.cameras.empty() || anyCrew) &&
+        (out.mode == OutputMode::UdpUnicast || out.mode == OutputMode::UdpMulticast ||
+         out.mode == OutputMode::Tcp);
+    if (wantCamera)
+    {
+        m_camera.Start(scn, m_snapshot->cameraPresets,
+                       out.cameraChannelHost, out.cameraChannelPort,
+                       kCameraConnectTimeoutMs, kCameraPoseHz);
+    }
+    else if (out.cameraChannelEnabled && scn.cameras.empty() && !anyCrew)
+    {
+        LOG("CameraChannel: scenario has no [Camera.N] frames; nothing to direct");
+    }
+
+    // Hand one serialized PDU to the configured sink (UDP / TCP / recorder;
+    // PreviewOnly sends nothing and counts as sent). Shared by Entity State and
+    // Detonation PDUs so both go to the same place, recordings included.
+    // Returns false on a send failure. `now` timestamps recorded PDUs.
+    auto sendBytes = [&](const std::vector<unsigned char>& bytes,
+                         std::chrono::steady_clock::time_point now,
+                         std::chrono::steady_clock::time_point scenarioStart,
+                         uint64_t& pduCount) -> bool
+    {
+        int sent = static_cast<int>(bytes.size());
+        if (sinkUdp)
+        {
+            sent = m_udp.Send(destHost, destPort, bytes.data(), bytes.size());
+        }
+        else if (sinkTcp)
+        {
+            sent = m_tcp.Send(bytes.data(), bytes.size());
+        }
+        else if (out.mode == OutputMode::FileRecording && m_recorder.IsOpen())
+        {
+            const uint64_t tsUs = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    now - scenarioStart).count());
+            if (!m_recorder.WriteRecord(tsUs, bytes.data(), bytes.size()))
+                sent = 0;
+        }
+
+        if (sent > 0) { ++pduCount; return true; }
+
+        sprintf_s(szError, sizeof(szError),
+                  "ScenarioWorker: send failed after %llu PDUs%s%s",
+                  static_cast<unsigned long long>(pduCount),
+                  sinkTcp ? " - " : "",
+                  sinkTcp ? m_tcp.LastError().c_str() : "");
+        LOG(szError);
+        if (m_uiHwnd) ::PostMessageW(m_uiHwnd, WM_APP_PLAYBACK_ERROR, 1, 0);
+        return false;
+    };
+
     // Emit one entity's PDU (ring lookup or time-sample). Returns false on a
     // send failure. `now` is the wall clock used for recording timestamps.
     auto emitTrack = [&](EntityTrack& tr,
@@ -471,36 +590,25 @@ void ScenarioWorker::RunGeneration()
         DIS::EntityStatePdu pdu = PduBuilder::BuildEntityStatePdu(scn, sampled, vx, vy, vz);
         std::vector<unsigned char> bytes;
         PduBuilder::Serialize(pdu, bytes);
+        return sendBytes(bytes, now, scenarioStart, pduCount);
+    };
 
-        int sent = static_cast<int>(bytes.size());
-        if (sinkUdp)
-        {
-            sent = m_udp.Send(destHost, destPort, bytes.data(), bytes.size());
-        }
-        else if (sinkTcp)
-        {
-            sent = m_tcp.Send(bytes.data(), bytes.size());
-        }
-        else if (out.mode == OutputMode::FileRecording && m_recorder.IsOpen())
-        {
-            const uint64_t tsUs = static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    now - scenarioStart).count());
-            if (!m_recorder.WriteRecord(tsUs, bytes.data(), bytes.size()))
-                sent = 0;
-        }
-        // PreviewOnly: no sink; counts as "sent".
-
-        if (sent > 0) { ++pduCount; return true; }
-
+    // Fire one terminal explosion as a Detonation PDU.
+    auto emitDetonation = [&](const PendingDetonation& d,
+                              std::chrono::steady_clock::time_point now,
+                              std::chrono::steady_clock::time_point scenarioStart,
+                              uint64_t& pduCount) -> bool
+    {
+        DIS::DetonationPdu pdu = PduBuilder::BuildDetonationPdu(
+            scn, *d.exploding, d.target, d.ecef, d.vel, ++detEventNum);
+        std::vector<unsigned char> bytes;
+        PduBuilder::Serialize(pdu, bytes);
         sprintf_s(szError, sizeof(szError),
-                  "ScenarioWorker: send failed after %llu PDUs%s%s",
-                  static_cast<unsigned long long>(pduCount),
-                  sinkTcp ? " - " : "",
-                  sinkTcp ? m_tcp.LastError().c_str() : "");
+                  "ScenarioWorker: Detonation %u:%u:%u -> %u:%u:%u at t=%.2fs",
+                  d.exploding->siteId, d.exploding->applicationId, d.exploding->entityId,
+                  d.target->siteId, d.target->applicationId, d.target->entityId, d.t);
         LOG(szError);
-        if (m_uiHwnd) ::PostMessageW(m_uiHwnd, WM_APP_PLAYBACK_ERROR, 1, 0);
-        return false;
+        return sendBytes(bytes, now, scenarioStart, pduCount);
     };
 
     // Raise the OS timer resolution so sub-20 ms sleeps are accurate (needed
@@ -542,6 +650,8 @@ void ScenarioWorker::RunGeneration()
             {
                 scenarioStart = now;
                 for (auto& tr : tracks) { tr.k = 0; tr.nextT = tr.windowStart; }
+                detCursor = 0; detEventNum = 0;   // explosions fire again on the next pass
+                m_camera.Rewind();   // the first shot cuts again on the next pass
                 continue;
             }
             break;
@@ -572,6 +682,26 @@ void ScenarioWorker::RunGeneration()
         }
         if (sendFailure) break;
 
+        // Terminal explosions that are due, each exactly once. After the
+        // tracks, so the exploding entity's last Entity State goes out first.
+        while (detCursor < detonations.size() && tNow + 1e-9 >= detonations[detCursor].t)
+        {
+            if (!emitDetonation(detonations[detCursor], now, scenarioStart, pduCount))
+            { sendFailure = true; break; }
+            emitted = true;
+            ++detCursor;
+        }
+        if (sendFailure) break;
+        if (detCursor < detonations.size())
+        {
+            anyPending = true;   // keeps the loop awake until the explosion fires
+            minPending = std::min(minPending, detonations[detCursor].t);
+        }
+
+        // Camera cut / pose for this instant. Rate-limited inside; a no-op
+        // when the channel is not live.
+        m_camera.Tick(scn, tNow);
+
         if (emitted && m_uiHwnd)
         {
             const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -588,6 +718,8 @@ void ScenarioWorker::RunGeneration()
             {
                 scenarioStart = now;
                 for (auto& tr : tracks) { tr.k = 0; tr.nextT = tr.windowStart; }
+                detCursor = 0; detEventNum = 0;   // explosions fire again on the next pass
+                m_camera.Rewind();   // the first shot cuts again on the next pass
                 continue;
             }
             if (scn.durationSeconds <= 0.0) break;   // nothing left and no duration → done
@@ -611,6 +743,13 @@ void ScenarioWorker::RunGeneration()
 
     timeEndPeriod(1);
     m_recorder.Close();
+    {
+        // Tell the director the show is over, with the clock it last saw.
+        double tEnd = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - scenarioStart).count() * speed;
+        if (scn.durationSeconds > 0.0) tEnd = std::min(tEnd, scn.durationSeconds);
+        m_camera.End(tEnd, m_stop.load(std::memory_order_relaxed) ? "stopped" : "completed");
+    }
     // Close the TCP link so the receiver sees a clean EOF rather than a
     // half-open connection lingering until the next run.
     if (sinkTcp) m_tcp.Close();

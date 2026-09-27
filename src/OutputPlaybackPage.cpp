@@ -38,13 +38,15 @@ namespace
         { IDC_EDIT_UDP_MULTICAST_TTL,   _T("Multicast TTL (hops). 1 = LAN-only."), false },
         { IDC_EDIT_UDP_MULTICAST_IFACE, _T("Local IPv4 of the outgoing interface, or 0.0.0.0 for OS default."), false },
         { IDC_CHK_UDP_MULTICAST_LOOP,   _T("Deliver our own multicast PDUs back to local sockets (useful for self-testing)."), false },
-        { IDC_RADIO_TCP_CLIENT,         _T("TCP client: dial out to a receiver that is already listening."), true },
-        { IDC_RADIO_TCP_SERVER,         _T("TCP server: listen on a local port and wait for one receiver to connect."), true },
+        { IDC_RADIO_TCP_CLIENT,         _T("The editor connects OUT to the visualizer's DIS TCP port (Remote host / Remote port). The visualizer must be listening first."), true },
+        { IDC_RADIO_TCP_SERVER,         _T("The editor listens on Listen port and the visualizer connects IN to it. Start the editor's run first."), true },
         { IDC_EDIT_TCP_HOST,            _T("Client mode: IPv4 address of the receiver (DISBrowser's host)."), true },
         { IDC_EDIT_TCP_PORT,            _T("Client mode: receiver's TCP port. Must match DISBrowser's [DIS] TcpListenPort."), true },
         { IDC_EDIT_TCP_LISTEN_PORT,     _T("Server mode: local TCP port to accept a receiver on."), false },
         { IDC_EDIT_TCP_TIMEOUT,         _T("How long to wait for the connection (client) or a client (server), in ms."), false },
         { IDC_CHK_TCP_RECONNECT,        _T("Client mode: re-dial once if the connection drops mid-run."), false },
+        { IDC_EDIT_CAM_CHANNEL_HOST,    _T("IPv4 address of the machine running the visualizer; camera cuts and poses are streamed there during a run. Leave blank for no camera direction."), true },
+        { IDC_EDIT_CAM_CHANNEL_PORT,    _T("Visualizer camera director TCP port. Must match [CameraChannel] Port in its DefaultGame.ini (3011)."), false },
 
         { IDC_EDIT_RECORDING_PATH,      _T(".disrec file path that the recorder will write to."), false },
         { IDC_BTN_RECORDING_BROWSE,     _T("Pick a recording output path."), false },
@@ -256,6 +258,11 @@ void COutputPlaybackPage::ReadFrom(const OutputConfig& o)
     SetDlgItemInt (IDC_EDIT_TCP_TIMEOUT,     o.tcpTimeoutMs,  FALSE);
     CheckDlgButton(IDC_CHK_TCP_RECONNECT, o.tcpReconnect ? BST_CHECKED : BST_UNCHECKED);
 
+    // A disabled channel shows as a blank address: that is the one control.
+    SetDlgItemText(IDC_EDIT_CAM_CHANNEL_HOST,
+                   o.cameraChannelEnabled ? CA2T(o.cameraChannelHost.c_str()) : _T(""));
+    SetDlgItemInt (IDC_EDIT_CAM_CHANNEL_PORT, o.cameraChannelPort, FALSE);
+
     SetDlgItemText(IDC_EDIT_RECORDING_PATH, CA2T(o.recordingPath.c_str()));
     SetDlgItemText(IDC_EDIT_REPLAY_PATH,    CA2T(o.replayPath.c_str()));
 
@@ -314,6 +321,13 @@ void COutputPlaybackPage::WriteTo(OutputConfig& o) const
     v = GetDlgItemInt(IDC_EDIT_TCP_TIMEOUT, &ok, FALSE);
     if (ok) o.tcpTimeoutMs = static_cast<int>(v);
     o.tcpReconnect = IsDlgButtonChecked(IDC_CHK_TCP_RECONNECT) == BST_CHECKED;
+
+    GetDlgItemText(IDC_EDIT_CAM_CHANNEL_HOST, text);
+    text.Trim();
+    o.cameraChannelEnabled = !text.IsEmpty();       // blank address = off
+    if (!text.IsEmpty()) { CT2A a(text); o.cameraChannelHost = a.m_psz; }
+    v = GetDlgItemInt(IDC_EDIT_CAM_CHANNEL_PORT, &ok, FALSE);
+    if (ok) o.cameraChannelPort = static_cast<uint16_t>(v & 0xFFFF);
 
     GetDlgItemText(IDC_EDIT_RECORDING_PATH, text);
     { CT2A a(text); o.recordingPath = a.m_psz; }

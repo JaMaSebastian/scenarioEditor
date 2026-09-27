@@ -22,6 +22,7 @@
 #include <dis7/Vector3Double.h>
 #include <dis7/Vector3Float.h>
 #include <dis7/EulerAngles.h>
+#include <dis7/DeadReckoningParameters.h>
 #include <dis7/utils/DataStream.h>
 
 //
@@ -103,6 +104,15 @@ DIS::EntityStatePdu PduBuilder::BuildEntityStatePdu(const Scenario& scenario, co
     velocity.setZ(static_cast<float>(velZ));
     pdu.setEntityLinearVelocity(velocity);
 
+    // Declare how receivers may extrapolate between PDUs. The library default
+    // is 0 ("Other"), which every DIS receiver treats as "do not dead reckon",
+    // so at 5 Hz entities step five times a second in the visualizer. FPW
+    // (2, fixed-orientation, constant world velocity) matches the velocity
+    // supplied above and lets the receiver glide between samples.
+    DIS::DeadReckoningParameters deadReckoning;
+    deadReckoning.setDeadReckoningAlgorithm(2);
+    pdu.setDeadReckoningParameters(deadReckoning);
+
     DIS::EulerAngles orientation;
     orientation.setPsi(entity.psi);
     orientation.setTheta(entity.theta);
@@ -116,6 +126,83 @@ DIS::EntityStatePdu PduBuilder::BuildEntityStatePdu(const Scenario& scenario, co
 
     pdu.setEntityAppearance(0);
     pdu.setCapabilities(0);
+
+    return pdu;
+}
+
+//
+// BuildDetonationPdu — see header. The visualizer reads only the exercise ID,
+//   the exploding entity ID and the world location; the rest is filled so other
+//   DIS tools read the event correctly (explosion.md section 3.3).
+//
+DIS::DetonationPdu PduBuilder::BuildDetonationPdu(const Scenario& scenario, const Entity& exploding,
+                                                  const Entity* target, const double ecefM[3],
+                                                  const double velocityMps[3],
+                                                  unsigned short eventNumber)
+{
+    DIS::DetonationPdu pdu;
+    pdu.setExerciseID(scenario.exerciseId);
+    pdu.setProtocolFamily(2); // Warfare
+    pdu.setPduType(3);        // Detonation
+
+    auto makeId = [](uint16_t site, uint16_t app, uint16_t num)
+    {
+        DIS::SimulationAddress a;
+        a.setSite(site);
+        a.setApplication(app);
+        DIS::EntityID id;
+        id.setSimulationAddress(a);
+        id.setEntityNumber(num);
+        return id;
+    };
+
+    // "Kill X" is ExplodingEntityID = X, with X's own site/app (explosion.md 1).
+    pdu.setExplodingEntityID(makeId(exploding.siteId, exploding.applicationId, exploding.entityId));
+    pdu.setFiringEntityID(makeId(0, 0, 0));
+    pdu.setTargetEntityID(target ? makeId(target->siteId, target->applicationId, target->entityId)
+                                 : makeId(0, 0, 0));
+
+    DIS::SimulationAddress eventSite;
+    eventSite.setSite(scenario.siteId);
+    eventSite.setApplication(scenario.applicationId);
+    DIS::EventIdentifier eventId;
+    eventId.setSimulationAddress(eventSite);
+    eventId.setEventNumber(eventNumber);
+    pdu.setEventID(eventId);
+
+    DIS::Vector3Float velocity;
+    velocity.setX(static_cast<float>(velocityMps[0]));
+    velocity.setY(static_cast<float>(velocityMps[1]));
+    velocity.setZ(static_cast<float>(velocityMps[2]));
+    pdu.setVelocity(velocity);
+
+    DIS::Vector3Double location;
+    location.setX(ecefM[0]);
+    location.setY(ecefM[1]);
+    location.setZ(ecefM[2]);
+    pdu.setLocationInWorldCoordinates(location);
+
+    // Munition descriptor: the exploding entity IS the munition, so describe it
+    // with its own entity type, one round, no warhead/fuse codes.
+    DIS::EntityType munitionType;
+    munitionType.setEntityKind(exploding.kind);
+    munitionType.setDomain(exploding.domain);
+    munitionType.setCountry(exploding.country);
+    munitionType.setCategory(exploding.category);
+    munitionType.setSubcategory(exploding.subcategory);
+    munitionType.setSpecific(exploding.specific);
+    munitionType.setExtra(exploding.extra);
+    DIS::MunitionDescriptor descriptor;
+    descriptor.setMunitionType(munitionType);
+    descriptor.setWarhead(0);
+    descriptor.setFuse(0);
+    descriptor.setQuantity(1);
+    descriptor.setRate(0);
+    pdu.setDescriptor(descriptor);
+
+    DIS::Vector3Float entityLocation;   // 0,0,0: relative to the target's origin
+    pdu.setLocationOfEntityCoordinates(entityLocation);
+    pdu.setDetonationResult(target ? 1 : 5);   // 1 Entity Impact, 5 Detonation
 
     return pdu;
 }
